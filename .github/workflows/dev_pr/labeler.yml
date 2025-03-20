@@ -1,0 +1,55 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+arrow:
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'arrow-arith/**/*'
+      - 'arrow-array/**/*'
+      - 'arrow-buffer/**/*'
+      - 'arrow-cast/**/*'
+      - 'arrow-csv/**/*'
+      - 'arrow-data/**/*'
+      - 'arrow-flight/**/*'
+      - 'arrow-integration-test/**/*'
+      - 'arrow-integration-testing/**/*'
+      - 'arrow-ipc/**/*'
+      - 'arrow-json/**/*'
+      - 'arrow-avro/**/*'
+      - 'arrow-ord/**/*'
+      - 'arrow-row/**/*'
+      - 'arrow-schema/**/*'
+      - 'arrow-select/**/*'
+      - 'arrow-string/**/*'
+      - 'arrow/**/*'
+
+arrow-flight:
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'arrow-flight/**/*'
+
+parquet:
+  - changed-files:
+    - any-glob-to-any-file: [ 'parquet/**/*' ]
+
+parquet-derive:
+  - changed-files:
+    - any-glob-to-any-file: [ 'parquet_derive/**/*' ]
+
+object-store:
+  - changed-files:
+    - any-glob-to-any-file: [ 'object_store/**/*' ]
