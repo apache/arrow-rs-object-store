@@ -517,6 +517,7 @@ impl GoogleCloudStorageClient {
             // GCS doesn't allow empty multipart uploads
             let result = self
                 .request(Method::PUT, path)
+                .header(&CONTENT_LENGTH, "0")
                 .idempotent(true)
                 .do_put()
                 .await?;
