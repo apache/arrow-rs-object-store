@@ -26,7 +26,7 @@ notifications:
   jira_options: link label worklog
 github:
   description: "Rust object_store crate"
-  homepage: https://github.com/apache/arrow-rs-object-store
+  homepage: https://crates.io/crates/object_store
   labels:
     - object-store
   enabled_merge_buttons:
