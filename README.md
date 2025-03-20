@@ -50,6 +50,16 @@ It's possible to build `object_store` for the `wasm32-unknown-unknown` target, h
 cargo build -p object_store --target wasm32-unknown-unknown
 ```
 
+Here are several related crates in different repositories
+
+| Crate                    | Description                                 | Documentation                           |
+| ------------------------ | ------------------------------------------- | --------------------------------------- |
+| [`object_store_opendal`] | Use [`opendal`] as [`object_store`] backend | [(README)][object_store_opendal-readme] |
+
+[`object_store_opendal`]: https://crates.io/crates/object_store_opendal
+[`opendal`]: https://crates.io/crates/opendal
+[object_store_opendal-readme]: https://github.com/apache/opendal/blob/main/integrations/object_store/README.md
+
 ## Release Schedule
 
 The [`object_store`] crate follows [Semantic Versioning]. We aim to release new
