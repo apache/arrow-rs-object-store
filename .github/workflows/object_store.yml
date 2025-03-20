@@ -39,9 +39,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
-    defaults:
-      run:
-        working-directory: object_store
     steps:
       - uses: actions/checkout@v4
       - name: Setup Rust toolchain
@@ -79,9 +76,6 @@ jobs:
   docs:
     name: Rustdocs
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: object_store
     env:
       RUSTDOCFLAGS: "-Dwarnings"
     steps:
@@ -95,9 +89,6 @@ jobs:
   linux-test:
     name: Emulator Tests
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: object_store
     env:
       # Disable full debug symbol generation to speed up CI build and keep memory down
       # "1" means line tables only, which is useful for panic tracebacks.
@@ -194,9 +185,6 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
-    defaults:
-      run:
-        working-directory: object_store
     steps:
       - uses: actions/checkout@v4
         with:
@@ -215,9 +203,6 @@ jobs:
   windows:
     name: cargo test LocalFileSystem (win64)
     runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: object_store
     steps:
       - uses: actions/checkout@v4
         with:
