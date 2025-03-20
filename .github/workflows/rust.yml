@@ -39,8 +39,6 @@ jobs:
       image: amd64/rust
     steps:
       - uses: actions/checkout@v4
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-builder
       - name: Setup rustfmt
         run: rustup component add rustfmt
       - name: Format object_store
