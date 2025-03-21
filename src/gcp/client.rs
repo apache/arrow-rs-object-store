@@ -397,8 +397,13 @@ impl GoogleCloudStorageClient {
             extensions,
         } = opts;
 
-        let builder = self
-            .request(Method::PUT, path)
+        let builder = self.request(Method::PUT, path);
+        let builder = if payload.content_length() == 0 {
+            builder.header(&CONTENT_LENGTH, "0")
+        } else {
+            builder
+        };
+        let builder = builder
             .with_payload(payload)
             .with_attributes(attributes)
             .with_extensions(extensions);
@@ -516,10 +521,7 @@ impl GoogleCloudStorageClient {
         if completed_parts.is_empty() {
             // GCS doesn't allow empty multipart uploads
             let result = self
-                .request(Method::PUT, path)
-                .header(&CONTENT_LENGTH, "0")
-                .idempotent(true)
-                .do_put()
+                .put(path, PutPayload::new(), Default::default())
                 .await?;
             self.multipart_cleanup(path, multipart_id).await?;
             return Ok(result);
