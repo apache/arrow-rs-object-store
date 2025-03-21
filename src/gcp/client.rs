@@ -397,13 +397,8 @@ impl GoogleCloudStorageClient {
             extensions,
         } = opts;
 
-        let builder = self.request(Method::PUT, path);
-        let builder = if payload.content_length() == 0 {
-            builder.header(&CONTENT_LENGTH, "0")
-        } else {
-            builder
-        };
-        let builder = builder
+        let builder = self
+            .request(Method::PUT, path)
             .with_payload(payload)
             .with_attributes(attributes)
             .with_extensions(extensions);
