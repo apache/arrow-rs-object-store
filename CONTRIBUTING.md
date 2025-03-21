@@ -200,3 +200,31 @@ OBJECT_STORE_BUCKET=test-bucket \
 GOOGLE_SERVICE_ACCOUNT=/tmp/gcs.json \
 cargo test -p object_store --features=gcp
 ```
+
+
+# Deprecation Guidelines
+
+Minor releases may deprecate, but not remove APIs. Deprecating APIs allows
+downstream Rust programs to still compile, but generate compiler warnings. This
+gives downstream crates time to migrate prior to API removal.
+
+To deprecate an API:
+
+- Mark the API as deprecated using `#[deprecated]` and specify the exact object_store version in which it was deprecated
+- Concisely describe the preferred API to help the user transition
+
+The deprecated version is the next version which will be released (please
+consult the list above). To mark the API as deprecated, use the
+`#[deprecated(since = "...", note = "...")]` attribute.
+
+For example
+
+```rust
+#[deprecated(since = "0.11.0", note = "Use `date_part` instead")]
+```
+
+In general, deprecated APIs will remain in the codebase for at least two major releases after
+they were deprecated (typically between 6 - 9 months later). For example, an API
+deprecated in `0.10.0` can be removed in `0.13.0` (or later). Deprecated APIs
+may be removed earlier or later than these guidelines at the discretion of the
+maintainers.

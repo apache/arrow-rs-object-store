@@ -38,6 +38,10 @@ Originally developed by [InfluxData](https://www.influxdata.com/) and later dona
 
 See [docs.rs](https://docs.rs/object_store) for usage instructions
 
+See [CONTRIBUTING.md] to learn how to contribute to this project.
+
+[CONTRIBUTING.md]: https://github.com/apache/arrow-rs-object-store/blob/main/CONTRIBUTING.md
+
 ## Support for `wasm32-unknown-unknown` target
 
 It's possible to build `object_store` for the `wasm32-unknown-unknown` target, however the cloud storage features `aws`, `azure`, `gcp`, and `http` are not supported.
@@ -45,3 +49,27 @@ It's possible to build `object_store` for the `wasm32-unknown-unknown` target, h
 ```
 cargo build -p object_store --target wasm32-unknown-unknown
 ```
+
+Here are several related crates in different repositories
+
+| Crate                    | Description                                 | Documentation                           |
+| ------------------------ | ------------------------------------------- | --------------------------------------- |
+| [`object_store_opendal`] | Use [`opendal`] as [`object_store`] backend | [(README)][object_store_opendal-readme] |
+
+[`object_store_opendal`]: https://crates.io/crates/object_store_opendal
+[`opendal`]: https://crates.io/crates/opendal
+[object_store_opendal-readme]: https://github.com/apache/opendal/blob/main/integrations/object_store/README.md
+
+## Release Schedule
+
+The [`object_store`] crate follows [Semantic Versioning]. We aim to release new
+versions approximately every 2 months.
+
+[`object_store`]: https://crates.io/crates/object_store
+
+Planned Release Schedule
+
+| Approximate Date | Version  | Notes                                   |
+| ---------------- | -------- | --------------------------------------- |
+| Feb 2025         | `0.12.0` | Major, potentially breaking API changes |
+| Apr 2025         | `0.12.1` | Minor, NO breaking API changes          |
