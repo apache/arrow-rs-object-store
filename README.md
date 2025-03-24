@@ -69,7 +69,6 @@ versions approximately every 2 months.
 
 Planned Release Schedule
 
-| Approximate Date | Version  | Notes                                   |
-| ---------------- | -------- | --------------------------------------- |
-| Feb 2025         | `0.12.0` | Major, potentially breaking API changes |
-| Apr 2025         | `0.12.1` | Minor, NO breaking API changes          |
+| Approximate Date | Version  | Notes                                   | Ticket                                                             |
+| ---------------- | -------- | --------------------------------------- |:-------------------------------------------------------------------|
+| Apr 2025         | `0.12.1` | Minor, NO breaking API changes          | [#287](https://github.com/apache/arrow-rs-object-store/issues/287)                                                                   |
