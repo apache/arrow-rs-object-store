@@ -395,7 +395,12 @@ impl ObjectStore for LocalFileSystem {
         }
 
         let dest = self.path_to_filesystem(location)?;
-        let (file, src) = new_staged_upload(&dest)?;
+        let (file, src) = if opts.copy_and_append {
+            new_staged_upload_copy_and_append_from(&dest)?
+        } else {
+            new_staged_upload(&dest)?
+        };
+
         Ok(Box::new(LocalUpload::new(src, dest, file)))
     }
 
@@ -736,6 +741,38 @@ fn new_staged_upload(base: &std::path::Path) -> Result<(File, PathBuf)> {
             Ok(f) => return Ok((f, path)),
             Err(source) => match source.kind() {
                 ErrorKind::AlreadyExists => multipart_id += 1,
+                ErrorKind::NotFound => create_parent_dirs(&path, source)?,
+                _ => return Err(Error::UnableToOpenFile { source, path }.into()),
+            },
+        }
+    }
+}
+
+fn new_staged_upload_copy_and_append_from(base: &std::path::Path) -> Result<(File, PathBuf)> {
+    let multipart_id = 1;
+    loop {
+        let suffix = multipart_id.to_string();
+        let path = staged_upload_path(base, &suffix);
+
+        if base.exists() {
+            std::fs::copy(base, &path).map_err(|source| Error::UnableToCopyFile {
+                from: base.to_path_buf(),
+                to: path.clone(),
+                source,
+            })?;
+        }
+
+        let mut options = OpenOptions::new();
+        match options
+            .read(true)
+            .write(true)
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            Ok(f) => return Ok((f, path)),
+            Err(source) => match source.kind() {
+                ErrorKind::AlreadyExists => unreachable!(""),
                 ErrorKind::NotFound => create_parent_dirs(&path, source)?,
                 _ => return Err(Error::UnableToOpenFile { source, path }.into()),
             },

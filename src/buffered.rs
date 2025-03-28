@@ -225,6 +225,7 @@ pub struct BufWriter {
     extensions: Option<::http::Extensions>,
     state: BufWriterState,
     store: Arc<dyn ObjectStore>,
+    path: Path,
 }
 
 impl std::fmt::Debug for BufWriter {
@@ -244,6 +245,7 @@ enum BufWriterState {
     Write(Option<WriteMultipart>),
     /// [`ObjectStore::put`]
     Flush(BoxFuture<'static, crate::Result<()>>),
+    PrepareAfterFlush(BoxFuture<'static, crate::Result<WriteMultipart>>),
 }
 
 impl BufWriter {
@@ -261,6 +263,7 @@ impl BufWriter {
             attributes: None,
             tags: None,
             extensions: None,
+            path: path.clone(),
             state: BufWriterState::Buffer(path, PutPayloadMut::new()),
         }
     }
@@ -330,6 +333,10 @@ impl BufWriter {
                     self.state = BufWriterState::Write(f.await?.into());
                     continue;
                 }
+                BufWriterState::PrepareAfterFlush(f) => {
+                    self.state = BufWriterState::Write(f.await?.into());
+                    continue;
+                }
                 BufWriterState::Buffer(path, b) => {
                     if b.content_length().saturating_add(bytes.len()) < self.capacity {
                         b.push(bytes);
@@ -341,6 +348,7 @@ impl BufWriter {
                             attributes: self.attributes.take().unwrap_or_default(),
                             tags: self.tags.take().unwrap_or_default(),
                             extensions: self.extensions.take().unwrap_or_default(),
+                            copy_and_append: true,
                         };
                         let upload = self.store.put_multipart_opts(&path, opts).await?;
                         let mut chunked =
@@ -364,7 +372,9 @@ impl BufWriter {
     /// Panics if this writer has already been shutdown or aborted
     pub async fn abort(&mut self) -> crate::Result<()> {
         match &mut self.state {
-            BufWriterState::Buffer(_, _) | BufWriterState::Prepare(_) => Ok(()),
+            BufWriterState::Buffer(_, _)
+            | BufWriterState::Prepare(_)
+            | BufWriterState::PrepareAfterFlush(_) => Ok(()),
             BufWriterState::Flush(_) => panic!("Already shut down"),
             BufWriterState::Write(x) => x.take().unwrap().abort().await,
         }
@@ -393,14 +403,19 @@ impl AsyncWrite for BufWriter {
                     self.state = BufWriterState::Write(ready!(f.poll_unpin(cx)?).into());
                     continue;
                 }
+                BufWriterState::PrepareAfterFlush(f) => {
+                    self.state = BufWriterState::Write(ready!(f.poll_unpin(cx)?).into());
+                    continue;
+                }
                 BufWriterState::Buffer(path, b) => {
                     if b.content_length().saturating_add(buf.len()) >= cap {
                         let buffer = std::mem::take(b);
                         let path = std::mem::take(path);
                         let opts = PutMultipartOpts {
-                            attributes: self.attributes.take().unwrap_or_default(),
-                            tags: self.tags.take().unwrap_or_default(),
-                            extensions: self.extensions.take().unwrap_or_default(),
+                            attributes: self.attributes.clone().take().unwrap_or_default(),
+                            tags: self.tags.clone().take().unwrap_or_default(),
+                            extensions: self.extensions.clone().take().unwrap_or_default(),
+                            copy_and_append: true,
                         };
                         let store = Arc::clone(&self.store);
                         self.state = BufWriterState::Prepare(Box::pin(async move {
@@ -422,14 +437,67 @@ impl AsyncWrite for BufWriter {
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         loop {
-            return match &mut self.state {
-                BufWriterState::Write(_) | BufWriterState::Buffer(_, _) => Poll::Ready(Ok(())),
-                BufWriterState::Flush(_) => panic!("Already shut down"),
+            match &mut self.state {
                 BufWriterState::Prepare(f) => {
                     self.state = BufWriterState::Write(ready!(f.poll_unpin(cx)?).into());
-                    continue;
                 }
-            };
+                BufWriterState::PrepareAfterFlush(f) => {
+                    self.state = BufWriterState::Write(ready!(f.poll_unpin(cx)?).into());
+                    return Poll::Ready(Ok(()));
+                }
+                BufWriterState::Buffer(p, b) => {
+                    let buf = std::mem::take(b);
+                    let path = std::mem::take(p);
+                    let opts = PutOptions {
+                        attributes: self.attributes.take().unwrap_or_default(),
+                        tags: self.tags.take().unwrap_or_default(),
+                        ..Default::default()
+                    };
+                    let store = Arc::clone(&self.store);
+                    self.state = BufWriterState::Flush(Box::pin(async move {
+                        store.put_opts(&path, buf.into(), opts).await?;
+                        Ok(())
+                    }));
+                }
+                BufWriterState::Flush(f) => {
+                    ready!(f.poll_unpin(cx).map_err(std::io::Error::from))?;
+
+                    let opts = PutMultipartOpts {
+                        attributes: self.attributes.clone().take().unwrap_or_default(),
+                        tags: self.tags.clone().take().unwrap_or_default(),
+                        extensions: self.extensions.clone().take().unwrap_or_default(),
+                        copy_and_append: true,
+                    };
+                    let store = Arc::clone(&self.store);
+                    let cap = self.capacity;
+                    let path = self.path.clone();
+
+                    self.state = BufWriterState::PrepareAfterFlush(Box::pin(async move {
+                        let upload = store.put_multipart_opts(&path, opts).await?;
+                        Ok(WriteMultipart::new_with_chunk_size(upload, cap))
+                    }));
+                }
+                BufWriterState::Write(x) => {
+                    if x.is_none() {
+                        return Poll::Ready(Ok(()));
+                    }
+
+                    let upload = x.take().ok_or_else(|| {
+                        std::io::Error::new(
+                            ErrorKind::InvalidInput,
+                            "Cannot shutdown a writer that has already been shut down",
+                        )
+                    })?;
+
+                    self.state = BufWriterState::Flush(
+                        async move {
+                            upload.finish().await?;
+                            Ok(())
+                        }
+                        .boxed(),
+                    )
+                }
+            }
         }
     }
 
@@ -437,6 +505,9 @@ impl AsyncWrite for BufWriter {
         loop {
             match &mut self.state {
                 BufWriterState::Prepare(f) => {
+                    self.state = BufWriterState::Write(ready!(f.poll_unpin(cx)?).into());
+                }
+                BufWriterState::PrepareAfterFlush(f) => {
                     self.state = BufWriterState::Write(ready!(f.poll_unpin(cx)?).into());
                 }
                 BufWriterState::Buffer(p, b) => {
@@ -486,6 +557,9 @@ fn checked_add_signed(a: u64, rhs: i64) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::File;
+    use std::io::Read;
+
     use super::*;
     use crate::memory::InMemory;
     use crate::path::Path;
@@ -675,5 +749,49 @@ mod tests {
             .unwrap();
         assert_eq!(response.meta.size, 40);
         assert_eq!(response.bytes().await.unwrap(), (0..40).collect_vec());
+    }
+
+    #[tokio::test]
+    async fn test_buf_writer_with_append_only_local_file() {
+        let object_store = Arc::new(crate::local::LocalFileSystem::new()) as Arc<dyn ObjectStore>;
+        let cwd = std::env::current_dir().unwrap();
+        let table_path = "target/tests/test1.json";
+        let path = format!("{}/{table_path}", cwd.to_string_lossy());
+        let location = Path::parse(&path).unwrap();
+
+        let buf_writer = BufWriter::with_capacity(Arc::clone(&object_store), location, 3);
+        let mut writer = Box::new(buf_writer) as Box<dyn AsyncWrite + Send + Unpin>;
+
+        let bytes = b"abc";
+        writer.write_all(bytes).await.unwrap();
+        let bytes = b"abc";
+        writer.write_all(bytes).await.unwrap();
+        let bytes = b"abc";
+        writer.write_all(bytes).await.unwrap();
+
+        assert!(!std::path::Path::new(&path).exists());
+        writer.flush().await.unwrap();
+        assert!(std::path::Path::new(&path).exists());
+
+        let bytes = b"def";
+        writer.write_all(bytes).await.unwrap();
+        let bytes = b"def";
+        writer.write_all(bytes).await.unwrap();
+        writer.shutdown().await.unwrap();
+        let contents = read_file_contents(&path).unwrap();
+        assert_eq!(contents, "abcabcabcdefdef");
+
+        // Clean up test file
+        if let Err(e) = std::fs::remove_file(&path) {
+            panic!("Failed to delete file {}: {}", path, e);
+        }
+    }
+
+    fn read_file_contents(path: &str) -> std::io::Result<String> {
+        let file = File::open(path)?;
+        let mut reader = std::io::BufReader::new(file);
+        let mut contents = String::new();
+        reader.read_to_string(&mut contents)?;
+        Ok(contents)
     }
 }
