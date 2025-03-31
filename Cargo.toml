@@ -73,7 +73,7 @@ gcp = ["cloud", "rustls-pemfile"]
 aws = ["cloud", "md-5"]
 http = ["cloud"]
 tls-webpki-roots = ["reqwest?/rustls-tls-webpki-roots"]
-integration = []
+integration = ["rand"]
 
 [dev-dependencies] # In alphabetical order
 hyper = { version = "1.2", features = ["server"] }
