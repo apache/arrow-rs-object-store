@@ -66,6 +66,7 @@ The [`object_store`] crate follows [Semantic Versioning]. We aim to release new
 versions approximately every 2 months.
 
 [`object_store`]: https://crates.io/crates/object_store
+[semantic versioning]: https://semver.org/
 
 Planned Release Schedule
 
