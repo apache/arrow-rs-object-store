@@ -863,7 +863,13 @@ pub(crate) trait CredentialExt {
 impl CredentialExt for HttpRequestBuilder {
     fn with_bearer_auth(self, credential: Option<&GcpCredential>) -> Self {
         match credential {
-            Some(credential) => self.bearer_auth(&credential.bearer),
+            Some(credential) => {
+                if credential.bearer.is_empty() {
+                    self
+                } else {
+                    self.bearer_auth(&credential.bearer)
+                }
+            }
             None => self,
         }
     }

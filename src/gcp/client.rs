@@ -632,13 +632,8 @@ impl GetClient for GoogleCloudStorageClient {
             request = request.query(&[("generation", version)]);
         }
 
-        request = request.with_bearer_auth(credential.as_deref());
-
-        // if !credential.bearer.is_empty() {
-        //     request = request.bearer_auth(&credential.bearer);
-        // }
-
         let response = request
+            .with_bearer_auth(credential.as_deref())
             .with_get_options(options)
             .send_retry(&self.config.retry_config)
             .await
