@@ -22,8 +22,8 @@ use std::ops::Range;
 
 use crate::path::Path;
 use crate::{
-    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOpts,
-    PutOptions, PutPayload, PutResult, Result,
+    GetOptions, GetResult, ListOpts, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
 };
 
 /// Store wrapper that applies a constant prefix to all paths handled by the store.
@@ -132,14 +132,14 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner.get(&full_path).await
     }
 
-    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
-        let full_path = self.full_path(location);
-        self.inner.get_range(&full_path, range).await
-    }
-
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let full_path = self.full_path(location);
         self.inner.get_opts(&full_path, options).await
+    }
+
+    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
+        let full_path = self.full_path(location);
+        self.inner.get_range(&full_path, range).await
     }
 
     async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
@@ -165,6 +165,38 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         s.map_ok(move |meta| strip_meta(&slf_prefix, meta)).boxed()
     }
 
+    fn list_opts(
+        &self,
+        prefix: Option<&Path>,
+        options: ListOpts,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        let prefix = self.full_path(prefix.unwrap_or(&Path::default()));
+        let offset = self.full_path(options.offset.as_ref().unwrap_or(&Path::default()));
+        let opts = ListOpts {
+            offset: Some(offset),
+            delimiter: options.delimiter,
+            max_keys: options.max_keys,
+            extensions: options.extensions,
+        };
+        let s = self.inner.list_opts(Some(&prefix), opts);
+
+        s.map_ok(move |lst| ListResult {
+            key_count: lst.key_count,
+            is_truncated: lst.is_truncated,
+            common_prefixes: lst
+                .common_prefixes
+                .into_iter()
+                .map(|p| strip_prefix(&prefix, p))
+                .collect(),
+            objects: lst
+                .objects
+                .into_iter()
+                .map(|meta| strip_meta(&prefix, meta))
+                .collect(),
+        })
+        .boxed()
+    }
+
     fn list_with_offset(
         &self,
         prefix: Option<&Path>,
@@ -183,6 +215,8 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
             .list_with_delimiter(Some(&prefix))
             .await
             .map(|lst| ListResult {
+                key_count: lst.key_count,
+                is_truncated: lst.is_truncated,
                 common_prefixes: lst
                     .common_prefixes
                     .into_iter()

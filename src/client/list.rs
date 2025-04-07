@@ -17,12 +17,11 @@
 
 use crate::client::pagination::stream_paginated;
 use crate::path::Path;
-use crate::Result;
-use crate::{ListResult, ObjectMeta};
+use crate::ListResult;
+use crate::{ListOpts, Result};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use futures::{StreamExt, TryStreamExt};
-use std::collections::BTreeSet;
+use futures::StreamExt;
 
 /// A client that can perform paginated list requests
 #[async_trait]
@@ -33,6 +32,8 @@ pub(crate) trait ListClient: Send + Sync + 'static {
         delimiter: bool,
         token: Option<&str>,
         offset: Option<&str>,
+        max_keys: Option<usize>,
+        extensions: ::http::Extensions,
     ) -> Result<(ListResult, Option<String>)>;
 }
 
@@ -42,20 +43,8 @@ pub(crate) trait ListClientExt {
     fn list_paginated(
         &self,
         prefix: Option<&Path>,
-        delimiter: bool,
-        offset: Option<&Path>,
+        opts: ListOpts,
     ) -> BoxStream<'static, Result<ListResult>>;
-
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>>;
-
-    #[allow(unused)]
-    fn list_with_offset(
-        &self,
-        prefix: Option<&Path>,
-        offset: &Path,
-    ) -> BoxStream<'static, Result<ObjectMeta>>;
-
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult>;
 }
 
 #[async_trait]
@@ -63,9 +52,15 @@ impl<T: ListClient + Clone> ListClientExt for T {
     fn list_paginated(
         &self,
         prefix: Option<&Path>,
-        delimiter: bool,
-        offset: Option<&Path>,
+        opts: ListOpts,
     ) -> BoxStream<'static, Result<ListResult>> {
+        let ListOpts {
+            delimiter,
+            offset,
+            max_keys,
+            extensions,
+        } = opts;
+
         let offset = offset.map(|x| x.to_string());
         let prefix = prefix
             .filter(|x| !x.as_ref().is_empty())
@@ -73,55 +68,27 @@ impl<T: ListClient + Clone> ListClientExt for T {
 
         stream_paginated(
             self.clone(),
-            (prefix, offset),
-            move |client, (prefix, offset), token| async move {
+            (prefix, offset, max_keys, extensions),
+            move |client, (prefix, offset, max_keys, extensions), token| async move {
                 let (r, next_token) = client
                     .list_request(
                         prefix.as_deref(),
                         delimiter,
                         token.as_deref(),
                         offset.as_deref(),
+                        max_keys,
+                        extensions.clone(),
                     )
                     .await?;
-                Ok((r, (prefix, offset), next_token))
+                let remaining = max_keys.map(|x| x - r.key_count);
+                let next_token = match remaining {
+                    None => next_token,
+                    Some(remaining) if remaining > 0 => next_token,
+                    _ => None,
+                };
+                Ok((r, (prefix, offset, remaining, extensions), next_token))
             },
         )
         .boxed()
-    }
-
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.list_paginated(prefix, false, None)
-            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
-            .try_flatten()
-            .boxed()
-    }
-
-    fn list_with_offset(
-        &self,
-        prefix: Option<&Path>,
-        offset: &Path,
-    ) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.list_paginated(prefix, false, Some(offset))
-            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
-            .try_flatten()
-            .boxed()
-    }
-
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        let mut stream = self.list_paginated(prefix, true, None);
-
-        let mut common_prefixes = BTreeSet::new();
-        let mut objects = Vec::new();
-
-        while let Some(result) = stream.next().await {
-            let response = result?;
-            common_prefixes.extend(response.common_prefixes.into_iter());
-            objects.extend(response.objects.into_iter());
-        }
-
-        Ok(ListResult {
-            common_prefixes: common_prefixes.into_iter().collect(),
-            objects,
-        })
     }
 }

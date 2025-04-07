@@ -45,8 +45,9 @@ use crate::client::{http_connector, HttpConnector};
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
-    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, RetryConfig,
+    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListOpts, ListResult, MultipartUpload,
+    ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
+    RetryConfig,
 };
 
 mod client;
@@ -157,6 +158,110 @@ impl ObjectStore for HttpStore {
         .boxed()
     }
 
+    fn list_opts(
+        &self,
+        prefix: Option<&Path>,
+        options: ListOpts,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        let max_keys = options.max_keys;
+
+        let client = Arc::<Client>::clone(&self.client);
+        let offset = options.offset.clone();
+        let prefix = prefix.cloned();
+        if options.delimiter {
+            futures::stream::once(async move {
+                let status = client.list(prefix.as_ref(), "1").await?;
+                let response: Vec<_> = status
+                    .response
+                    .into_iter()
+                    .filter(|r| {
+                        offset
+                            .as_ref()
+                            .map(|o| match r.path(client.base_url()) {
+                                Ok(path) => &path > o,
+                                Err(_) => false,
+                            })
+                            .unwrap_or(true)
+                    })
+                    .collect();
+
+                let prefix_len = prefix.map(|p| p.as_ref().len()).unwrap_or(0);
+                let key_count = response.len();
+
+                let mut objects: Vec<ObjectMeta> = Vec::with_capacity(key_count);
+                let mut common_prefixes = Vec::with_capacity(key_count);
+                let max_keys = max_keys.unwrap_or(key_count).min(key_count);
+
+                for response in response {
+                    response.check_ok()?;
+                    if objects.len() + common_prefixes.len() >= max_keys {
+                        break;
+                    }
+
+                    match response.is_dir() {
+                        false => {
+                            let meta = response.object_meta(client.base_url())?;
+                            // Filter out exact prefix matches
+                            if meta.location.as_ref().len() > prefix_len {
+                                objects.push(meta);
+                            }
+                        }
+                        true => {
+                            let path = response.path(client.base_url())?;
+                            // Exclude the current object
+                            if path.as_ref().len() > prefix_len {
+                                common_prefixes.push(path);
+                            }
+                        }
+                    }
+                }
+
+                let resp_key_count = common_prefixes.len() + objects.len();
+                Ok(ListResult {
+                    key_count: resp_key_count,
+                    is_truncated: resp_key_count < key_count,
+                    common_prefixes,
+                    objects,
+                })
+            })
+            .boxed()
+        } else {
+            let stream = self.list(prefix.as_ref());
+            futures::stream::try_unfold(
+                (stream, offset, max_keys),
+                move |(mut stream, offset, max_keys)| async move {
+                    let fill_count = max_keys.unwrap_or(1000).min(1000);
+                    let mut buffer = Vec::with_capacity(fill_count);
+                    while buffer.len() < fill_count {
+                        match stream.next().await.transpose()? {
+                            None => break,
+                            Some(meta) => {
+                                if offset.as_ref().map(|o| &meta.location > o).unwrap_or(true) {
+                                    buffer.push(meta);
+                                }
+                            }
+                        }
+                    }
+
+                    if buffer.is_empty() {
+                        Ok(None)
+                    } else {
+                        let key_count = buffer.len();
+                        let remaining = max_keys.map(|x| x - key_count);
+                        let result = ListResult {
+                            key_count: buffer.len(),
+                            is_truncated: false,
+                            common_prefixes: vec![],
+                            objects: buffer,
+                        };
+                        Ok(Some((result, (stream, offset, remaining))))
+                    }
+                },
+            )
+            .boxed()
+        }
+    }
+
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
         let status = self.client.list(prefix, "1").await?;
         let prefix_len = prefix.map(|p| p.as_ref().len()).unwrap_or(0);
@@ -184,6 +289,8 @@ impl ObjectStore for HttpStore {
         }
 
         Ok(ListResult {
+            key_count: common_prefixes.len() + objects.len(),
+            is_truncated: false,
             common_prefixes,
             objects,
         })

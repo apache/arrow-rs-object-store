@@ -41,9 +41,9 @@ use crate::client::CredentialProvider;
 use crate::gcp::credential::GCSAuthorizer;
 use crate::signer::Signer;
 use crate::{
-    multipart::PartId, path::Path, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
-    UploadPart,
+    multipart::PartId, path::Path, GetOptions, GetResult, ListOpts, ListResult, MultipartId,
+    MultipartUpload, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult,
+    Result, UploadPart,
 };
 use async_trait::async_trait;
 use client::GoogleCloudStorageClient;
@@ -183,20 +183,12 @@ impl ObjectStore for GoogleCloudStorage {
         self.client.delete_request(location).await
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.client.list(prefix)
-    }
-
-    fn list_with_offset(
+    fn list_opts(
         &self,
         prefix: Option<&Path>,
-        offset: &Path,
-    ) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.client.list_with_offset(prefix, offset)
-    }
-
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        self.client.list_with_delimiter(prefix).await
+        options: ListOpts,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        self.client.list_paginated(prefix, options)
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
@@ -270,7 +262,6 @@ impl Signer for GoogleCloudStorage {
 
 #[cfg(test)]
 mod test {
-
     use credential::DEFAULT_GCS_BASE_URL;
 
     use crate::integration::*;

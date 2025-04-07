@@ -172,6 +172,7 @@ pub(crate) struct AzureConfig {
     pub skip_signature: bool,
     pub disable_tagging: bool,
     pub client_options: ClientOptions,
+    pub max_list_keys_per_request: usize,
 }
 
 impl AzureConfig {
@@ -964,13 +965,15 @@ impl ListClient for Arc<AzureClient> {
         delimiter: bool,
         token: Option<&str>,
         offset: Option<&str>,
+        max_keys: Option<usize>,
+        extensions: ::http::Extensions,
     ) -> Result<(ListResult, Option<String>)> {
         assert!(offset.is_none()); // Not yet supported
 
         let credential = self.get_credential().await?;
         let url = self.config.path_url(&Path::default());
 
-        let mut query = Vec::with_capacity(5);
+        let mut query = Vec::with_capacity(6);
         query.push(("restype", "container"));
         query.push(("comp", "list"));
 
@@ -986,6 +989,12 @@ impl ListClient for Arc<AzureClient> {
             query.push(("marker", token))
         }
 
+        let max_keys = max_keys
+            .map(|x| x.min(self.config.max_list_keys_per_request))
+            .unwrap_or(self.config.max_list_keys_per_request)
+            .to_string();
+        query.push(("max-keys", max_keys.as_str()));
+
         let sensitive = credential
             .as_deref()
             .map(|c| c.sensitive_request())
@@ -995,6 +1004,7 @@ impl ListClient for Arc<AzureClient> {
             .get(url.as_str())
             .query(&query)
             .with_azure_authorization(&credential, &self.config.account)
+            .extensions(extensions)
             .retryable(&self.config.retry_config)
             .sensitive(sensitive)
             .send()
@@ -1049,6 +1059,8 @@ fn to_list_result(value: ListResultInternal, prefix: Option<&str>) -> Result<Lis
         .collect::<Result<_>>()?;
 
     Ok(ListResult {
+        key_count: 0,
+        is_truncated: false,
         common_prefixes,
         objects,
     })
@@ -1390,6 +1402,7 @@ mod tests {
             skip_signature: false,
             disable_tagging: false,
             client_options: Default::default(),
+            max_list_keys_per_request: 1000,
         };
 
         let client = AzureClient::new(config, HttpClient::new(Client::new()));

@@ -26,6 +26,10 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "PascalCase")]
 pub struct ListResponse {
     #[serde(default)]
+    pub key_count: usize,
+    #[serde(default)]
+    pub is_truncated: bool,
+    #[serde(default)]
     pub contents: Vec<ListContents>,
     #[serde(default)]
     pub common_prefixes: Vec<ListPrefix>,
@@ -50,6 +54,8 @@ impl TryFrom<ListResponse> for ListResult {
             .collect::<Result<_>>()?;
 
         Ok(Self {
+            key_count: value.key_count,
+            is_truncated: value.is_truncated,
             common_prefixes,
             objects,
         })

@@ -31,7 +31,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
-
 use super::credential::{AuthorizedUserSigningCredentials, InstanceSigningCredentialProvider};
 
 const TOKEN_MIN_TTL: Duration = Duration::from_secs(4 * 60);
@@ -113,6 +112,8 @@ pub struct GoogleCloudStorageBuilder {
     signing_credentials: Option<GcpSigningCredentialProvider>,
     /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
+    /// Max list size per request, by default 1000.
+    max_list_size_per_request: Option<usize>,
 }
 
 /// Configuration keys for [`GoogleCloudStorageBuilder`]
@@ -210,6 +211,7 @@ impl Default for GoogleCloudStorageBuilder {
             credentials: None,
             signing_credentials: None,
             http_connector: None,
+            max_list_size_per_request: Some(1000),
         }
     }
 }
@@ -435,6 +437,12 @@ impl GoogleCloudStorageBuilder {
         self
     }
 
+    /// Set the max keys per list request. It's almost used for test paginated listing.
+    pub fn with_max_list_size_per_request(mut self, max_list_size_per_request: usize) -> Self {
+        self.max_list_size_per_request = Some(max_list_size_per_request);
+        self
+    }
+
     /// Configure a connection to Google Cloud Storage, returning a
     /// new [`GoogleCloudStorage`] and consuming `self`
     pub fn build(mut self) -> Result<GoogleCloudStorage> {
@@ -553,6 +561,7 @@ impl GoogleCloudStorageBuilder {
             bucket_name,
             self.retry_config,
             self.client_options,
+            self.max_list_size_per_request.unwrap_or(1000)
         );
 
         let http_client = http.connect(&config.client_options)?;

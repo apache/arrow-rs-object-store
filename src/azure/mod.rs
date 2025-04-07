@@ -26,8 +26,8 @@ use crate::{
     multipart::{MultipartStore, PartId},
     path::Path,
     signer::Signer,
-    GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
+    GetOptions, GetResult, ListOpts, ListResult, MultipartId, MultipartUpload,
+    ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 use async_trait::async_trait;
 use futures::stream::{BoxStream, StreamExt, TryStreamExt};
@@ -119,9 +119,6 @@ impl ObjectStore for MicrosoftAzure {
         self.client.delete_request(location, &()).await
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.client.list(prefix)
-    }
     fn delete_stream<'a>(
         &'a self,
         locations: BoxStream<'a, Result<Path>>,
@@ -142,8 +139,12 @@ impl ObjectStore for MicrosoftAzure {
             .boxed()
     }
 
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        self.client.list_with_delimiter(prefix).await
+    fn list_opts(
+        &self,
+        prefix: Option<&Path>,
+        options: ListOpts,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        self.client.list_paginated(prefix, options)
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {

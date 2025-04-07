@@ -207,6 +207,7 @@ pub(crate) struct S3Config {
     pub conditional_put: S3ConditionalPut,
     pub request_payer: bool,
     pub(super) encryption_headers: S3EncryptionHeaders,
+    pub max_list_keys_per_request: usize,
 }
 
 impl S3Config {
@@ -880,11 +881,13 @@ impl ListClient for Arc<S3Client> {
         delimiter: bool,
         token: Option<&str>,
         offset: Option<&str>,
+        max_keys: Option<usize>,
+        extensions: ::http::Extensions,
     ) -> Result<(ListResult, Option<String>)> {
         let credential = self.config.get_session_credential().await?;
         let url = self.config.bucket_endpoint.clone();
 
-        let mut query = Vec::with_capacity(4);
+        let mut query = Vec::with_capacity(6);
 
         if let Some(token) = token {
             query.push(("continuation-token", token))
@@ -904,11 +907,18 @@ impl ListClient for Arc<S3Client> {
             query.push(("start-after", offset))
         }
 
+        let max_keys = max_keys
+            .map(|x| x.min(self.config.max_list_keys_per_request))
+            .unwrap_or(self.config.max_list_keys_per_request).to_string();
+        query.push(("max-keys", max_keys.as_str()));
+
+
         let response = self
             .client
             .request(Method::GET, &url)
             .query(&query)
             .with_aws_sigv4(credential.authorizer(), None)
+            .extensions(extensions)
             .send_retry(&self.config.retry_config)
             .await
             .map_err(|source| Error::ListRequest { source })?

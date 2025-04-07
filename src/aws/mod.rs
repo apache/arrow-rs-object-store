@@ -44,7 +44,7 @@ use crate::multipart::{MultipartStore, PartId};
 use crate::signer::Signer;
 use crate::util::STRICT_ENCODE_SET;
 use crate::{
-    Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
+    Error, GetOptions, GetResult, ListOpts, ListResult, MultipartId, MultipartUpload, ObjectMeta,
     ObjectStore, Path, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
     UploadPart,
 };
@@ -286,30 +286,49 @@ impl ObjectStore for AmazonS3 {
             .boxed()
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.client.list(prefix)
-    }
-
-    fn list_with_offset(
+    fn list_opts(
         &self,
         prefix: Option<&Path>,
-        offset: &Path,
-    ) -> BoxStream<'static, Result<ObjectMeta>> {
+        options: ListOpts,
+    ) -> BoxStream<'static, Result<ListResult>> {
         if self.client.config.is_s3_express() {
-            let offset = offset.clone();
-            // S3 Express does not support start-after
-            return self
-                .client
-                .list(prefix)
-                .try_filter(move |f| futures::future::ready(f.location > offset))
-                .boxed();
+            let offset = options.offset.clone();
+            match offset {
+                // S3 Express does not support start-after
+                Some(offset) if !offset.to_string().is_empty() => {
+                    self.client
+                        .list_paginated(
+                            prefix,
+                            ListOpts {
+                                offset: None,
+                                ..options
+                            },
+                        )
+                        .map_ok(move |r| {
+                            let objects: Vec<ObjectMeta> = r
+                                .objects
+                                .into_iter()
+                                .filter(|f| f.location > offset)
+                                .collect();
+                            let common_prefixes: Vec<Path> = r
+                                .common_prefixes
+                                .into_iter()
+                                .filter(|p| p > &offset)
+                                .collect();
+                            ListResult {
+                                key_count: objects.len() + common_prefixes.len(),
+                                is_truncated: r.is_truncated,
+                                common_prefixes,
+                                objects,
+                            }
+                        })
+                        .boxed()
+                }
+                _ => self.client.list_paginated(prefix, options),
+            }
+        } else {
+            self.client.list_paginated(prefix, options)
         }
-
-        self.client.list_with_offset(prefix, offset)
-    }
-
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        self.client.list_with_delimiter(prefix).await
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
@@ -580,6 +599,7 @@ mod tests {
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
+        list_with_composite_conditions(&integration).await;
         rename_and_copy(&integration).await;
         stream_get(&integration).await;
         multipart(&integration, &integration).await;

@@ -29,9 +29,9 @@ use parking_lot::RwLock;
 use crate::multipart::{MultipartStore, PartId};
 use crate::util::InvalidGetRange;
 use crate::{
-    path::Path, Attributes, GetRange, GetResult, GetResultPayload, ListResult, MultipartId,
-    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutResult,
-    Result, UpdateVersion, UploadPart,
+    path::Path, Attributes, GetRange, GetResult, GetResultPayload, ListOpts, ListResult,
+    MultipartId, MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions,
+    PutResult, Result, UpdateVersion, UploadPart,
 };
 use crate::{GetOptions, PutPayload};
 
@@ -340,6 +340,18 @@ impl ObjectStore for InMemory {
         futures::stream::iter(values).boxed()
     }
 
+    fn list_opts(
+        &self,
+        prefix: Option<&Path>,
+        options: ListOpts,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        if options.delimiter {
+            self.list_children(prefix, options.offset.as_ref(), options.max_keys)
+        } else {
+            self.list_without_delimiter(prefix, options.offset.as_ref(), options.max_keys)
+        }
+    }
+
     /// The memory implementation returns all results, as opposed to the cloud
     /// versions which limit their results to 1k or more because of API
     /// limitations.
@@ -384,8 +396,10 @@ impl ObjectStore for InMemory {
         }
 
         Ok(ListResult {
+            key_count: objects.len() + common_prefixes.len(),
             objects,
             common_prefixes: common_prefixes.into_iter().collect(),
+            is_truncated: false,
         })
     }
 
@@ -408,6 +422,132 @@ impl ObjectStore for InMemory {
         }
         storage.insert(to, entry.data, entry.attributes);
         Ok(())
+    }
+}
+
+impl InMemory {
+    fn list_children(
+        &self,
+        prefix: Option<&Path>,
+        offset: Option<&Path>,
+        max_keys: Option<usize>,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        let root = Path::default();
+        let prefix = prefix.unwrap_or(&root);
+        let offset = offset.unwrap_or(&root);
+
+        let mut is_truncated = false;
+        let mut common_prefixes = BTreeSet::new();
+
+        // Only objects in this base level should be returned in the
+        // response. Otherwise, we just collect the common prefixes.
+        let mut objects = vec![];
+        for (k, v) in self.storage.read().map.range((prefix)..) {
+            if let Some(may_keys) = max_keys {
+                if common_prefixes.len() + objects.len() >= may_keys {
+                    is_truncated = true;
+                    break;
+                }
+            }
+
+            if !k.as_ref().starts_with(prefix.as_ref()) {
+                break;
+            }
+
+            if k <= offset {
+                continue;
+            }
+
+            let mut parts = match k.prefix_match(prefix) {
+                Some(parts) => parts,
+                None => continue,
+            };
+
+            // Pop first element
+            let common_prefix = match parts.next() {
+                Some(p) => p,
+                // Should only return children of the prefix
+                None => continue,
+            };
+
+            if parts.next().is_some() {
+                common_prefixes.insert(prefix.child(common_prefix));
+            } else {
+                let object = ObjectMeta {
+                    location: k.clone(),
+                    last_modified: v.last_modified,
+                    size: v.data.len() as u64,
+                    e_tag: Some(v.e_tag.to_string()),
+                    version: None,
+                };
+                objects.push(object);
+            }
+        }
+
+        let key_count = objects.len() + common_prefixes.len();
+        if key_count == 0 {
+            return futures::stream::iter(vec![]).boxed();
+        }
+
+        let result = Ok(ListResult {
+            key_count,
+            objects,
+            common_prefixes: common_prefixes.into_iter().collect(),
+            is_truncated,
+        });
+        futures::stream::once(async { result }).boxed()
+    }
+    fn list_without_delimiter(
+        &self,
+        prefix: Option<&Path>,
+        offset: Option<&Path>,
+        max_keys: Option<usize>,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        let root = Path::default();
+        let prefix = prefix.unwrap_or(&root);
+
+        let storage = self.storage.read();
+        let mut values: Vec<_> = storage
+            .map
+            .range(prefix..)
+            .take_while(|(key, _)| key.as_ref().starts_with(prefix.as_ref()))
+            .filter(|(key, _)| {
+                // Don't return for exact prefix match
+                key.prefix_match(prefix)
+                    .map(|mut x| x.next().is_some())
+                    .unwrap_or(false)
+            })
+            .filter(|(key, _)| offset.map(|o| key > &o).unwrap_or(true))
+            // .take(max_keys.unwrap_or(usize::MAX))
+            .map(|(key, value)| ObjectMeta {
+                location: key.clone(),
+                last_modified: value.last_modified,
+                size: value.data.len() as u64,
+                e_tag: Some(value.e_tag.to_string()),
+                version: None,
+            })
+            .collect();
+
+        let (objects, is_truncate) = match max_keys {
+            Some(max_keys) if max_keys < values.len() => {
+                values.truncate(max_keys);
+                (values, true)
+            }
+            _ => (values, false),
+        };
+
+        if objects.is_empty() {
+            return futures::stream::iter(vec![]).boxed();
+        }
+
+        let result = Ok(ListResult {
+            key_count: objects.len(),
+            objects,
+            common_prefixes: vec![],
+            is_truncated: is_truncate,
+        });
+
+        futures::stream::once(async { result }).boxed()
     }
 }
 
@@ -548,6 +688,7 @@ mod tests {
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
+        list_with_composite_conditions(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;
@@ -564,6 +705,7 @@ mod tests {
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
+        list_with_composite_conditions(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;
@@ -577,6 +719,7 @@ mod tests {
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
+        list_with_composite_conditions(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;

@@ -528,6 +528,7 @@ pub use client::{
     backoff::BackoffConfig, retry::RetryConfig, ClientConfigKey, ClientOptions, CredentialProvider,
     StaticCredentialProvider,
 };
+use std::collections::BTreeSet;
 
 #[cfg(all(feature = "cloud", not(target_arch = "wasm32")))]
 pub use client::Certificate;
@@ -720,7 +721,22 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// `foo/bar_baz/x`. List is recursive, i.e. `foo/bar/more/x` will be included.
     ///
     /// Note: the order of returned [`ObjectMeta`] is not guaranteed
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>>;
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+        self.list_opts(prefix, ListOpts::default())
+            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
+            .try_flatten()
+            .boxed()
+    }
+
+    /// List all the objects with given options defined in [`ListOpts`]
+    ///
+    /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar` is a prefix of `foo/bar/x` but not of
+    /// `foo/bar_baz/x`. List is recursive, i.e. `foo/bar/more/x` will be included.
+    fn list_opts(
+        &self,
+        prefix: Option<&Path>,
+        options: ListOpts,
+    ) -> BoxStream<'static, Result<ListResult>>;
 
     /// List all the objects with the given prefix and a location greater than `offset`
     ///
@@ -733,10 +749,16 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
         prefix: Option<&Path>,
         offset: &Path,
     ) -> BoxStream<'static, Result<ObjectMeta>> {
-        let offset = offset.clone();
-        self.list(prefix)
-            .try_filter(move |f| futures::future::ready(f.location > offset))
-            .boxed()
+        self.list_opts(
+            prefix,
+            ListOpts {
+                offset: Some(offset.clone()),
+                ..ListOpts::default()
+            },
+        )
+        .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
+        .try_flatten()
+        .boxed()
     }
 
     /// List objects with the given prefix and an implementation specific
@@ -745,7 +767,35 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ///
     /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar` is a prefix of `foo/bar/x` but not of
     /// `foo/bar_baz/x`. List is not recursive, i.e. `foo/bar/more/x` will not be included.
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult>;
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
+        let mut stream = self.list_opts(
+            prefix,
+            ListOpts {
+                delimiter: true,
+                ..ListOpts::default()
+            },
+        );
+
+        let mut common_prefixes = BTreeSet::new();
+        let mut objects = Vec::new();
+        let mut count = 0;
+        let mut is_truncated = true;
+
+        while let Some(result) = stream.next().await {
+            let response = result?;
+            common_prefixes.extend(response.common_prefixes.into_iter());
+            objects.extend(response.objects.into_iter());
+            count += response.key_count;
+            is_truncated = response.is_truncated;
+        }
+
+        Ok(ListResult {
+            key_count: count,
+            is_truncated,
+            common_prefixes: common_prefixes.into_iter().collect(),
+            objects,
+        })
+    }
 
     /// Copy an object from one path to another in the same object store.
     ///
@@ -849,6 +899,14 @@ macro_rules! as_ref_impl {
                 self.as_ref().list(prefix)
             }
 
+            fn list_opts(
+                &self,
+                prefix: Option<&Path>,
+                options: ListOpts,
+            ) -> BoxStream<'static, Result<ListResult>> {
+                self.as_ref().list_opts(prefix, options)
+            }
+
             fn list_with_offset(
                 &self,
                 prefix: Option<&Path>,
@@ -888,6 +946,10 @@ as_ref_impl!(Box<dyn ObjectStore>);
 /// 1,000 objects based on the underlying object storage's limitations.
 #[derive(Debug)]
 pub struct ListResult {
+    /// Total object number in the result set
+    pub key_count: usize,
+    /// Indicates whether the object store returned all results that satisfied the request.
+    pub is_truncated: bool,
     /// Prefixes that are common (like directories)
     pub common_prefixes: Vec<Path>,
     /// Object metadata for the listing
@@ -1281,6 +1343,28 @@ pub struct PutResult {
     pub e_tag: Option<String>,
     /// A version indicator for the newly created object
     pub version: Option<String>,
+}
+
+/// Options for [`ObjectStore::list_opts`]
+#[derive(Debug, Clone, Default)]
+pub struct ListOpts {
+    /// The listed objects whose locations are greater than `offset`
+    pub offset: Option<Path>,
+    /// True means returns common prefixes (directories) in addition to object in [`ListResult`]
+    pub delimiter: bool,
+    /// Sets the maximum number of keys returned in the response.
+    ///
+    /// Implementations might send multiple requests to continue list objects & common prefixes
+    /// since single request might only return 1000 keys by default for most object store.
+    /// The response might contain fewer keys but will never contain more.
+    pub max_keys: Option<usize>,
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to pass context-specific information (like tracing spans) via trait methods.
+    ///
+    /// These extensions are ignored entirely by backends offered through this crate.
+    ///
+    /// They are also eclused from [`PartialEq`] and [`Eq`].
+    pub extensions: ::http::Extensions,
 }
 
 /// A specialized `Result` for object store-related errors

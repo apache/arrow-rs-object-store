@@ -18,9 +18,9 @@
 //! An object store that limits the maximum concurrency of the wrapped implementation
 
 use crate::{
-    BoxStream, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, Path, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, StreamExt,
-    UploadPart,
+    BoxStream, GetOptions, GetResult, GetResultPayload, ListOpts, ListResult, MultipartUpload,
+    ObjectMeta, ObjectStore, Path, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
+    StreamExt, UploadPart,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -144,38 +144,21 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         self.inner.delete_stream(locations)
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        let prefix = prefix.cloned();
-        let inner = Arc::clone(&self.inner);
-        let fut = Arc::clone(&self.semaphore)
-            .acquire_owned()
-            .map(move |permit| {
-                let s = inner.list(prefix.as_ref());
-                PermitWrapper::new(s, permit.unwrap())
-            });
-        fut.into_stream().flatten().boxed()
-    }
-
-    fn list_with_offset(
+    fn list_opts(
         &self,
         prefix: Option<&Path>,
-        offset: &Path,
-    ) -> BoxStream<'static, Result<ObjectMeta>> {
+        options: ListOpts,
+    ) -> BoxStream<'static, Result<ListResult>> {
         let prefix = prefix.cloned();
-        let offset = offset.clone();
+        let options = options.clone();
         let inner = Arc::clone(&self.inner);
         let fut = Arc::clone(&self.semaphore)
             .acquire_owned()
             .map(move |permit| {
-                let s = inner.list_with_offset(prefix.as_ref(), &offset);
+                let s = inner.list_opts(prefix.as_ref(), options);
                 PermitWrapper::new(s, permit.unwrap())
             });
         fut.into_stream().flatten().boxed()
-    }
-
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        let _permit = self.semaphore.acquire().await.unwrap();
-        self.inner.list_with_delimiter(prefix).await
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
