@@ -317,7 +317,6 @@ impl ObjectStore for AmazonS3 {
                                 .collect();
                             ListResult {
                                 key_count: objects.len() + common_prefixes.len(),
-                                is_truncated: r.is_truncated,
                                 common_prefixes,
                                 objects,
                             }

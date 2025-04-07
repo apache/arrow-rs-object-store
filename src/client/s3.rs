@@ -55,7 +55,6 @@ impl TryFrom<ListResponse> for ListResult {
 
         Ok(Self {
             key_count: value.key_count,
-            is_truncated: value.is_truncated,
             common_prefixes,
             objects,
         })

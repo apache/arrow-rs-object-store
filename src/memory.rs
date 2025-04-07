@@ -399,7 +399,6 @@ impl ObjectStore for InMemory {
             key_count: objects.len() + common_prefixes.len(),
             objects,
             common_prefixes: common_prefixes.into_iter().collect(),
-            is_truncated: false,
         })
     }
 
@@ -436,16 +435,13 @@ impl InMemory {
         let prefix = prefix.unwrap_or(&root);
         let offset = offset.unwrap_or(&root);
 
-        let mut is_truncated = false;
         let mut common_prefixes = BTreeSet::new();
-
         // Only objects in this base level should be returned in the
         // response. Otherwise, we just collect the common prefixes.
         let mut objects = vec![];
         for (k, v) in self.storage.read().map.range((prefix)..) {
             if let Some(may_keys) = max_keys {
                 if common_prefixes.len() + objects.len() >= may_keys {
-                    is_truncated = true;
                     break;
                 }
             }
@@ -493,7 +489,6 @@ impl InMemory {
             key_count,
             objects,
             common_prefixes: common_prefixes.into_iter().collect(),
-            is_truncated,
         });
         futures::stream::once(async { result }).boxed()
     }
@@ -518,7 +513,6 @@ impl InMemory {
                     .unwrap_or(false)
             })
             .filter(|(key, _)| offset.map(|o| key > &o).unwrap_or(true))
-            // .take(max_keys.unwrap_or(usize::MAX))
             .map(|(key, value)| ObjectMeta {
                 location: key.clone(),
                 last_modified: value.last_modified,
@@ -528,26 +522,26 @@ impl InMemory {
             })
             .collect();
 
-        let (objects, is_truncate) = match max_keys {
+        let objects = match max_keys {
             Some(max_keys) if max_keys < values.len() => {
                 values.truncate(max_keys);
-                (values, true)
+                values
             }
-            _ => (values, false),
+            _ => values,
         };
 
         if objects.is_empty() {
-            return futures::stream::iter(vec![]).boxed();
+            futures::stream::iter(vec![]).boxed()
+        } else {
+            futures::stream::once(async {
+                Ok(ListResult {
+                    key_count: objects.len(),
+                    objects,
+                    common_prefixes: vec![],
+                })
+            })
+            .boxed()
         }
-
-        let result = Ok(ListResult {
-            key_count: objects.len(),
-            objects,
-            common_prefixes: vec![],
-            is_truncated: is_truncate,
-        });
-
-        futures::stream::once(async { result }).boxed()
     }
 }
 

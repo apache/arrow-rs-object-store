@@ -1000,7 +1000,6 @@ pub async fn list_with_composite_conditions(storage: &DynObjectStore) {
     let result = stream.next().await.unwrap().unwrap();
     assert_eq!(result.common_prefixes.len(), 0);
     assert_eq!(result.objects.len(), 5);
-    assert!(!result.is_truncated);
     assert_eq!(result.key_count, 5);
     assert!(stream.next().await.is_none());
 
@@ -1033,7 +1032,6 @@ pub async fn list_with_composite_conditions(storage: &DynObjectStore) {
         result.objects[1].location,
         Path::from("mydb/wb/000/000/001.segment")
     );
-    assert!(!result.is_truncated);
     assert_eq!(result.key_count, 2);
     assert!(stream.next().await.is_none());
 
@@ -1053,7 +1051,6 @@ pub async fn list_with_composite_conditions(storage: &DynObjectStore) {
     );
     assert_eq!(result.objects.len(), 1);
     assert_eq!(result.objects[0].location, expected_location);
-    assert!(!result.is_truncated);
     assert_eq!(result.key_count, 3);
     assert!(stream.next().await.is_none());
 
@@ -1073,7 +1070,6 @@ pub async fn list_with_composite_conditions(storage: &DynObjectStore) {
         vec![expected_000.clone(), expected_001.clone()]
     );
     assert_eq!(result.objects.len(), 0);
-    assert!(result.is_truncated);
     assert_eq!(result.key_count, 2);
     assert!(stream.next().await.is_none());
 

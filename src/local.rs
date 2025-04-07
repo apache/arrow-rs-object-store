@@ -594,31 +594,28 @@ impl LocalFileSystem {
             .follow_links(true);
 
         let offset = offset.cloned();
-        let stream = walkdir
-            .into_iter()
-            .flat_map(move |result_dir_entry| {
-                if let Ok(entry) = result_dir_entry.as_ref() {
-                    let location = config.filesystem_to_path(entry.path());
-                    match location {
-                        Ok(path) => {
-                            // Apply offset filter before proceeding, to reduce statx file system calls
-                            // This matters for NFS mounts
-                            if let Some(offset) = offset.as_ref() {
-                                if path <= *offset {
-                                    return None;
-                                }
-                            }
-
-                            if !entry.path().is_file() || !is_valid_file_path(&path) {
+        let stream = walkdir.into_iter().flat_map(move |result_dir_entry| {
+            if let Ok(entry) = result_dir_entry.as_ref() {
+                let location = config.filesystem_to_path(entry.path());
+                match location {
+                    Ok(path) => {
+                        // Apply offset filter before proceeding, to reduce statx file system calls
+                        // This matters for NFS mounts
+                        if let Some(offset) = offset.as_ref() {
+                            if path <= *offset {
                                 return None;
                             }
                         }
-                        Err(e) => return Some(Err(e)),
+
+                        if !entry.path().is_file() || !is_valid_file_path(&path) {
+                            return None;
+                        }
                     }
+                    Err(e) => return Some(Err(e)),
                 }
-                convert_walkdir_result(result_dir_entry).transpose()
-            })
-            .peekable();
+            }
+            convert_walkdir_result(result_dir_entry).transpose()
+        });
 
         let config = Arc::clone(&self.config);
         let prefix = prefix.cloned().unwrap_or_default();
@@ -653,11 +650,9 @@ impl LocalFileSystem {
 
                     let key_count = objects.len();
                     let remaining = max_keys.map(|x| x - key_count);
-                    let is_truncated = stream.peek().is_some();
 
                     let result = ListResult {
                         key_count,
-                        is_truncated,
                         common_prefixes: vec![],
                         objects,
                     };
@@ -692,33 +687,30 @@ impl LocalFileSystem {
         let prefix = prefix.cloned().unwrap_or_default();
         let offset = offset.cloned();
 
-        let stream = walkdir
-            .into_iter()
-            .flat_map(move |entry| {
-                if let Ok(entry) = entry.as_ref() {
-                    let location = config.filesystem_to_path(entry.path());
-                    match location {
-                        Ok(path) => {
-                            // Apply offset filter before proceeding, to reduce statx file system calls
-                            // This matters for NFS mounts
-                            if let Some(offset) = offset.as_ref() {
-                                if path <= *offset {
-                                    return None;
-                                }
-                            }
-
-                            // Exclude the invalid files
-                            if entry.path().is_file() && !is_valid_file_path(&path) {
+        let stream = walkdir.into_iter().flat_map(move |entry| {
+            if let Ok(entry) = entry.as_ref() {
+                let location = config.filesystem_to_path(entry.path());
+                match location {
+                    Ok(path) => {
+                        // Apply offset filter before proceeding, to reduce statx file system calls
+                        // This matters for NFS mounts
+                        if let Some(offset) = offset.as_ref() {
+                            if path <= *offset {
                                 return None;
                             }
                         }
-                        Err(e) => return Some(Err(e)),
-                    }
-                }
 
-                convert_walkdir_result(entry).transpose()
-            })
-            .peekable();
+                        // Exclude the invalid files
+                        if entry.path().is_file() && !is_valid_file_path(&path) {
+                            return None;
+                        }
+                    }
+                    Err(e) => return Some(Err(e)),
+                }
+            }
+
+            convert_walkdir_result(entry).transpose()
+        });
 
         let config = Arc::clone(&self.config);
         futures::stream::try_unfold(
@@ -764,11 +756,9 @@ impl LocalFileSystem {
 
                     let key_count = common_prefixes.len() + objects.len();
                     let remaining = max_keys.map(|x| x - key_count);
-                    let is_truncated = stream.peek().is_some();
 
                     let result = ListResult {
                         key_count,
-                        is_truncated,
                         common_prefixes: common_prefixes.into_iter().collect(),
                         objects,
                     };

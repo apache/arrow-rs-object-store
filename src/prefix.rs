@@ -182,7 +182,6 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
 
         s.map_ok(move |lst| ListResult {
             key_count: lst.key_count,
-            is_truncated: lst.is_truncated,
             common_prefixes: lst
                 .common_prefixes
                 .into_iter()
@@ -216,7 +215,6 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
             .await
             .map(|lst| ListResult {
                 key_count: lst.key_count,
-                is_truncated: lst.is_truncated,
                 common_prefixes: lst
                     .common_prefixes
                     .into_iter()

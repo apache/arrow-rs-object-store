@@ -1060,7 +1060,6 @@ fn to_list_result(value: ListResultInternal, prefix: Option<&str>) -> Result<Lis
 
     Ok(ListResult {
         key_count: 0,
-        is_truncated: false,
         common_prefixes,
         objects,
     })
