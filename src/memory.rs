@@ -311,94 +311,16 @@ impl ObjectStore for InMemory {
         Ok(())
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        let root = Path::default();
-        let prefix = prefix.unwrap_or(&root);
-
-        let storage = self.storage.read();
-        let values: Vec<_> = storage
-            .map
-            .range((prefix)..)
-            .take_while(|(key, _)| key.as_ref().starts_with(prefix.as_ref()))
-            .filter(|(key, _)| {
-                // Don't return for exact prefix match
-                key.prefix_match(prefix)
-                    .map(|mut x| x.next().is_some())
-                    .unwrap_or(false)
-            })
-            .map(|(key, value)| {
-                Ok(ObjectMeta {
-                    location: key.clone(),
-                    last_modified: value.last_modified,
-                    size: value.data.len() as u64,
-                    e_tag: Some(value.e_tag.to_string()),
-                    version: None,
-                })
-            })
-            .collect();
-
-        futures::stream::iter(values).boxed()
-    }
-
     fn list_opts(
         &self,
         prefix: Option<&Path>,
         options: ListOpts,
     ) -> BoxStream<'static, Result<ListResult>> {
         if options.delimiter {
-            self.list_children(prefix, options.offset.as_ref(), options.max_keys)
+            self.list_with_delimiter(prefix, options.offset.as_ref(), options.max_keys)
         } else {
             self.list_without_delimiter(prefix, options.offset.as_ref(), options.max_keys)
         }
-    }
-
-    /// The memory implementation returns all results, as opposed to the cloud
-    /// versions which limit their results to 1k or more because of API
-    /// limitations.
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        let root = Path::default();
-        let prefix = prefix.unwrap_or(&root);
-
-        let mut common_prefixes = BTreeSet::new();
-
-        // Only objects in this base level should be returned in the
-        // response. Otherwise, we just collect the common prefixes.
-        let mut objects = vec![];
-        for (k, v) in self.storage.read().map.range((prefix)..) {
-            if !k.as_ref().starts_with(prefix.as_ref()) {
-                break;
-            }
-
-            let mut parts = match k.prefix_match(prefix) {
-                Some(parts) => parts,
-                None => continue,
-            };
-
-            // Pop first element
-            let common_prefix = match parts.next() {
-                Some(p) => p,
-                // Should only return children of the prefix
-                None => continue,
-            };
-
-            if parts.next().is_some() {
-                common_prefixes.insert(prefix.child(common_prefix));
-            } else {
-                let object = ObjectMeta {
-                    location: k.clone(),
-                    last_modified: v.last_modified,
-                    size: v.data.len() as u64,
-                    e_tag: Some(v.e_tag.to_string()),
-                    version: None,
-                };
-                objects.push(object);
-            }
-        }
-
-        Ok(ListResult {
-            objects,
-            common_prefixes: common_prefixes.into_iter().collect(),
-        })
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
@@ -424,7 +346,7 @@ impl ObjectStore for InMemory {
 }
 
 impl InMemory {
-    fn list_children(
+    fn list_with_delimiter(
         &self,
         prefix: Option<&Path>,
         offset: Option<&Path>,

@@ -488,11 +488,7 @@ impl ObjectStore for LocalFileSystem {
         prefix: Option<&Path>,
         options: ListOpts,
     ) -> BoxStream<'static, Result<ListResult>> {
-        if options.delimiter {
-            self.list_children(prefix, options.offset.as_ref(), options.max_keys)
-        } else {
-            self.list_without_delimiter(prefix, options.offset.as_ref(), options.max_keys)
-        }
+        self.list_with_opts(prefix, options)
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
@@ -573,12 +569,18 @@ impl ObjectStore for LocalFileSystem {
 }
 
 impl LocalFileSystem {
-    fn list_without_delimiter(
+    fn list_with_opts(
         &self,
         prefix: Option<&Path>,
-        offset: Option<&Path>,
-        max_keys: Option<usize>,
+        options: ListOpts,
     ) -> BoxStream<'static, Result<ListResult>> {
+        let ListOpts {
+            offset,
+            delimiter,
+            max_keys,
+            ..
+        } = options;
+
         let config = Arc::clone(&self.config);
         let root_path = match prefix {
             Some(prefix) => match config.prefix_to_filesystem(prefix) {
@@ -588,14 +590,17 @@ impl LocalFileSystem {
             None => config.root.to_file_path().unwrap(),
         };
 
-        let walkdir = WalkDir::new(root_path)
+        let mut walkdir = WalkDir::new(root_path)
             // Don't include the root directory itself
             .min_depth(1)
             .follow_links(true);
+        if delimiter {
+            walkdir = walkdir.max_depth(1);
+        }
 
-        let offset = offset.cloned();
-        let stream = walkdir.into_iter().flat_map(move |result_dir_entry| {
-            if let Ok(entry) = result_dir_entry.as_ref() {
+        let offset = offset.clone();
+        let stream = walkdir.into_iter().flat_map(move |entry_res| {
+            if let Ok(entry) = entry_res.as_ref() {
                 let location = config.filesystem_to_path(entry.path());
                 match location {
                     Ok(path) => {
@@ -607,99 +612,12 @@ impl LocalFileSystem {
                             }
                         }
 
-                        if !entry.path().is_file() || !is_valid_file_path(&path) {
+                        // Exclude the 'directory' if delimiter is false
+                        if !delimiter && entry.path().is_dir() {
                             return None;
                         }
-                    }
-                    Err(e) => return Some(Err(e)),
-                }
-            }
-            convert_walkdir_result(result_dir_entry).transpose()
-        });
 
-        let config = Arc::clone(&self.config);
-        let prefix = prefix.cloned().unwrap_or_default();
-        futures::stream::try_unfold(
-            (stream, prefix, config, max_keys),
-            |(mut stream, prefix, config, max_keys)| async move {
-                let fill_count = max_keys.unwrap_or(1000).min(1000);
-                let mut buffer = Vec::with_capacity(fill_count);
-                (stream, buffer) = maybe_spawn_blocking(move || {
-                    while buffer.len() < fill_count {
-                        match stream.next() {
-                            Some(r) => buffer.push(r),
-                            None => break,
-                        }
-                    }
-                    Ok((stream, buffer))
-                })
-                .await?;
-
-                if buffer.is_empty() {
-                    Ok(None)
-                } else {
-                    let mut objects = Vec::new();
-                    for entry_res in buffer.into_iter() {
-                        // All entries are files since the directory is excluded previously.
-                        let entry = entry_res?;
-                        let entry_location = config.filesystem_to_path(entry.path())?;
-                        if let Some(metadata) = convert_entry(entry, entry_location)? {
-                            objects.push(metadata);
-                        }
-                    }
-
-                    let key_count = objects.len();
-                    let remaining = max_keys.map(|x| x - key_count);
-
-                    let result = ListResult {
-                        common_prefixes: vec![],
-                        objects,
-                    };
-
-                    Ok(Some((result, (stream, prefix, config, remaining))))
-                }
-            },
-        )
-        .boxed()
-    }
-
-    fn list_children(
-        &self,
-        prefix: Option<&Path>,
-        offset: Option<&Path>,
-        max_keys: Option<usize>,
-    ) -> BoxStream<'static, Result<ListResult>> {
-        let config = Arc::clone(&self.config);
-        let root_path = match prefix {
-            Some(prefix) => match config.prefix_to_filesystem(prefix) {
-                Ok(path) => path,
-                Err(e) => return futures::future::ready(Err(e)).into_stream().boxed(),
-            },
-            None => config.root.to_file_path().unwrap(),
-        };
-
-        let walkdir = WalkDir::new(root_path)
-            // Don't include the root directory itself
-            .min_depth(1)
-            .max_depth(1)
-            .follow_links(true);
-        let prefix = prefix.cloned().unwrap_or_default();
-        let offset = offset.cloned();
-
-        let stream = walkdir.into_iter().flat_map(move |entry| {
-            if let Ok(entry) = entry.as_ref() {
-                let location = config.filesystem_to_path(entry.path());
-                match location {
-                    Ok(path) => {
-                        // Apply offset filter before proceeding, to reduce statx file system calls
-                        // This matters for NFS mounts
-                        if let Some(offset) = offset.as_ref() {
-                            if path <= *offset {
-                                return None;
-                            }
-                        }
-
-                        // Exclude the invalid files
+                        // Exclude the invalid files.
                         if entry.path().is_file() && !is_valid_file_path(&path) {
                             return None;
                         }
@@ -707,16 +625,17 @@ impl LocalFileSystem {
                     Err(e) => return Some(Err(e)),
                 }
             }
-
-            convert_walkdir_result(entry).transpose()
+            convert_walkdir_result(entry_res).transpose()
         });
 
         let config = Arc::clone(&self.config);
+        let prefix = prefix.cloned().unwrap_or_default();
         futures::stream::try_unfold(
-            (stream, prefix, config, max_keys),
-            |(mut stream, prefix, config, max_keys)| async move {
+            (stream, config, prefix, delimiter, max_keys),
+            |(mut stream, config, prefix, delimiter, max_keys)| async move {
                 let fill_count = max_keys.unwrap_or(1000).min(1000);
                 let mut buffer = Vec::with_capacity(fill_count);
+
                 (stream, buffer) = maybe_spawn_blocking(move || {
                     while buffer.len() < fill_count {
                         match stream.next() {
@@ -730,7 +649,7 @@ impl LocalFileSystem {
 
                 if buffer.is_empty() {
                     Ok(None)
-                } else {
+                } else if delimiter {
                     let mut common_prefixes = BTreeSet::new();
                     let mut objects = Vec::new();
                     for entry_res in buffer.into_iter() {
@@ -755,13 +674,33 @@ impl LocalFileSystem {
 
                     let key_count = common_prefixes.len() + objects.len();
                     let remaining = max_keys.map(|x| x - key_count);
+                    Ok(Some((
+                        ListResult {
+                            common_prefixes: common_prefixes.into_iter().collect(),
+                            objects,
+                        },
+                        (stream, config, prefix, delimiter, remaining),
+                    )))
+                } else {
+                    let mut objects = Vec::new();
+                    for entry_res in buffer.into_iter() {
+                        // All entries are files since the directory is excluded previously.
+                        let entry = entry_res?;
+                        let entry_location = config.filesystem_to_path(entry.path())?;
+                        if let Some(metadata) = convert_entry(entry, entry_location)? {
+                            objects.push(metadata);
+                        }
+                    }
 
-                    let result = ListResult {
-                        common_prefixes: common_prefixes.into_iter().collect(),
-                        objects,
-                    };
-
-                    Ok(Some((result, (stream, prefix, config, remaining))))
+                    let key_count = objects.len();
+                    let remaining = max_keys.map(|x| x - key_count);
+                    Ok(Some((
+                        ListResult {
+                            common_prefixes: vec![],
+                            objects,
+                        },
+                        (stream, config, prefix, delimiter, remaining),
+                    )))
                 }
             },
         )

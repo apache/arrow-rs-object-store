@@ -171,9 +171,9 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         options: ListOpts,
     ) -> BoxStream<'static, Result<ListResult>> {
         let prefix = self.full_path(prefix.unwrap_or(&Path::default()));
-        let offset = self.full_path(options.offset.as_ref().unwrap_or(&Path::default()));
+        let offset = options.offset.map(|p| self.full_path(&p));
         let opts = ListOpts {
-            offset: Some(offset),
+            offset,
             delimiter: options.delimiter,
             max_keys: options.max_keys,
             extensions: options.extensions,
