@@ -673,7 +673,7 @@ impl LocalFileSystem {
                     }
 
                     let key_count = common_prefixes.len() + objects.len();
-                    let remaining = max_keys.map(|x| x - key_count);
+                    let remaining = max_keys.map(|x| (x - key_count).max(0));
                     Ok(Some((
                         ListResult {
                             common_prefixes: common_prefixes.into_iter().collect(),
@@ -693,7 +693,7 @@ impl LocalFileSystem {
                     }
 
                     let key_count = objects.len();
-                    let remaining = max_keys.map(|x| x - key_count);
+                    let remaining = max_keys.map(|x| (x - key_count).max(0));
                     Ok(Some((
                         ListResult {
                             common_prefixes: vec![],

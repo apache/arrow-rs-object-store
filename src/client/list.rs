@@ -70,6 +70,12 @@ impl<T: ListClient + Clone> ListClientExt for T {
             self.clone(),
             (prefix, offset, max_keys, extensions),
             move |client, (prefix, offset, max_keys, extensions), token| async move {
+                if let Some(remaining) = max_keys {
+                    if remaining == 0 {
+                        return Ok((ListResult::empty(), (prefix, offset, max_keys, extensions), None));
+                    }
+                }
+
                 let (r, next_token) = client
                     .list_request(
                         prefix.as_deref(),
@@ -81,7 +87,7 @@ impl<T: ListClient + Clone> ListClientExt for T {
                     )
                     .await?;
                 let key_count = r.common_prefixes.len() + r.objects.len();
-                let remaining = max_keys.map(|x| x - key_count);
+                let remaining = max_keys.map(|x| (x - key_count).max(0));
                 let next_token = match remaining {
                     None => next_token,
                     Some(remaining) if remaining > 0 => next_token,

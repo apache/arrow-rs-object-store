@@ -401,11 +401,6 @@ impl InMemory {
             }
         }
 
-        let key_count = objects.len() + common_prefixes.len();
-        if key_count == 0 {
-            return futures::stream::iter(vec![]).boxed();
-        }
-
         let result = Ok(ListResult {
             objects,
             common_prefixes: common_prefixes.into_iter().collect(),
@@ -450,17 +445,13 @@ impl InMemory {
             _ => values,
         };
 
-        if objects.is_empty() {
-            futures::stream::iter(vec![]).boxed()
-        } else {
-            futures::stream::once(async {
-                Ok(ListResult {
-                    objects,
-                    common_prefixes: vec![],
-                })
+        futures::stream::once(async {
+            Ok(ListResult {
+                objects,
+                common_prefixes: vec![],
             })
-            .boxed()
-        }
+        })
+        .boxed()
     }
 }
 

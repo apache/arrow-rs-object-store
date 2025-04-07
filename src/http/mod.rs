@@ -244,7 +244,7 @@ impl ObjectStore for HttpStore {
                         Ok(None)
                     } else {
                         let key_count = buffer.len();
-                        let remaining = max_keys.map(|x| x - key_count);
+                        let remaining = max_keys.map(|x| (x - key_count).max(0));
                         let result = ListResult {
                             common_prefixes: vec![],
                             objects: buffer,

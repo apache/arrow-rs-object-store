@@ -29,8 +29,8 @@ use core::str;
 use crate::multipart::MultipartStore;
 use crate::path::Path;
 use crate::{
-    Attribute, Attributes, DynObjectStore, Error, GetOptions, GetRange, ListOpts, MultipartUpload,
-    ObjectStore, PutMode, PutPayload, UpdateVersion, WriteMultipart,
+    Attribute, Attributes, DynObjectStore, Error, GetOptions, GetRange, ListOpts,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutPayload, UpdateVersion, WriteMultipart,
 };
 use bytes::Bytes;
 use futures::stream::FuturesUnordered;
@@ -1003,14 +1003,21 @@ pub async fn list_with_composite_conditions(storage: &DynObjectStore) {
     assert!(stream.next().await.is_none());
 
     // =========== check: prefix-list `mydb/wb` (directory) with max_keys=0 ==============
-    let mut stream = storage.list_opts(
-        Some(&prefix),
-        ListOpts {
-            max_keys: Some(0),
-            ..Default::default()
-        },
-    );
-    assert!(stream.next().await.is_none());
+    let result = storage
+        .list_opts(
+            Some(&prefix),
+            ListOpts {
+                max_keys: Some(0),
+                ..Default::default()
+            },
+        )
+        .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok::<ObjectMeta, Error>)))
+        .try_flatten()
+        .boxed()
+        .try_collect::<Vec<ObjectMeta>>()
+        .await
+        .unwrap();
+    assert_eq!(result.len(), 0);
 
     // =========== check: prefix-list `mydb/wb` (directory) with max_keys=2 ==============
     let mut stream = storage.list_opts(
@@ -1073,9 +1080,21 @@ pub async fn list_with_composite_conditions(storage: &DynObjectStore) {
     for f in &files {
         storage.delete(f).await.unwrap();
     }
-
-    let mut stream = storage.list_opts(None, Default::default());
-    assert!(stream.next().await.is_none());
+    let result = storage
+        .list_opts(
+            Some(&prefix),
+            ListOpts {
+                max_keys: Some(0),
+                ..Default::default()
+            },
+        )
+        .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok::<ObjectMeta, Error>)))
+        .try_flatten()
+        .boxed()
+        .try_collect::<Vec<ObjectMeta>>()
+        .await
+        .unwrap();
+    assert_eq!(result.len(), 0);
 }
 
 /// Tests fetching a non-existent object returns a not found error

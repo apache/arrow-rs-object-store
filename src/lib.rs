@@ -946,6 +946,16 @@ pub struct ListResult {
     pub objects: Vec<ObjectMeta>,
 }
 
+impl ListResult {
+    /// Create a list rust with empty content.
+    pub fn empty() -> Self {
+        Self {
+            common_prefixes: Vec::new(),
+            objects: Vec::new(),
+        }
+    }
+}
+
 /// The metadata that describes an object.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectMeta {
