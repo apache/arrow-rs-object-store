@@ -396,7 +396,6 @@ impl ObjectStore for InMemory {
         }
 
         Ok(ListResult {
-            key_count: objects.len() + common_prefixes.len(),
             objects,
             common_prefixes: common_prefixes.into_iter().collect(),
         })
@@ -486,7 +485,6 @@ impl InMemory {
         }
 
         let result = Ok(ListResult {
-            key_count,
             objects,
             common_prefixes: common_prefixes.into_iter().collect(),
         });
@@ -535,7 +533,6 @@ impl InMemory {
         } else {
             futures::stream::once(async {
                 Ok(ListResult {
-                    key_count: objects.len(),
                     objects,
                     common_prefixes: vec![],
                 })

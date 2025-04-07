@@ -181,7 +181,6 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         let s = self.inner.list_opts(Some(&prefix), opts);
 
         s.map_ok(move |lst| ListResult {
-            key_count: lst.key_count,
             common_prefixes: lst
                 .common_prefixes
                 .into_iter()
@@ -214,7 +213,6 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
             .list_with_delimiter(Some(&prefix))
             .await
             .map(|lst| ListResult {
-                key_count: lst.key_count,
                 common_prefixes: lst
                     .common_prefixes
                     .into_iter()

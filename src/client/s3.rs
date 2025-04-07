@@ -54,7 +54,6 @@ impl TryFrom<ListResponse> for ListResult {
             .collect::<Result<_>>()?;
 
         Ok(Self {
-            key_count: value.key_count,
             common_prefixes,
             objects,
         })

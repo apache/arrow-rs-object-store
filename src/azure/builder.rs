@@ -1038,7 +1038,11 @@ impl MicrosoftAzureBuilder {
             (false, url, credential, account_name)
         };
 
-        let max_list_keys_per_request = self.max_list_size_per_request.unwrap_or(ConfigValue::Parsed(1000)).get()?;
+        let max_list_keys_per_request = self
+            .max_list_size_per_request
+            .unwrap_or(ConfigValue::Parsed(1000))
+            .get()?;
+
         let config = AzureConfig {
             account,
             is_emulator,

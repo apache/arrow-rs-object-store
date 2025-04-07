@@ -652,7 +652,6 @@ impl LocalFileSystem {
                     let remaining = max_keys.map(|x| x - key_count);
 
                     let result = ListResult {
-                        key_count,
                         common_prefixes: vec![],
                         objects,
                     };
@@ -758,7 +757,6 @@ impl LocalFileSystem {
                     let remaining = max_keys.map(|x| x - key_count);
 
                     let result = ListResult {
-                        key_count,
                         common_prefixes: common_prefixes.into_iter().collect(),
                         objects,
                     };

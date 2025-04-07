@@ -80,7 +80,8 @@ impl<T: ListClient + Clone> ListClientExt for T {
                         extensions.clone(),
                     )
                     .await?;
-                let remaining = max_keys.map(|x| x - r.key_count);
+                let key_count = r.common_prefixes.len() + r.objects.len();
+                let remaining = max_keys.map(|x| x - key_count);
                 let next_token = match remaining {
                     None => next_token,
                     Some(remaining) if remaining > 0 => next_token,

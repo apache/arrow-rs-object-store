@@ -1059,7 +1059,6 @@ fn to_list_result(value: ListResultInternal, prefix: Option<&str>) -> Result<Lis
         .collect::<Result<_>>()?;
 
     Ok(ListResult {
-        key_count: 0,
         common_prefixes,
         objects,
     })

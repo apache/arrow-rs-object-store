@@ -216,9 +216,7 @@ impl ObjectStore for HttpStore {
                     }
                 }
 
-                let resp_key_count = common_prefixes.len() + objects.len();
                 Ok(ListResult {
-                    key_count: resp_key_count,
                     common_prefixes,
                     objects,
                 })
@@ -248,7 +246,6 @@ impl ObjectStore for HttpStore {
                         let key_count = buffer.len();
                         let remaining = max_keys.map(|x| x - key_count);
                         let result = ListResult {
-                            key_count: buffer.len(),
                             common_prefixes: vec![],
                             objects: buffer,
                         };
@@ -287,7 +284,6 @@ impl ObjectStore for HttpStore {
         }
 
         Ok(ListResult {
-            key_count: common_prefixes.len() + objects.len(),
             common_prefixes,
             objects,
         })

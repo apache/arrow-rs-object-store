@@ -778,17 +778,14 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
 
         let mut common_prefixes = BTreeSet::new();
         let mut objects = Vec::new();
-        let mut count = 0;
 
         while let Some(result) = stream.next().await {
             let response = result?;
             common_prefixes.extend(response.common_prefixes.into_iter());
             objects.extend(response.objects.into_iter());
-            count += response.key_count;
         }
 
         Ok(ListResult {
-            key_count: count,
             common_prefixes: common_prefixes.into_iter().collect(),
             objects,
         })
@@ -943,8 +940,6 @@ as_ref_impl!(Box<dyn ObjectStore>);
 /// 1,000 objects based on the underlying object storage's limitations.
 #[derive(Debug)]
 pub struct ListResult {
-    /// Total object number in the result set
-    pub key_count: usize,
     /// Prefixes that are common (like directories)
     pub common_prefixes: Vec<Path>,
     /// Object metadata for the listing

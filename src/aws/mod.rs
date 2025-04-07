@@ -316,7 +316,6 @@ impl ObjectStore for AmazonS3 {
                                 .filter(|p| p > &offset)
                                 .collect();
                             ListResult {
-                                key_count: objects.len() + common_prefixes.len(),
                                 common_prefixes,
                                 objects,
                             }
