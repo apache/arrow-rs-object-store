@@ -160,7 +160,7 @@ impl Path {
     /// Parse a string as a [`Path`], returning a [`Error`] if invalid,
     /// as defined on the docstring for [`Path`]
     ///
-    /// Note: this will strip any leading `/` or trailing `/`
+    /// Note: this will strip any leading `/` and keep only last one `/`
     pub fn parse(path: impl AsRef<str>) -> Result<Self, Error> {
         let path = path.as_ref();
 
@@ -183,7 +183,11 @@ impl Path {
         }
 
         Ok(Self {
-            raw: stripped.to_string(),
+            raw: if path.ends_with('/') {
+                format!("{}{}", stripped, DELIMITER)
+            } else {
+                stripped.to_string()
+            },
         })
     }
 
@@ -321,13 +325,33 @@ impl AsRef<str> for Path {
 
 impl From<&str> for Path {
     fn from(path: &str) -> Self {
-        Self::from_iter(path.split(DELIMITER))
+        if path.ends_with(DELIMITER) && path != DELIMITER {
+            Self {
+                raw: format!(
+                    "{}{}",
+                    Self::from_iter(path.split(DELIMITER)).as_ref(),
+                    DELIMITER
+                ),
+            }
+        } else {
+            Self::from_iter(path.split(DELIMITER))
+        }
     }
 }
 
 impl From<String> for Path {
     fn from(path: String) -> Self {
-        Self::from_iter(path.split(DELIMITER))
+        if path.ends_with(DELIMITER) && path != DELIMITER {
+            Self {
+                raw: format!(
+                    "{}{}",
+                    Self::from_iter(path.split(DELIMITER)).as_ref(),
+                    DELIMITER
+                ),
+            }
+        } else {
+            Self::from_iter(path.split(DELIMITER))
+        }
     }
 }
 
@@ -393,8 +417,8 @@ mod tests {
         let err = Path::parse("//").unwrap_err();
         assert!(matches!(err, Error::EmptySegment { .. }));
 
-        assert_eq!(Path::parse("/foo/bar/").unwrap().as_ref(), "foo/bar");
-        assert_eq!(Path::parse("foo/bar/").unwrap().as_ref(), "foo/bar");
+        assert_eq!(Path::parse("/foo/bar/").unwrap().as_ref(), "foo/bar/");
+        assert_eq!(Path::parse("foo/bar/").unwrap().as_ref(), "foo/bar/");
         assert_eq!(Path::parse("foo/bar").unwrap().as_ref(), "foo/bar");
 
         let err = Path::parse("foo///bar").unwrap_err();
@@ -417,7 +441,7 @@ mod tests {
 
         // dir, no file
         let cloud = Path::from("test_dir/");
-        let built = Path::from_iter(["test_dir"]);
+        let built = Path::parse("test_dir/").unwrap();
         assert_eq!(built, cloud);
 
         // file_name, no dir

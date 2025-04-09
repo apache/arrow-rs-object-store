@@ -67,9 +67,17 @@ impl<T: ListClient + Clone> ListClientExt for T {
         offset: Option<&Path>,
     ) -> BoxStream<'static, Result<ListResult>> {
         let offset = offset.map(|x| x.to_string());
-        let prefix = prefix
-            .filter(|x| !x.as_ref().is_empty())
-            .map(|p| format!("{}{}", p.as_ref(), crate::path::DELIMITER));
+        let prefix = prefix.filter(|x| !x.as_ref().is_empty()).map(|p| {
+            format!(
+                "{}{}",
+                p.as_ref(),
+                if delimiter && !p.as_ref().ends_with('/') {
+                    crate::path::DELIMITER
+                } else {
+                    ""
+                }
+            )
+        });
 
         stream_paginated(
             self.clone(),
