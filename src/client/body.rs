@@ -49,6 +49,14 @@ impl HttpRequestBody {
         }
     }
 
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    pub(crate) fn into_reqwest(self) -> reqwest::Body {
+        match self.0 {
+            Inner::Bytes(b) => b.into(),
+            Inner::PutPayload(_, payload) => Bytes::from(payload).into(),
+        }
+    }
+
     /// Returns true if this body is empty
     pub fn is_empty(&self) -> bool {
         match &self.0 {
