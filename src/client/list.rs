@@ -72,7 +72,11 @@ impl<T: ListClient + Clone> ListClientExt for T {
             move |client, (prefix, offset, max_keys, extensions), token| async move {
                 if let Some(remaining) = max_keys {
                     if remaining == 0 {
-                        return Ok((ListResult::empty(), (prefix, offset, max_keys, extensions), None));
+                        return Ok((
+                            ListResult::empty(),
+                            (prefix, offset, max_keys, extensions),
+                            None,
+                        ));
                     }
                 }
 

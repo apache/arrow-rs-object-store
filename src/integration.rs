@@ -29,8 +29,8 @@ use core::str;
 use crate::multipart::MultipartStore;
 use crate::path::Path;
 use crate::{
-    Attribute, Attributes, DynObjectStore, Error, GetOptions, GetRange, ListOpts,
-    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutPayload, UpdateVersion, WriteMultipart,
+    Attribute, Attributes, DynObjectStore, Error, GetOptions, GetRange, ListOpts, MultipartUpload,
+    ObjectMeta, ObjectStore, PutMode, PutPayload, UpdateVersion, WriteMultipart,
 };
 use bytes::Bytes;
 use futures::stream::FuturesUnordered;

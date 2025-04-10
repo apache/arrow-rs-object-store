@@ -909,9 +909,9 @@ impl ListClient for Arc<S3Client> {
 
         let max_keys = max_keys
             .map(|x| x.min(self.config.max_list_keys_per_request))
-            .unwrap_or(self.config.max_list_keys_per_request).to_string();
+            .unwrap_or(self.config.max_list_keys_per_request)
+            .to_string();
         query.push(("max-keys", max_keys.as_str()));
-
 
         let response = self
             .client

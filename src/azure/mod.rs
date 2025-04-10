@@ -26,8 +26,8 @@ use crate::{
     multipart::{MultipartStore, PartId},
     path::Path,
     signer::Signer,
-    GetOptions, GetResult, ListOpts, ListResult, MultipartId, MultipartUpload,
-    ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
+    GetOptions, GetResult, ListOpts, ListResult, MultipartId, MultipartUpload, ObjectStore,
+    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 use async_trait::async_trait;
 use futures::stream::{BoxStream, StreamExt, TryStreamExt};

@@ -295,33 +295,32 @@ impl ObjectStore for AmazonS3 {
             let offset = options.offset.clone();
             match offset {
                 // S3 Express does not support start-after
-                Some(offset) if !offset.to_string().is_empty() => {
-                    self.client
-                        .list_paginated(
-                            prefix,
-                            ListOpts {
-                                offset: None,
-                                ..options
-                            },
-                        )
-                        .map_ok(move |r| {
-                            let objects: Vec<ObjectMeta> = r
-                                .objects
-                                .into_iter()
-                                .filter(|f| f.location > offset)
-                                .collect();
-                            let common_prefixes: Vec<Path> = r
-                                .common_prefixes
-                                .into_iter()
-                                .filter(|p| p > &offset)
-                                .collect();
-                            ListResult {
-                                common_prefixes,
-                                objects,
-                            }
-                        })
-                        .boxed()
-                }
+                Some(offset) if !offset.to_string().is_empty() => self
+                    .client
+                    .list_paginated(
+                        prefix,
+                        ListOpts {
+                            offset: None,
+                            ..options
+                        },
+                    )
+                    .map_ok(move |r| {
+                        let objects: Vec<ObjectMeta> = r
+                            .objects
+                            .into_iter()
+                            .filter(|f| f.location > offset)
+                            .collect();
+                        let common_prefixes: Vec<Path> = r
+                            .common_prefixes
+                            .into_iter()
+                            .filter(|p| p > &offset)
+                            .collect();
+                        ListResult {
+                            common_prefixes,
+                            objects,
+                        }
+                    })
+                    .boxed(),
                 _ => self.client.list_paginated(prefix, options),
             }
         } else {

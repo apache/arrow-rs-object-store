@@ -42,8 +42,8 @@ use crate::gcp::credential::GCSAuthorizer;
 use crate::signer::Signer;
 use crate::{
     multipart::PartId, path::Path, GetOptions, GetResult, ListOpts, ListResult, MultipartId,
-    MultipartUpload, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult,
-    Result, UploadPart,
+    MultipartUpload, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
+    UploadPart,
 };
 use async_trait::async_trait;
 use client::GoogleCloudStorageClient;
