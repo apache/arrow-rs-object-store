@@ -23,6 +23,7 @@ use http::{Method, Uri};
 use http_body_util::BodyExt;
 use std::error::Error;
 use std::sync::Arc;
+use tokio::runtime::Handle;
 
 /// An HTTP protocol error
 ///
@@ -240,6 +241,33 @@ impl HttpConnector for ReqwestConnector {
     fn connect(&self, options: &ClientOptions) -> crate::Result<HttpClient> {
         let client = options.client()?;
         Ok(HttpClient::new(client))
+    }
+}
+
+/// [`SpawnedReqwestConnector`] using [`reqwest::Client`]
+/// Wraps the reqwest::Client service in a spawn service using the provided
+/// tokio runtime upon connecting
+#[derive(Debug)]
+#[allow(missing_copy_implementations)]
+#[cfg(not(target_arch = "wasm32"))]
+pub struct SpawnedReqwestConnector {
+    runtime: Handle,
+}
+
+impl SpawnedReqwestConnector {
+    #[allow(unused)]
+    /// Create a request connector that will create a HttpClient that spawns
+    /// requests on another runtime
+    fn new(runtime: Handle) -> Self {
+        Self { runtime }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl HttpConnector for SpawnedReqwestConnector {
+    fn connect(&self, options: &ClientOptions) -> crate::Result<HttpClient> {
+        let spawn_service = super::SpawnService::new(options.client()?, self.runtime.clone());
+        Ok(HttpClient::new(spawn_service))
     }
 }
 
