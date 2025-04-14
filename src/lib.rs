@@ -497,6 +497,19 @@
 //! [`rustls-native-certs`]: https://crates.io/crates/rustls-native-certs/
 //! [`webpki-roots`]: https://crates.io/crates/webpki-roots
 //!
+//! # Tokio runtime separation
+//!
+//! Spawn requests on a different runtime that solely does IO using the [`client::SpawnedReqwestConnector`].
+//! This can be used in situations where the existing Tokio runtime is used to spawn cpu-bound heavy tasks.
+//!
+//! ```
+//! use tokio::runtime::Runtime;
+//! let io_runtime: Runtime = Runtime::new();
+//! let store: Arc<dyn ObjectStore> = MicrosoftAzureBuilder::new()
+//!     .with_url(url)
+//!     .with_http_connector(SpawnedReqwestConnector::new(io_runtime.handle().clone()))
+//!     .build()?;
+//! ```
 
 #[cfg(feature = "aws")]
 pub mod aws;
