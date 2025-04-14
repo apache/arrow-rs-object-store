@@ -483,12 +483,60 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+        self.list_opts(prefix, ListOpts::default())
+            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
+            .try_flatten()
+            .boxed()
+    }
+
     fn list_opts(
         &self,
         prefix: Option<&Path>,
         options: ListOpts,
     ) -> BoxStream<'static, Result<ListResult>> {
         self.list_with_opts(prefix, options)
+    }
+
+    fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> BoxStream<'static, Result<ObjectMeta>> {
+        self.list_opts(
+            prefix,
+            ListOpts {
+                offset: Some(offset.clone()),
+                ..ListOpts::default()
+            },
+        )
+        .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
+        .try_flatten()
+        .boxed()
+    }
+
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
+        let mut stream = self.list_opts(
+            prefix,
+            ListOpts {
+                delimiter: true,
+                ..ListOpts::default()
+            },
+        );
+
+        let mut common_prefixes = BTreeSet::new();
+        let mut objects = Vec::new();
+
+        while let Some(result) = stream.next().await {
+            let response = result?;
+            common_prefixes.extend(response.common_prefixes.into_iter());
+            objects.extend(response.objects.into_iter());
+        }
+
+        Ok(ListResult {
+            common_prefixes: common_prefixes.into_iter().collect(),
+            objects,
+        })
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
@@ -575,10 +623,7 @@ impl LocalFileSystem {
         options: ListOpts,
     ) -> BoxStream<'static, Result<ListResult>> {
         let ListOpts {
-            offset,
-            delimiter,
-            max_keys,
-            ..
+            offset, delimiter, ..
         } = options;
 
         let config = Arc::clone(&self.config);
@@ -630,14 +675,12 @@ impl LocalFileSystem {
 
         let config = Arc::clone(&self.config);
         let prefix = prefix.cloned().unwrap_or_default();
+        let buffer = Vec::with_capacity(1000);
         futures::stream::try_unfold(
-            (stream, config, prefix, delimiter, max_keys),
-            |(mut stream, config, prefix, delimiter, max_keys)| async move {
-                let fill_count = max_keys.unwrap_or(1000).min(1000);
-                let mut buffer = Vec::with_capacity(fill_count);
-
+            (stream, buffer, config, prefix, delimiter),
+            |(mut stream, mut buffer, config, prefix, delimiter)| async move {
                 (stream, buffer) = maybe_spawn_blocking(move || {
-                    while buffer.len() < fill_count {
+                    while buffer.len() < 1000 {
                         match stream.next() {
                             Some(r) => buffer.push(r),
                             None => break,
@@ -652,7 +695,7 @@ impl LocalFileSystem {
                 } else if delimiter {
                     let mut common_prefixes = BTreeSet::new();
                     let mut objects = Vec::new();
-                    for entry_res in buffer.into_iter() {
+                    for entry_res in buffer.drain(..) {
                         let entry = entry_res?;
                         let is_directory = entry.file_type().is_dir();
                         let entry_location = config.filesystem_to_path(entry.path())?;
@@ -672,18 +715,16 @@ impl LocalFileSystem {
                         }
                     }
 
-                    let key_count = common_prefixes.len() + objects.len();
-                    let remaining = max_keys.map(|x| (x - key_count).max(0));
                     Ok(Some((
                         ListResult {
                             common_prefixes: common_prefixes.into_iter().collect(),
                             objects,
                         },
-                        (stream, config, prefix, delimiter, remaining),
+                        (stream, buffer, config, prefix, delimiter),
                     )))
                 } else {
                     let mut objects = Vec::new();
-                    for entry_res in buffer.into_iter() {
+                    for entry_res in buffer.drain(..) {
                         // All entries are files since the directory is excluded previously.
                         let entry = entry_res?;
                         let entry_location = config.filesystem_to_path(entry.path())?;
@@ -692,14 +733,12 @@ impl LocalFileSystem {
                         }
                     }
 
-                    let key_count = objects.len();
-                    let remaining = max_keys.map(|x| (x - key_count).max(0));
                     Ok(Some((
                         ListResult {
                             common_prefixes: vec![],
                             objects,
                         },
-                        (stream, config, prefix, delimiter, remaining),
+                        (stream, buffer, config, prefix, delimiter),
                     )))
                 }
             },

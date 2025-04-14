@@ -1002,44 +1002,6 @@ pub async fn list_with_composite_conditions(storage: &DynObjectStore) {
     assert_eq!(result.objects.len(), 5);
     assert!(stream.next().await.is_none());
 
-    // =========== check: prefix-list `mydb/wb` (directory) with max_keys=0 ==============
-    let result = storage
-        .list_opts(
-            Some(&prefix),
-            ListOpts {
-                max_keys: Some(0),
-                ..Default::default()
-            },
-        )
-        .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok::<ObjectMeta, Error>)))
-        .try_flatten()
-        .boxed()
-        .try_collect::<Vec<ObjectMeta>>()
-        .await
-        .unwrap();
-    assert_eq!(result.len(), 0);
-
-    // =========== check: prefix-list `mydb/wb` (directory) with max_keys=2 ==============
-    let mut stream = storage.list_opts(
-        Some(&prefix),
-        ListOpts {
-            max_keys: Some(2),
-            ..Default::default()
-        },
-    );
-    let result = stream.next().await.unwrap().unwrap();
-    assert_eq!(result.common_prefixes.len(), 0);
-    assert_eq!(result.objects.len(), 2);
-    assert_eq!(
-        result.objects[0].location,
-        Path::from("mydb/wb/000/000/000.segment")
-    );
-    assert_eq!(
-        result.objects[1].location,
-        Path::from("mydb/wb/000/000/001.segment")
-    );
-    assert!(stream.next().await.is_none());
-
     // =========== check: prefix-list `mydb/wb` (directory) with delimiter ==============
     let mut stream = storage.list_opts(
         Some(&prefix),
@@ -1058,22 +1020,20 @@ pub async fn list_with_composite_conditions(storage: &DynObjectStore) {
     assert_eq!(result.objects[0].location, expected_location);
     assert!(stream.next().await.is_none());
 
-    // ===== check: prefix-list `mydb/wb` (directory) with delimiter & max_keys=2 =========
+    // ======= check: prefix-list `mydb/wb` (directory) with delimiter and offset =========
     let mut stream = storage.list_opts(
         Some(&prefix),
         ListOpts {
             delimiter: true,
-            max_keys: Some(2),
+            offset: Some(Path::from("mydb/wb/000/000/002.segment")),
             ..Default::default()
         },
     );
     let result = stream.next().await.unwrap().unwrap();
-    assert_eq!(result.common_prefixes.len(), 2);
-    assert_eq!(
-        result.common_prefixes,
-        vec![expected_000.clone(), expected_001.clone()]
-    );
-    assert_eq!(result.objects.len(), 0);
+    assert_eq!(result.common_prefixes.len(), 1);
+    assert_eq!(result.common_prefixes, vec![expected_001.clone()]);
+    assert_eq!(result.objects.len(), 1);
+    assert_eq!(result.objects[0].location, expected_location);
     assert!(stream.next().await.is_none());
 
     // ==================== do: remove all files ====================
@@ -1084,7 +1044,6 @@ pub async fn list_with_composite_conditions(storage: &DynObjectStore) {
         .list_opts(
             Some(&prefix),
             ListOpts {
-                max_keys: Some(0),
                 ..Default::default()
             },
         )

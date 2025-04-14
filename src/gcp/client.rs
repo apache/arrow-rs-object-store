@@ -144,8 +144,6 @@ pub(crate) struct GoogleCloudStorageConfig {
     pub retry_config: RetryConfig,
 
     pub client_options: ClientOptions,
-
-    pub max_list_keys_per_request: usize,
 }
 
 impl GoogleCloudStorageConfig {
@@ -156,7 +154,6 @@ impl GoogleCloudStorageConfig {
         bucket_name: String,
         retry_config: RetryConfig,
         client_options: ClientOptions,
-        max_list_keys_per_request: usize,
     ) -> Self {
         Self {
             base_url,
@@ -165,7 +162,6 @@ impl GoogleCloudStorageConfig {
             bucket_name,
             retry_config,
             client_options,
-            max_list_keys_per_request,
         }
     }
 
@@ -670,13 +666,12 @@ impl ListClient for Arc<GoogleCloudStorageClient> {
         delimiter: bool,
         page_token: Option<&str>,
         offset: Option<&str>,
-        max_keys: Option<usize>,
-        extensions: ::http::Extensions,
+        extensions: http::Extensions,
     ) -> Result<(ListResult, Option<String>)> {
         let credential = self.get_credential().await?;
         let url = format!("{}/{}", self.config.base_url, self.bucket_name_encoded);
 
-        let mut query = Vec::with_capacity(7);
+        let mut query = Vec::with_capacity(5);
         query.push(("list-type", "2"));
         if delimiter {
             query.push(("delimiter", DELIMITER))
@@ -697,12 +692,6 @@ impl ListClient for Arc<GoogleCloudStorageClient> {
         if let Some(offset) = offset {
             query.push(("start-after", offset))
         }
-
-        let max_keys = max_keys
-            .map(|x| x.min(self.config.max_list_keys_per_request))
-            .unwrap_or(self.config.max_list_keys_per_request)
-            .to_string();
-        query.push(("max-keys", max_keys.as_str()));
 
         let response = self
             .client

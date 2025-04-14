@@ -32,8 +32,7 @@ pub(crate) trait ListClient: Send + Sync + 'static {
         delimiter: bool,
         token: Option<&str>,
         offset: Option<&str>,
-        max_keys: Option<usize>,
-        extensions: ::http::Extensions,
+        extensions: http::Extensions,
     ) -> Result<(ListResult, Option<String>)>;
 }
 
@@ -57,7 +56,6 @@ impl<T: ListClient + Clone> ListClientExt for T {
         let ListOpts {
             delimiter,
             offset,
-            max_keys,
             extensions,
         } = opts;
 
@@ -68,36 +66,18 @@ impl<T: ListClient + Clone> ListClientExt for T {
 
         stream_paginated(
             self.clone(),
-            (prefix, offset, max_keys, extensions),
-            move |client, (prefix, offset, max_keys, extensions), token| async move {
-                if let Some(remaining) = max_keys {
-                    if remaining == 0 {
-                        return Ok((
-                            ListResult::empty(),
-                            (prefix, offset, max_keys, extensions),
-                            None,
-                        ));
-                    }
-                }
-
+            (prefix, offset, extensions),
+            move |client, (prefix, offset, extensions), token| async move {
                 let (r, next_token) = client
                     .list_request(
                         prefix.as_deref(),
                         delimiter,
                         token.as_deref(),
                         offset.as_deref(),
-                        max_keys,
                         extensions.clone(),
                     )
                     .await?;
-                let key_count = r.common_prefixes.len() + r.objects.len();
-                let remaining = max_keys.map(|x| (x - key_count).max(0));
-                let next_token = match remaining {
-                    None => next_token,
-                    Some(remaining) if remaining > 0 => next_token,
-                    _ => None,
-                };
-                Ok((r, (prefix, offset, remaining, extensions), next_token))
+                Ok((r, (prefix, offset, extensions), next_token))
             },
         )
         .boxed()

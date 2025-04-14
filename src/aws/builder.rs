@@ -173,8 +173,6 @@ pub struct AmazonS3Builder {
     request_payer: ConfigValue<bool>,
     /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
-    /// Max list size per request, by default 1000.
-    max_list_size_per_request: Option<ConfigValue<usize>>,
 }
 
 /// Configuration keys for [`AmazonS3Builder`]
@@ -893,12 +891,6 @@ impl AmazonS3Builder {
         self
     }
 
-    /// Set the max keys per list request. It's almost used for test paginated listing.
-    pub fn with_max_list_size_per_request(mut self, max_list_size_per_request: usize) -> Self {
-        self.max_list_size_per_request = Some(ConfigValue::Parsed(max_list_size_per_request));
-        self
-    }
-
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
     pub fn build(mut self) -> Result<AmazonS3> {
@@ -1037,10 +1029,6 @@ impl AmazonS3Builder {
             S3EncryptionHeaders::default()
         };
 
-        let max_list_size_per_request = self
-            .max_list_size_per_request
-            .unwrap_or(ConfigValue::Parsed(1000))
-            .get()?;
         let config = S3Config {
             region,
             endpoint: self.endpoint,
@@ -1058,7 +1046,6 @@ impl AmazonS3Builder {
             conditional_put: self.conditional_put.get()?,
             encryption_headers,
             request_payer: self.request_payer.get()?,
-            max_list_keys_per_request: max_list_size_per_request,
         };
 
         let http_client = http.connect(&config.client_options)?;

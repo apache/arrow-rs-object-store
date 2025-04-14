@@ -163,8 +163,6 @@ impl ObjectStore for HttpStore {
         prefix: Option<&Path>,
         options: ListOpts,
     ) -> BoxStream<'static, Result<ListResult>> {
-        let max_keys = options.max_keys;
-
         let client = Arc::<Client>::clone(&self.client);
         let offset = options.offset.clone();
         let prefix = prefix.cloned();
@@ -190,13 +188,9 @@ impl ObjectStore for HttpStore {
 
                 let mut objects: Vec<ObjectMeta> = Vec::with_capacity(key_count);
                 let mut common_prefixes = Vec::with_capacity(key_count);
-                let max_keys = max_keys.unwrap_or(key_count).min(key_count);
 
                 for response in response {
                     response.check_ok()?;
-                    if objects.len() + common_prefixes.len() >= max_keys {
-                        break;
-                    }
 
                     match response.is_dir() {
                         false => {
@@ -224,35 +218,29 @@ impl ObjectStore for HttpStore {
             .boxed()
         } else {
             let stream = self.list(prefix.as_ref());
-            futures::stream::try_unfold(
-                (stream, offset, max_keys),
-                move |(mut stream, offset, max_keys)| async move {
-                    let fill_count = max_keys.unwrap_or(1000).min(1000);
-                    let mut buffer = Vec::with_capacity(fill_count);
-                    while buffer.len() < fill_count {
-                        match stream.next().await.transpose()? {
-                            None => break,
-                            Some(meta) => {
-                                if offset.as_ref().map(|o| &meta.location > o).unwrap_or(true) {
-                                    buffer.push(meta);
-                                }
+            futures::stream::try_unfold((stream, offset), move |(mut stream, offset)| async move {
+                let mut buffer = Vec::with_capacity(1000);
+                while buffer.len() < 1000 {
+                    match stream.next().await.transpose()? {
+                        None => break,
+                        Some(meta) => {
+                            if offset.as_ref().map(|o| &meta.location > o).unwrap_or(true) {
+                                buffer.push(meta);
                             }
                         }
                     }
+                }
 
-                    if buffer.is_empty() {
-                        Ok(None)
-                    } else {
-                        let key_count = buffer.len();
-                        let remaining = max_keys.map(|x| (x - key_count).max(0));
-                        let result = ListResult {
-                            common_prefixes: vec![],
-                            objects: buffer,
-                        };
-                        Ok(Some((result, (stream, offset, remaining))))
-                    }
-                },
-            )
+                if buffer.is_empty() {
+                    Ok(None)
+                } else {
+                    let result = ListResult {
+                        common_prefixes: vec![],
+                        objects: buffer,
+                    };
+                    Ok(Some((result, (stream, offset))))
+                }
+            })
             .boxed()
         }
     }

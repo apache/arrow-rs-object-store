@@ -172,7 +172,6 @@ pub(crate) struct AzureConfig {
     pub skip_signature: bool,
     pub disable_tagging: bool,
     pub client_options: ClientOptions,
-    pub max_list_keys_per_request: usize,
 }
 
 impl AzureConfig {
@@ -965,15 +964,14 @@ impl ListClient for Arc<AzureClient> {
         delimiter: bool,
         token: Option<&str>,
         offset: Option<&str>,
-        max_keys: Option<usize>,
-        extensions: ::http::Extensions,
+        extensions: http::Extensions,
     ) -> Result<(ListResult, Option<String>)> {
         assert!(offset.is_none()); // Not yet supported
 
         let credential = self.get_credential().await?;
         let url = self.config.path_url(&Path::default());
 
-        let mut query = Vec::with_capacity(6);
+        let mut query = Vec::with_capacity(5);
         query.push(("restype", "container"));
         query.push(("comp", "list"));
 
@@ -988,12 +986,6 @@ impl ListClient for Arc<AzureClient> {
         if let Some(token) = token {
             query.push(("marker", token))
         }
-
-        let max_keys = max_keys
-            .map(|x| x.min(self.config.max_list_keys_per_request))
-            .unwrap_or(self.config.max_list_keys_per_request)
-            .to_string();
-        query.push(("max-keys", max_keys.as_str()));
 
         let sensitive = credential
             .as_deref()
@@ -1400,7 +1392,6 @@ mod tests {
             skip_signature: false,
             disable_tagging: false,
             client_options: Default::default(),
-            max_list_keys_per_request: 1000,
         };
 
         let client = AzureClient::new(config, HttpClient::new(Client::new()));

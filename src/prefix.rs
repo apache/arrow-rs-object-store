@@ -175,7 +175,6 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         let opts = ListOpts {
             offset,
             delimiter: options.delimiter,
-            max_keys: options.max_keys,
             extensions: options.extensions,
         };
         let s = self.inner.list_opts(Some(&prefix), opts);

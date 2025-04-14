@@ -180,8 +180,6 @@ pub struct MicrosoftAzureBuilder {
     fabric_cluster_identifier: Option<String>,
     /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
-    /// Max list size per request, by default 1000.
-    max_list_size_per_request: Option<ConfigValue<usize>>,
 }
 
 /// Configuration keys for [`MicrosoftAzureBuilder`]
@@ -899,12 +897,6 @@ impl MicrosoftAzureBuilder {
         self
     }
 
-    /// Set the max keys per list request. It's almost used for test paginated listing.
-    pub fn with_max_list_size_per_request(mut self, max_list_size_per_request: usize) -> Self {
-        self.max_list_size_per_request = Some(ConfigValue::Parsed(max_list_size_per_request));
-        self
-    }
-
     /// Configure a connection to container with given name on Microsoft Azure Blob store.
     pub fn build(mut self) -> Result<MicrosoftAzure> {
         if let Some(url) = self.url.take() {
@@ -1038,11 +1030,6 @@ impl MicrosoftAzureBuilder {
             (false, url, credential, account_name)
         };
 
-        let max_list_keys_per_request = self
-            .max_list_size_per_request
-            .unwrap_or(ConfigValue::Parsed(1000))
-            .get()?;
-
         let config = AzureConfig {
             account,
             is_emulator,
@@ -1053,7 +1040,6 @@ impl MicrosoftAzureBuilder {
             client_options: self.client_options,
             service: storage_url,
             credentials: auth,
-            max_list_keys_per_request,
         };
 
         let http_client = http.connect(&config.client_options)?;

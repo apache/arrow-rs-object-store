@@ -528,7 +528,6 @@ pub use client::{
     backoff::BackoffConfig, retry::RetryConfig, ClientConfigKey, ClientOptions, CredentialProvider,
     StaticCredentialProvider,
 };
-use std::collections::BTreeSet;
 
 #[cfg(all(feature = "cloud", not(target_arch = "wasm32")))]
 pub use client::Certificate;
@@ -721,12 +720,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// `foo/bar_baz/x`. List is recursive, i.e. `foo/bar/more/x` will be included.
     ///
     /// Note: the order of returned [`ObjectMeta`] is not guaranteed
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.list_opts(prefix, ListOpts::default())
-            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
-            .try_flatten()
-            .boxed()
-    }
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>>;
 
     /// List all the objects with given options defined in [`ListOpts`]
     ///
@@ -736,7 +730,55 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
         &self,
         prefix: Option<&Path>,
         options: ListOpts,
-    ) -> BoxStream<'static, Result<ListResult>>;
+    ) -> BoxStream<'static, Result<ListResult>> {
+        // Add the default implementation via calling list_with_offset methods avoid bring
+        // a breaking change, the default implementation and other list methods will be removed
+        // in the future. All list request should call this method.
+        use std::collections::BTreeSet;
+
+        let prefix = prefix.cloned().unwrap_or_default();
+        let offset = options.offset.unwrap_or(prefix.clone());
+        self.list_with_offset(Some(&prefix), &offset)
+            .try_chunks(1000)
+            .map(move |batch| {
+                let batch = batch.map_err(|e| e.1)?;
+                if options.delimiter {
+                    let mut common_prefixes = BTreeSet::new();
+                    let mut objects = Vec::new();
+                    for obj in batch.into_iter() {
+                        let location = obj.location.clone();
+                        let mut parts = match location.prefix_match(&prefix) {
+                            Some(parts) => parts,
+                            None => continue,
+                        };
+
+                        match parts.next() {
+                            None => {}
+                            Some(p) => match parts.next() {
+                                None => objects.push(obj),
+                                Some(_) => {
+                                    let common_prefix = prefix.child(p);
+                                    if common_prefix > offset {
+                                        common_prefixes.insert(common_prefix);
+                                    }
+                                }
+                            },
+                        }
+                        drop(parts)
+                    }
+                    Ok(ListResult {
+                        common_prefixes: common_prefixes.into_iter().collect(),
+                        objects,
+                    })
+                } else {
+                    Ok(ListResult {
+                        common_prefixes: vec![],
+                        objects: batch,
+                    })
+                }
+            })
+            .boxed()
+    }
 
     /// List all the objects with the given prefix and a location greater than `offset`
     ///
@@ -749,16 +791,10 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
         prefix: Option<&Path>,
         offset: &Path,
     ) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.list_opts(
-            prefix,
-            ListOpts {
-                offset: Some(offset.clone()),
-                ..ListOpts::default()
-            },
-        )
-        .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
-        .try_flatten()
-        .boxed()
+        let offset = offset.clone();
+        self.list(prefix)
+            .try_filter(move |f| futures::future::ready(f.location > offset))
+            .boxed()
     }
 
     /// List objects with the given prefix and an implementation specific
@@ -767,29 +803,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ///
     /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar` is a prefix of `foo/bar/x` but not of
     /// `foo/bar_baz/x`. List is not recursive, i.e. `foo/bar/more/x` will not be included.
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        let mut stream = self.list_opts(
-            prefix,
-            ListOpts {
-                delimiter: true,
-                ..ListOpts::default()
-            },
-        );
-
-        let mut common_prefixes = BTreeSet::new();
-        let mut objects = Vec::new();
-
-        while let Some(result) = stream.next().await {
-            let response = result?;
-            common_prefixes.extend(response.common_prefixes.into_iter());
-            objects.extend(response.objects.into_iter());
-        }
-
-        Ok(ListResult {
-            common_prefixes: common_prefixes.into_iter().collect(),
-            objects,
-        })
-    }
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult>;
 
     /// Copy an object from one path to another in the same object store.
     ///
@@ -1352,12 +1366,6 @@ pub struct ListOpts {
     pub offset: Option<Path>,
     /// True means returns common prefixes (directories) in addition to object in [`ListResult`]
     pub delimiter: bool,
-    /// Sets the maximum number of keys returned in the response.
-    ///
-    /// Implementations might send multiple requests to continue list objects & common prefixes
-    /// since single request might only return 1000 keys by default for most object store.
-    /// The response might contain fewer keys but will never contain more.
-    pub max_keys: Option<usize>,
     /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
     /// that need to pass context-specific information (like tracing spans) via trait methods.
     ///

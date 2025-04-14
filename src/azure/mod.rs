@@ -22,13 +22,9 @@
 //! [ObjectStore::put_multipart] will upload data in blocks and write a blob from those blocks.
 //!
 //! Unused blocks will automatically be dropped after 7 days.
-use crate::{
-    multipart::{MultipartStore, PartId},
-    path::Path,
-    signer::Signer,
-    GetOptions, GetResult, ListOpts, ListResult, MultipartId, MultipartUpload, ObjectStore,
-    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
-};
+
+use std::collections::BTreeSet;
+use crate::{multipart::{MultipartStore, PartId}, path::Path, signer::Signer, GetOptions, GetResult, ListOpts, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart};
 use async_trait::async_trait;
 use futures::stream::{BoxStream, StreamExt, TryStreamExt};
 use reqwest::Method;
@@ -139,12 +135,56 @@ impl ObjectStore for MicrosoftAzure {
             .boxed()
     }
 
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+        self.list_opts(prefix, ListOpts::default())
+            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
+            .try_flatten()
+            .boxed()
+    }
+
     fn list_opts(
         &self,
         prefix: Option<&Path>,
         options: ListOpts,
     ) -> BoxStream<'static, Result<ListResult>> {
         self.client.list_paginated(prefix, options)
+    }
+
+    fn list_with_offset(&self, prefix: Option<&Path>, offset: &Path) -> BoxStream<'static, Result<ObjectMeta>> {
+        self.list_opts(
+            prefix,
+            ListOpts {
+                offset: Some(offset.clone()),
+                ..ListOpts::default()
+            },
+        )
+            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
+            .try_flatten()
+            .boxed()
+    }
+
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
+        let mut stream = self.list_opts(
+            prefix,
+            ListOpts {
+                delimiter: true,
+                ..ListOpts::default()
+            },
+        );
+
+        let mut common_prefixes = BTreeSet::new();
+        let mut objects = Vec::new();
+
+        while let Some(result) = stream.next().await {
+            let response = result?;
+            common_prefixes.extend(response.common_prefixes.into_iter());
+            objects.extend(response.objects.into_iter());
+        }
+
+        Ok(ListResult {
+            common_prefixes: common_prefixes.into_iter().collect(),
+            objects,
+        })
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
