@@ -15,21 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Generic HTTP client abstraction
-//!
-//! # Spawning requests on separate runtime
-//!
-//! The http client provides a http connector [`connection::SpawnedReqwestConnector`] that can wrap all requests
-//! tasks on a provided Tokio runtime handle using [`spawn::Service`].
-//!
-//! ```
-//! use tokio::runtime::Runtime;
-//! let io_runtime: Runtime = Runtime::new();
-//! let store: Arc<dyn ObjectStore> = MicrosoftAzureBuilder::new()
-//!     .with_url(url)
-//!     .with_http_connector(SpawnedReqwestConnector::new(io_runtime.handle().clone()))
-//!     .build()?;
-//! ```
+//! HTTP client abstraction
 
 mod body;
 pub use body::*;

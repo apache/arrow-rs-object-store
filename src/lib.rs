@@ -497,10 +497,10 @@
 //! [`rustls-native-certs`]: https://crates.io/crates/rustls-native-certs/
 //! [`webpki-roots`]: https://crates.io/crates/webpki-roots
 //!
-//! # Customized HTTP Clients
+//! # Customizing HTTP Clients
 //!
-//! Many `ObjectStore` implementations permit customization of the HTTP client via
-//! the [`HttpConnector`] trait and utilities in the  [`client`] module.
+//! Many [`ObjectStore`] implementations permit customization of the HTTP client via
+//! the [`HttpConnector`] trait and utilities in the [`client`] module.
 //! Examples include injecting custom HTTP headers or using an alternate
 //! tokio Runtime I/O requests.
 //!

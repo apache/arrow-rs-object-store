@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::client::builder::{HttpRequestBuilder, RequestBuilderError};
+use crate::client::http::{connection, spawn};
 use crate::client::{HttpRequest, HttpResponse, HttpResponseBody};
 use crate::ClientOptions;
 use async_trait::async_trait;
@@ -244,9 +245,41 @@ impl HttpConnector for ReqwestConnector {
     }
 }
 
-/// [`SpawnedReqwestConnector`] using [`reqwest::Client`]
-/// Wraps the reqwest::Client service in a spawn service using the provided
-/// tokio runtime upon connecting
+/// [`reqwest::Client`] connector that performs all I/O on the provided tokio
+/// [`Runtime`] (thread pool).
+///
+/// This adapter is most useful when you wish to segregate I/O from CPU bound
+/// work that may be happening on the [`Runtime`].
+///
+/// [`Runtime`]: tokio::runtime::Runtime
+///
+/// # Example: Spawning requests on separate runtime
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use tokio::runtime::Runtime;
+/// # use object_store::azure::MicrosoftAzureBuilder;
+/// # use object_store::client::SpawnedReqwestConnector;
+/// # use object_store::ObjectStore;
+/// # fn get_io_runtime() -> Runtime {
+/// #   tokio::runtime::Builder::new_current_thread().build().unwrap()
+/// # }
+/// # fn main() -> Result<(), object_store::Error> {
+/// // create a tokio runtime for I/O.
+/// let io_runtime: Runtime = get_io_runtime();
+/// // configure a store using the runtime.
+/// let handle = io_runtime.handle().clone(); // get a handle to the same runtime
+/// let store: Arc<dyn ObjectStore> = Arc::new(
+///   MicrosoftAzureBuilder::new()
+///     .with_http_connector(SpawnedReqwestConnector::new(handle))
+///     .with_container_name("my_container")
+///     .with_account("my_account")
+///     .build()?
+///  );
+/// // any requests made using store will be spawned on the io_runtime
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug)]
 #[allow(missing_copy_implementations)]
 #[cfg(not(target_arch = "wasm32"))]
@@ -254,11 +287,13 @@ pub struct SpawnedReqwestConnector {
     runtime: Handle,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl SpawnedReqwestConnector {
-    #[allow(unused)]
-    /// Create a request connector that will create a HttpClient that spawns
-    /// requests on another runtime
-    fn new(runtime: Handle) -> Self {
+    /// Create a new [`SpawnedReqwestConnector`] with the provided [`Handle`] to
+    /// a tokio [`Runtime`]
+    ///
+    /// [`Runtime`]: tokio::runtime::Runtime
+    pub fn new(runtime: Handle) -> Self {
         Self { runtime }
     }
 }

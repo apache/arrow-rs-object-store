@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Generic utilities reqwest based ObjectStore implementations
+//! Generic utilities for [`reqwest`] based [`ObjectStore`] implementations
+//!
+//! [`ObjectStore`]: crate::ObjectStore
 
 pub(crate) mod backoff;
 

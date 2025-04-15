@@ -41,6 +41,10 @@ impl From<SpawnError> for HttpError {
 }
 
 /// Wraps a provided [`HttpService`] and runs it on a separate tokio runtime
+///
+/// See example on [`SpawnedReqwestConnector`]
+///
+/// [`SpawnedReqwestConnector`]: crate::client::http::SpawnedReqwestConnector
 #[derive(Debug)]
 pub struct SpawnService<T: HttpService + Clone> {
     inner: T,
