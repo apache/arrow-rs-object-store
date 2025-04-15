@@ -17,7 +17,8 @@
 
 use crate::aws::client::{S3Client, S3Config};
 use crate::aws::credential::{
-    InstanceCredentialProvider, SessionProvider, TaskCredentialProvider, WebIdentityProvider,
+    EKSPodCredentialProvider, InstanceCredentialProvider, SessionProvider, TaskCredentialProvider,
+    WebIdentityProvider,
 };
 use crate::aws::{
     AmazonS3, AwsCredential, AwsCredentialProvider, Checksum, S3ConditionalPut, S3CopyIfNotExists,
@@ -151,6 +152,10 @@ pub struct AmazonS3Builder {
     metadata_endpoint: Option<String>,
     /// Container credentials URL, see <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
     container_credentials_relative_uri: Option<String>,
+    /// Container credentials full URL, see <https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html>
+    container_credentials_full_uri: Option<String>,
+    /// Container authorization token file, see <https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html>
+    container_authorization_token_file: Option<String>,
     /// Client options
     client_options: ClientOptions,
     /// Credentials
@@ -299,10 +304,20 @@ pub enum AmazonS3ConfigKey {
     /// - `metadata_endpoint`
     MetadataEndpoint,
 
-    /// Set the container credentials relative URI
+    /// Set the container credentials relative URI when used in ECS
     ///
     /// <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
     ContainerCredentialsRelativeUri,
+
+    /// Set the container credentials full URI when used in EKS
+    ///
+    /// <https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html>
+    ContainerCredentialsFullUri,
+
+    /// Set the authorization token in plain text when used in EKS to authenticate with ContainerCredentialsFullUri
+    ///
+    /// <https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html>
+    ContainerAuthorizationTokenFile,
 
     /// Configure how to provide `copy_if_not_exists`
     ///
@@ -364,6 +379,8 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::UnsignedPayload => "aws_unsigned_payload",
             Self::Checksum => "aws_checksum_algorithm",
             Self::ContainerCredentialsRelativeUri => "aws_container_credentials_relative_uri",
+            Self::ContainerCredentialsFullUri => "aws_container_credentials_full_uri",
+            Self::ContainerAuthorizationTokenFile => "aws_container_authorization_token_file",
             Self::SkipSignature => "aws_skip_signature",
             Self::CopyIfNotExists => "aws_copy_if_not_exists",
             Self::ConditionalPut => "aws_conditional_put",
@@ -396,6 +413,8 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_unsigned_payload" | "unsigned_payload" => Ok(Self::UnsignedPayload),
             "aws_checksum_algorithm" | "checksum_algorithm" => Ok(Self::Checksum),
             "aws_container_credentials_relative_uri" => Ok(Self::ContainerCredentialsRelativeUri),
+            "aws_container_credentials_full_uri" => Ok(Self::ContainerCredentialsFullUri),
+            "aws_container_authorization_token_file" => Ok(Self::ContainerAuthorizationTokenFile),
             "aws_skip_signature" | "skip_signature" => Ok(Self::SkipSignature),
             "aws_copy_if_not_exists" | "copy_if_not_exists" => Ok(Self::CopyIfNotExists),
             "aws_conditional_put" | "conditional_put" => Ok(Self::ConditionalPut),
@@ -440,6 +459,8 @@ impl AmazonS3Builder {
     /// * `AWS_ENDPOINT` -> endpoint
     /// * `AWS_SESSION_TOKEN` -> token
     /// * `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
+    /// * `AWS_CONTAINER_CREDENTIALS_FULL_URI` -> <https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html>
+    /// * `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE` -> <https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html>
     /// * `AWS_ALLOW_HTTP` -> set to "true" to permit HTTP connections without TLS
     /// * `AWS_REQUEST_PAYER` -> set to "true" to permit operations on requester-pays buckets.
     /// # Example
@@ -516,6 +537,12 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::ContainerCredentialsRelativeUri => {
                 self.container_credentials_relative_uri = Some(value.into())
             }
+            AmazonS3ConfigKey::ContainerCredentialsFullUri => {
+                self.container_credentials_full_uri = Some(value.into());
+            }
+            AmazonS3ConfigKey::ContainerAuthorizationTokenFile => {
+                self.container_authorization_token_file = Some(value.into());
+            }
             AmazonS3ConfigKey::Client(key) => {
                 self.client_options = self.client_options.with_config(key, value)
             }
@@ -578,6 +605,12 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::Client(key) => self.client_options.get_config_value(key),
             AmazonS3ConfigKey::ContainerCredentialsRelativeUri => {
                 self.container_credentials_relative_uri.clone()
+            }
+            AmazonS3ConfigKey::ContainerCredentialsFullUri => {
+                self.container_credentials_full_uri.clone()
+            }
+            AmazonS3ConfigKey::ContainerAuthorizationTokenFile => {
+                self.container_authorization_token_file.clone()
             }
             AmazonS3ConfigKey::SkipSignature => Some(self.skip_signature.to_string()),
             AmazonS3ConfigKey::CopyIfNotExists => {
@@ -958,6 +991,21 @@ impl AmazonS3Builder {
                 url: format!("http://169.254.170.2{uri}"),
                 retry: self.retry_config.clone(),
                 // The instance metadata endpoint is access over HTTP
+                client: http.connect(&options)?,
+                cache: Default::default(),
+            }) as _
+        } else if let (Some(full_uri), Some(token_file)) = (
+            self.container_credentials_full_uri,
+            self.container_authorization_token_file,
+        ) {
+            info!("Using EKS Pod Identity credential provider");
+
+            let options = self.client_options.clone().with_allow_http(true);
+
+            Arc::new(EKSPodCredentialProvider {
+                url: full_uri,
+                token_file,
+                retry: self.retry_config.clone(),
                 client: http.connect(&options)?,
                 cache: Default::default(),
             }) as _
@@ -1540,5 +1588,27 @@ mod tests {
         } else {
             panic!("{} not propagated as ClientConfigKey", key);
         }
+    }
+
+    #[test]
+    fn test_builder_eks_with_config() {
+        let builder = AmazonS3Builder::new()
+            .with_bucket_name("some-bucket")
+            .with_config(
+                AmazonS3ConfigKey::ContainerCredentialsFullUri,
+                "https://127.0.0.1/eks-credentials",
+            )
+            .with_config(
+                AmazonS3ConfigKey::ContainerAuthorizationTokenFile,
+                "/tmp/fake-bearer-token",
+            );
+
+        let s3 = builder.build().expect("should build successfully");
+        let creds = &s3.client.config.credentials;
+        let debug_str = format!("{:?}", creds);
+        assert!(
+            debug_str.contains("EKSPodCredentialProvider"),
+            "expected EKS provider but got: {debug_str}"
+        );
     }
 }
