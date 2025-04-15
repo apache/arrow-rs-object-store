@@ -183,7 +183,8 @@ impl HttpRequestBuilder {
         let mut error = None;
         if let Ok(ref mut req) = self.request {
             let mut out = format!("{}?", req.uri().path());
-            let mut encoder = form_urlencoded::Serializer::new(&mut out);
+            let start_position = out.len();
+            let mut encoder = form_urlencoded::Serializer::for_suffix(&mut out, start_position);
             let serializer = serde_urlencoded::Serializer::new(&mut encoder);
 
             if let Err(err) = query.serialize(serializer) {
