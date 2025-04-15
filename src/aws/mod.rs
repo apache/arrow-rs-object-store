@@ -863,6 +863,7 @@ mod tests {
                 store.put(&path, "foo".into()).await?;
                 let res = store.get(&path).await?.bytes().await?;
                 assert_eq!(res.as_ref(), b"foo");
+                store.delete(&path).await?; // cleanup
                 Ok(()) as Result<()>
             })
             .expect("failed to run request on non io runtime");
