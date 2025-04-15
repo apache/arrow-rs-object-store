@@ -16,8 +16,8 @@
 # under the License.
 
 ---
-# tests for `object_store` crate
-name: object_store
+
+name: CI
 
 concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
@@ -30,7 +30,8 @@ on:
       - main
   pull_request:
     paths:
-      - object_store/**
+      - src/**
+      - tests/**
       - .github/**
 
 jobs:
@@ -77,7 +78,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run cargo doc
-        run: cargo doc --document-private-items --no-deps --workspace --all-features
+        run: cargo doc --document-private-items --no-deps --all-features
 
   # test the crate
   # This runs outside a container to workaround lack of support for passing arguments
