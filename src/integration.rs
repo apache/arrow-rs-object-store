@@ -657,7 +657,7 @@ pub async fn put_opts(storage: &dyn ObjectStore, supports_update: bool) {
             .put_opts(&path, "c".into(), PutMode::Update(v1.clone().into()).into())
             .await
             .unwrap_err();
-        assert!(matches!(err, Error::NotImplemented { .. }), "{err}");
+        assert!(matches!(err, Error::NotImplemented), "{err}");
 
         return;
     }
