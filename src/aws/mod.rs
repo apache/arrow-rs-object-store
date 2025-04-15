@@ -850,6 +850,8 @@ mod tests {
         });
 
         let store = AmazonS3Builder::from_env()
+            // use different bucket to avoid collisions with other tests
+            .with_bucket_name("test-bucket-for-spawn")
             .with_http_connector(SpawnedReqwestConnector::new(io_handle))
             .build()
             .unwrap();
