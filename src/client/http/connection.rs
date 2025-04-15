@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::client::builder::{HttpRequestBuilder, RequestBuilderError};
-use crate::client::http::{connection, spawn};
 use crate::client::{HttpRequest, HttpResponse, HttpResponseBody};
 use crate::ClientOptions;
 use async_trait::async_trait;
