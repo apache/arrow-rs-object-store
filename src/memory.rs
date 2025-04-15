@@ -469,16 +469,18 @@ impl InMemory {
         let root = Path::default();
         let prefix = prefix.unwrap_or(&root);
         let offset = offset.unwrap_or(&root);
+        let start = prefix.max(offset);
 
         let mut common_prefixes = BTreeSet::new();
         // Only objects in this base level should be returned in the
         // response. Otherwise, we just collect the common prefixes.
         let mut objects = vec![];
-        for (k, v) in self.storage.read().map.range((prefix)..) {
+        for (k, v) in self.storage.read().map.range(start..) {
             if !k.as_ref().starts_with(prefix.as_ref()) {
                 break;
             }
 
+            // Still need to compare with offset since the range start might equal to offset.
             if k <= offset {
                 continue;
             }
@@ -522,11 +524,16 @@ impl InMemory {
     ) -> BoxStream<'static, Result<ListResult>> {
         let root = Path::default();
         let prefix = prefix.unwrap_or(&root);
+        let start = if let Some(offset) = offset {
+            prefix.max(offset)
+        } else {
+            prefix
+        };
 
         let storage = self.storage.read();
         let values: Vec<_> = storage
             .map
-            .range(prefix..)
+            .range(start..)
             .take_while(|(key, _)| key.as_ref().starts_with(prefix.as_ref()))
             .filter(|(key, _)| {
                 // Don't return for exact prefix match
