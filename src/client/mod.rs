@@ -22,6 +22,7 @@ pub(crate) mod backoff;
 #[cfg(not(target_arch = "wasm32"))]
 mod dns;
 
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 pub(crate) mod mock_server;
 

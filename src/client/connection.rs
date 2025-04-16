@@ -258,7 +258,10 @@ impl HttpService for reqwest::Client {
                     let _ = tx_parts.send(Ok(parts));
                     let mut stream = res.bytes_stream().map_err(HttpError::reqwest);
                     while let Some(chunk) = stream.next().await {
-                        tx.send(chunk).await.unwrap();
+                        if let Err(_e) = tx.send(chunk).await {
+                            // Disconnected due to a transitive drop of the receiver
+                            break;
+                        }
                     }
                 }
             }

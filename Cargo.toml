@@ -88,6 +88,20 @@ regex = "1.11.1"
 # The "gzip" feature for reqwest is enabled for an integration test.
 reqwest = { version = "0.12", features = ["gzip"] }
 
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test = "*"
+
+[dev-dependencies.getrandom_v03]
+package = "getrandom"
+version = "0.3"
+features = ["wasm_js"]
+
+[dev-dependencies.getrandom_v02]
+package = "getrandom"
+version = "0.2"
+features = ["js"]
+
 [[test]]
 name = "get_range_file"
 path = "tests/get_range_file.rs"
+required-features = ["fs"]
