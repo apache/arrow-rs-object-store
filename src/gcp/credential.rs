@@ -603,6 +603,32 @@ struct EmailResponse {
     email: String,
 }
 
+async fn get_token_response(
+    client_id: &str,
+    client_secret: &str,
+    refresh_token: &str,
+    client: &HttpClient,
+    retry: &RetryConfig,
+) -> Result<TokenResponse> {
+    client
+        .post(DEFAULT_TOKEN_GCP_URI)
+        .form([
+            ("grant_type", "refresh_token"),
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("refresh_token", refresh_token),
+        ])
+        .retryable(retry)
+        .idempotent(true)
+        .send()
+        .await
+        .map_err(|source| Error::TokenRequest { source })?
+        .into_body()
+        .json::<TokenResponse>()
+        .await
+        .map_err(|source| Error::TokenResponseBody { source })
+}
+
 impl AuthorizedUserSigningCredentials {
     pub(crate) fn from(credential: AuthorizedUserCredentials) -> crate::Result<Self> {
         Ok(Self { credential })
@@ -613,16 +639,25 @@ impl AuthorizedUserSigningCredentials {
         client: &HttpClient,
         retry: &RetryConfig,
     ) -> crate::Result<String> {
+        let response = get_token_response(
+            &self.credential.client_id,
+            &self.credential.client_secret,
+            &self.credential.refresh_token,
+            client,
+            retry,
+        )
+        .await?;
+
         let response = client
             .get("https://oauth2.googleapis.com/tokeninfo")
-            .query(&[("access_token", &self.credential.refresh_token)])
+            .query(&[("access_token", response.access_token)])
             .send_retry(retry)
             .await
             .map_err(|source| Error::TokenRequest { source })?
             .into_body()
             .json::<EmailResponse>()
             .await
-            .map_err(|source| Error::TokenResponseBody { source })?;
+            .map_err(|source: HttpError| Error::TokenResponseBody { source })?;
 
         Ok(response.email)
     }
@@ -638,7 +673,6 @@ impl TokenProvider for AuthorizedUserSigningCredentials {
         retry: &RetryConfig,
     ) -> crate::Result<TemporaryToken<Arc<GcpSigningCredential>>> {
         let email = self.client_email(client, retry).await?;
-
         Ok(TemporaryToken {
             token: Arc::new(GcpSigningCredential {
                 email,
@@ -658,23 +692,14 @@ impl TokenProvider for AuthorizedUserCredentials {
         client: &HttpClient,
         retry: &RetryConfig,
     ) -> crate::Result<TemporaryToken<Arc<GcpCredential>>> {
-        let response = client
-            .post(DEFAULT_TOKEN_GCP_URI)
-            .form([
-                ("grant_type", "refresh_token"),
-                ("client_id", &self.client_id),
-                ("client_secret", &self.client_secret),
-                ("refresh_token", &self.refresh_token),
-            ])
-            .retryable(retry)
-            .idempotent(true)
-            .send()
-            .await
-            .map_err(|source| Error::TokenRequest { source })?
-            .into_body()
-            .json::<TokenResponse>()
-            .await
-            .map_err(|source| Error::TokenResponseBody { source })?;
+        let response = get_token_response(
+            &self.client_id,
+            &self.client_secret,
+            &self.refresh_token,
+            client,
+            retry,
+        )
+        .await?;
 
         Ok(TemporaryToken {
             token: Arc::new(GcpCredential {
