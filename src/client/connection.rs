@@ -228,18 +228,18 @@ impl HttpService for reqwest::Client {
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 impl HttpService for reqwest::Client {
     async fn call(&self, req: HttpRequest) -> Result<HttpResponse, HttpError> {
-        let (parts, body) = req.into_parts();
-        let url = parts.uri.to_string().parse().unwrap();
-        let mut req = reqwest::Request::new(parts.method, url);
-        *req.headers_mut() = parts.headers;
-        *req.body_mut() = Some(body.into_reqwest());
-
         use futures::{
             channel::{mpsc, oneshot},
             SinkExt, StreamExt, TryStreamExt,
         };
         use http_body_util::{Empty, StreamBody};
         use wasm_bindgen_futures::spawn_local;
+
+        let (parts, body) = req.into_parts();
+        let url = parts.uri.to_string().parse().unwrap();
+        let mut req = reqwest::Request::new(parts.method, url);
+        *req.headers_mut() = parts.headers;
+        *req.body_mut() = Some(body.into_reqwest());
 
         let (mut tx, rx) = mpsc::channel(1);
         let (tx_parts, rx_parts) = oneshot::channel();
