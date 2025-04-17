@@ -66,6 +66,7 @@ Or directly with:
 
 ```shell
 aws s3 mb s3://test-bucket --endpoint-url=http://localhost:4566
+aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-for-spawn
 aws --endpoint-url=http://localhost:4566 dynamodb create-table --table-name test-table --key-schema AttributeName=path,KeyType=HASH AttributeName=etag,KeyType=RANGE --attribute-definitions AttributeName=path,AttributeType=S AttributeName=etag,AttributeType=S --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
 ```
 

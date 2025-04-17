@@ -5,6 +5,7 @@ rusty-tags.vi
 .flatbuffers/
 .idea/
 .vscode
+.zed
 .devcontainer
 venv/*
 # created by doctests

@@ -129,6 +129,7 @@ jobs:
           echo "LOCALSTACK_CONTAINER=$(docker run -d -p 4566:4566 localstack/localstack:4.0.3)" >> $GITHUB_ENV
           echo "EC2_METADATA_CONTAINER=$(docker run -d -p 1338:1338 amazon/amazon-ec2-metadata-mock:v1.9.2 --imdsv2)" >> $GITHUB_ENV
           aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket
+          aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-for-spawn
           aws --endpoint-url=http://localhost:4566 s3api create-bucket --bucket test-object-lock --object-lock-enabled-for-bucket
           aws --endpoint-url=http://localhost:4566 dynamodb create-table --table-name test-table --key-schema AttributeName=path,KeyType=HASH AttributeName=etag,KeyType=RANGE --attribute-definitions AttributeName=path,AttributeType=S AttributeName=etag,AttributeType=S --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
 
@@ -150,8 +151,9 @@ jobs:
       - name: Run object_store tests
         run: cargo test --features=aws,azure,gcp,http
 
+      # Don't rerun doc tests (some of them rely on features other than aws)
       - name: Run object_store tests (AWS native conditional put)
-        run: cargo test --features=aws
+        run: cargo test --lib --tests --features=aws
         env:
           AWS_CONDITIONAL_PUT: etag
           AWS_COPY_IF_NOT_EXISTS: multipart
