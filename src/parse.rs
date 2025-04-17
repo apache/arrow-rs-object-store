@@ -348,7 +348,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(feature = "http")]
+    #[cfg(all(feature = "http", not(target_arch = "wasm32")))]
     async fn test_url_http() {
         use crate::client::mock_server::MockServer;
         use http::{header::USER_AGENT, Response};

@@ -221,6 +221,7 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -192,6 +192,13 @@ jobs:
         run: rustup target add wasm32-wasip1
       - name: Build wasm32-wasip1
         run: cargo build --all-features --target wasm32-wasip1
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Run wasm32-unknown-unknown tests (via Node)
+        run: wasm-pack test --node --features http --no-default-features
 
   windows:
     name: cargo test LocalFileSystem (win64)

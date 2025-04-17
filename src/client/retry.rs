@@ -26,8 +26,11 @@ use futures::future::BoxFuture;
 use http::{Method, Uri};
 use reqwest::header::LOCATION;
 use reqwest::StatusCode;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use std::time::{Duration, Instant};
 use tracing::info;
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+use web_time::{Duration, Instant};
 
 /// Retry request error
 #[derive(Debug, thiserror::Error)]
@@ -469,6 +472,7 @@ impl RetryExt for HttpRequestBuilder {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod tests {
     use crate::client::mock_server::MockServer;
