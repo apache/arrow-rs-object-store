@@ -48,11 +48,10 @@ async fn test_http_store_gzip() {
 #[cfg(all(feature = "http", target_arch = "wasm32", target_os = "unknown"))]
 #[wasm_bindgen_test]
 async fn basic_wasm_get() {
-
     let http_store = HttpBuilder::new()
         .with_url("https://raw.githubusercontent.com/apache/arrow-rs/refs/heads/main")
         .build()
-        .unwrap();    
+        .unwrap();
 
     let _ = http_store
         .get_opts(
