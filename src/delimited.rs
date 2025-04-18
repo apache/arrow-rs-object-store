@@ -109,7 +109,7 @@ impl LineDelimiter {
                 }
             },
         };
-        let end_offset = record_ends.last().unwrap_or(start_offset);
+        let end_offset = record_ends.next_back().unwrap_or(start_offset);
         if start_offset != end_offset {
             self.complete.push_back(val.slice(start_offset..end_offset));
         }

@@ -38,15 +38,15 @@ To test the S3 integration against [localstack](https://localstack.cloud/)
 
 First start up a container running localstack
 
-```
-$ LOCALSTACK_VERSION=sha256:a0b79cb2430f1818de2c66ce89d41bba40f5a1823410f5a7eaf3494b692eed97
-$ podman run -d -p 4566:4566 localstack/localstack@$LOCALSTACK_VERSION
-$ podman run -d -p 1338:1338 amazon/amazon-ec2-metadata-mock:v1.9.2 --imdsv2
+```shell
+LOCALSTACK_VERSION=sha256:a0b79cb2430f1818de2c66ce89d41bba40f5a1823410f5a7eaf3494b692eed97
+podman run -d -p 4566:4566 localstack/localstack@$LOCALSTACK_VERSION
+podman run -d -p 1338:1338 amazon/amazon-ec2-metadata-mock:v1.9.2 --imdsv2
 ```
 
 Setup environment
 
-```
+```shell
 export TEST_INTEGRATION=1
 export AWS_DEFAULT_REGION=us-east-1
 export AWS_ACCESS_KEY_ID=test
@@ -58,28 +58,28 @@ export AWS_BUCKET_NAME=test-bucket
 
 Create a bucket using the AWS CLI
 
-```
+```shell
 podman run --net=host --env-host amazon/aws-cli --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket
 ```
 
 Or directly with:
 
-```
+```shell
 aws s3 mb s3://test-bucket --endpoint-url=http://localhost:4566
 aws --endpoint-url=http://localhost:4566 dynamodb create-table --table-name test-table --key-schema AttributeName=path,KeyType=HASH AttributeName=etag,KeyType=RANGE --attribute-definitions AttributeName=path,AttributeType=S AttributeName=etag,AttributeType=S --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
 ```
 
 Run tests
 
-```
-$ cargo test --features aws
+```shell
+cargo test --features aws
 ```
 
 #### Encryption tests
 
 To create an encryption key for the tests, you can run the following command:
 
-```
+```shell
 export AWS_SSE_KMS_KEY_ID=$(aws --endpoint-url=http://localhost:4566 \
   kms create-key --description "test key" |
   jq -r '.KeyMetadata.KeyId')
@@ -87,7 +87,7 @@ export AWS_SSE_KMS_KEY_ID=$(aws --endpoint-url=http://localhost:4566 \
 
 To run integration tests with encryption, you can set the following environment variables:
 
-```
+```shell
 export AWS_SERVER_SIDE_ENCRYPTION=aws:kms
 export AWS_SSE_BUCKET_KEY=false
 cargo test --features aws
@@ -95,7 +95,7 @@ cargo test --features aws
 
 As well as:
 
-```
+```shell
 unset AWS_SSE_BUCKET_KEY
 export AWS_SERVER_SIDE_ENCRYPTION=aws:kms:dsse
 cargo test --features aws
@@ -147,8 +147,6 @@ export TEST_S3_SSEC_ENCRYPTION=1
 cargo test --features aws --package object_store --lib aws::tests::test_s3_ssec_encryption_with_minio -- --exact --nocapture
 ```
 
-
-
 ### Azure
 
 To test the Azure integration
@@ -156,14 +154,14 @@ against [azurite](https://docs.microsoft.com/en-us/azure/storage/common/storage-
 
 Startup azurite
 
-```
-$ podman run -p 10000:10000 -p 10001:10001 -p 10002:10002 mcr.microsoft.com/azure-storage/azurite
+```shell
+podman run -p 10000:10000 -p 10001:10001 -p 10002:10002 mcr.microsoft.com/azure-storage/azurite
 ```
 
 Create a bucket
 
-```
-$ podman run --net=host mcr.microsoft.com/azure-cli az storage container create -n test-bucket --connection-string 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;'
+```shell
+podman run --net=host mcr.microsoft.com/azure-cli az storage container create -n test-bucket --connection-string 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;'
 ```
 
 Run tests
@@ -171,9 +169,11 @@ Run tests
 ```shell
 AZURE_USE_EMULATOR=1 \
 TEST_INTEGRATION=1 \
-OBJECT_STORE_BUCKET=test-bucket \
-AZURE_STORAGE_ACCOUNT=devstoreaccount1 \
+AZURE_CONTAINER_NAME=test-bucket \
+AZURE_STORAGE_ACCOUNT_NAME=devstoreaccount1 \
 AZURE_STORAGE_ACCESS_KEY=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw== \
+AZURE_ENDPOINT=http://127.0.0.1:10000/devstoreaccount1 \
+AZURE_ALLOW_HTTP=true \
 cargo test --features azure
 ```
 
@@ -200,7 +200,6 @@ OBJECT_STORE_BUCKET=test-bucket \
 GOOGLE_SERVICE_ACCOUNT=/tmp/gcs.json \
 cargo test -p object_store --features=gcp
 ```
-
 
 # Deprecation Guidelines
 

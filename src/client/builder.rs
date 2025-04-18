@@ -178,12 +178,13 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+    #[cfg(any(test, feature = "aws", feature = "gcp", feature = "azure"))]
     pub(crate) fn query<T: serde::Serialize + ?Sized>(mut self, query: &T) -> Self {
         let mut error = None;
         if let Ok(ref mut req) = self.request {
             let mut out = format!("{}?", req.uri().path());
-            let mut encoder = form_urlencoded::Serializer::new(&mut out);
+            let start_position = out.len();
+            let mut encoder = form_urlencoded::Serializer::for_suffix(&mut out, start_position);
             let serializer = serde_urlencoded::Serializer::new(&mut encoder);
 
             if let Err(err) = query.serialize(serializer) {
@@ -251,12 +252,18 @@ where
 
     let mut out = match parts.path_and_query {
         Some(p) => match p.query() {
-            Some(x) => format!("{}?{}", p.path(), x),
+            Some(query) => format!("{}?{}", p.path(), query),
             None => format!("{}?", p.path()),
         },
         None => "/?".to_string(),
     };
-    let mut serializer = form_urlencoded::Serializer::new(&mut out);
+    let mut serializer = if out.ends_with('?') {
+        let start_position = out.len();
+        form_urlencoded::Serializer::for_suffix(&mut out, start_position)
+    } else {
+        form_urlencoded::Serializer::new(&mut out)
+    };
+
     serializer.extend_pairs(query_pairs);
 
     parts.path_and_query = Some(out.try_into().unwrap());
@@ -269,7 +276,10 @@ mod tests {
 
     #[test]
     fn test_add_query_pairs() {
-        let mut uri = Uri::from_static("https://foo@example.com/bananas?foo=1");
+        let mut uri = Uri::from_static("https://foo@example.com/bananas");
+
+        add_query_pairs(&mut uri, [("foo", "1")]);
+        assert_eq!(uri.to_string(), "https://foo@example.com/bananas?foo=1");
 
         add_query_pairs(&mut uri, [("bingo", "foo"), ("auth", "test")]);
         assert_eq!(
@@ -282,5 +292,39 @@ mod tests {
             uri.to_string(),
             "https://foo@example.com/bananas?foo=1&bingo=foo&auth=test&t1=funky+shenanigans&a=%F0%9F%98%80"
         );
+    }
+
+    #[test]
+    fn test_add_query_pairs_no_path() {
+        let mut uri = Uri::from_static("https://foo@example.com");
+        add_query_pairs(&mut uri, [("foo", "1")]);
+        assert_eq!(uri.to_string(), "https://foo@example.com/?foo=1");
+    }
+
+    #[test]
+    fn test_request_builder_query() {
+        let client = HttpClient::new(reqwest::Client::new());
+        assert_request_uri(
+            HttpRequestBuilder::new(client.clone()).uri("http://example.com/bananas"),
+            "http://example.com/bananas",
+        );
+
+        assert_request_uri(
+            HttpRequestBuilder::new(client.clone())
+                .uri("http://example.com/bananas")
+                .query(&[("foo", "1")]),
+            "http://example.com/bananas?foo=1",
+        );
+
+        assert_request_uri(
+            HttpRequestBuilder::new(client.clone())
+                .uri("http://example.com")
+                .query(&[("foo", "1")]),
+            "http://example.com/?foo=1",
+        );
+    }
+
+    fn assert_request_uri(builder: HttpRequestBuilder, expected: &str) {
+        assert_eq!(builder.into_parts().1.unwrap().uri().to_string(), expected)
     }
 }

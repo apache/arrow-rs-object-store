@@ -208,7 +208,8 @@ pub enum GetRange {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum InvalidGetRange {
+#[non_exhaustive]
+pub enum InvalidGetRange {
     #[error("Wanted range starting at {requested}, but object was only {length} bytes long")]
     StartTooLarge { requested: u64, length: u64 },
 
@@ -220,7 +221,8 @@ pub(crate) enum InvalidGetRange {
 }
 
 impl GetRange {
-    pub(crate) fn is_valid(&self) -> Result<(), InvalidGetRange> {
+    /// Check if the range is valid.
+    pub fn is_valid(&self) -> Result<(), InvalidGetRange> {
         if let Self::Bounded(r) = self {
             if r.end <= r.start {
                 return Err(InvalidGetRange::Inconsistent {
@@ -238,8 +240,8 @@ impl GetRange {
         Ok(())
     }
 
-    /// Convert to a [`Range`] if valid.
-    pub(crate) fn as_range(&self, len: u64) -> Result<Range<u64>, InvalidGetRange> {
+    /// Convert to a [`Range`] if [valid](Self::is_valid).
+    pub fn as_range(&self, len: u64) -> Result<Range<u64>, InvalidGetRange> {
         self.is_valid()?;
         match self {
             Self::Bounded(r) => {
