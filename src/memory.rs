@@ -23,15 +23,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{stream::BoxStream, StreamExt};
+use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use parking_lot::RwLock;
 
 use crate::multipart::{MultipartStore, PartId};
 use crate::util::InvalidGetRange;
 use crate::{
-    path::Path, Attributes, GetRange, GetResult, GetResultPayload, ListResult, MultipartId,
-    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutResult,
-    Result, UpdateVersion, UploadPart,
+    path::Path, Attributes, GetRange, GetResult, GetResultPayload, ListOpts, ListResult,
+    MultipartId, MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions,
+    PutResult, Result, UpdateVersion, UploadPart,
 };
 use crate::{GetOptions, PutPayload};
 
@@ -312,80 +312,45 @@ impl ObjectStore for InMemory {
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        let root = Path::default();
-        let prefix = prefix.unwrap_or(&root);
-
-        let storage = self.storage.read();
-        let values: Vec<_> = storage
-            .map
-            .range((prefix)..)
-            .take_while(|(key, _)| key.as_ref().starts_with(prefix.as_ref()))
-            .filter(|(key, _)| {
-                // Don't return for exact prefix match
-                key.prefix_match(prefix)
-                    .map(|mut x| x.next().is_some())
-                    .unwrap_or(false)
-            })
-            .map(|(key, value)| {
-                Ok(ObjectMeta {
-                    location: key.clone(),
-                    last_modified: value.last_modified,
-                    size: value.data.len() as u64,
-                    e_tag: Some(value.e_tag.to_string()),
-                    version: None,
-                })
-            })
-            .collect();
-
-        futures::stream::iter(values).boxed()
+        self.list_opts(prefix, ListOpts::default())
+            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
+            .try_flatten()
+            .boxed()
     }
 
-    /// The memory implementation returns all results, as opposed to the cloud
-    /// versions which limit their results to 1k or more because of API
-    /// limitations.
+    fn list_opts(
+        &self,
+        prefix: Option<&Path>,
+        options: ListOpts,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        if options.delimiter {
+            self.list_with_delimiter_and_offset(prefix, options.offset.as_ref())
+        } else {
+            self.list_without_delimiter(prefix, options.offset.as_ref())
+        }
+    }
+
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        let root = Path::default();
-        let prefix = prefix.unwrap_or(&root);
+        let mut stream = self.list_opts(
+            prefix,
+            ListOpts {
+                delimiter: true,
+                ..ListOpts::default()
+            },
+        );
 
         let mut common_prefixes = BTreeSet::new();
+        let mut objects = Vec::new();
 
-        // Only objects in this base level should be returned in the
-        // response. Otherwise, we just collect the common prefixes.
-        let mut objects = vec![];
-        for (k, v) in self.storage.read().map.range((prefix)..) {
-            if !k.as_ref().starts_with(prefix.as_ref()) {
-                break;
-            }
-
-            let mut parts = match k.prefix_match(prefix) {
-                Some(parts) => parts,
-                None => continue,
-            };
-
-            // Pop first element
-            let common_prefix = match parts.next() {
-                Some(p) => p,
-                // Should only return children of the prefix
-                None => continue,
-            };
-
-            if parts.next().is_some() {
-                common_prefixes.insert(prefix.child(common_prefix));
-            } else {
-                let object = ObjectMeta {
-                    location: k.clone(),
-                    last_modified: v.last_modified,
-                    size: v.data.len() as u64,
-                    e_tag: Some(v.e_tag.to_string()),
-                    version: None,
-                };
-                objects.push(object);
-            }
+        while let Some(result) = stream.next().await {
+            let response = result?;
+            common_prefixes.extend(response.common_prefixes.into_iter());
+            objects.extend(response.objects.into_iter());
         }
 
         Ok(ListResult {
-            objects,
             common_prefixes: common_prefixes.into_iter().collect(),
+            objects,
         })
     }
 
@@ -495,6 +460,105 @@ impl InMemory {
 
         Ok(value)
     }
+
+    fn list_with_delimiter_and_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: Option<&Path>,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        let root = Path::default();
+        let prefix = prefix.unwrap_or(&root);
+        let offset = offset.unwrap_or(&root);
+        let start = prefix.max(offset);
+
+        let mut common_prefixes = BTreeSet::new();
+        // Only objects in this base level should be returned in the
+        // response. Otherwise, we just collect the common prefixes.
+        let mut objects = vec![];
+        for (k, v) in self.storage.read().map.range(start..) {
+            if !k.as_ref().starts_with(prefix.as_ref()) {
+                break;
+            }
+
+            // Still need to compare with offset since the range start might equal to offset.
+            if k <= offset {
+                continue;
+            }
+
+            let mut parts = match k.prefix_match(prefix) {
+                Some(parts) => parts,
+                None => continue,
+            };
+
+            // Pop first element
+            let common_prefix = match parts.next() {
+                Some(p) => p,
+                // Should only return children of the prefix
+                None => continue,
+            };
+
+            if parts.next().is_some() {
+                common_prefixes.insert(prefix.child(common_prefix));
+            } else {
+                let object = ObjectMeta {
+                    location: k.clone(),
+                    last_modified: v.last_modified,
+                    size: v.data.len() as u64,
+                    e_tag: Some(v.e_tag.to_string()),
+                    version: None,
+                };
+                objects.push(object);
+            }
+        }
+
+        let result = Ok(ListResult {
+            objects,
+            common_prefixes: common_prefixes.into_iter().collect(),
+        });
+        futures::stream::once(async { result }).boxed()
+    }
+    fn list_without_delimiter(
+        &self,
+        prefix: Option<&Path>,
+        offset: Option<&Path>,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        let root = Path::default();
+        let prefix = prefix.unwrap_or(&root);
+        let start = if let Some(offset) = offset {
+            prefix.max(offset)
+        } else {
+            prefix
+        };
+
+        let storage = self.storage.read();
+        let values: Vec<_> = storage
+            .map
+            .range(start..)
+            .take_while(|(key, _)| key.as_ref().starts_with(prefix.as_ref()))
+            .filter(|(key, _)| {
+                // Don't return for exact prefix match
+                key.prefix_match(prefix)
+                    .map(|mut x| x.next().is_some())
+                    .unwrap_or(false)
+            })
+            .filter(|(key, _)| offset.map(|o| key > &o).unwrap_or(true))
+            .map(|(key, value)| ObjectMeta {
+                location: key.clone(),
+                last_modified: value.last_modified,
+                size: value.data.len() as u64,
+                e_tag: Some(value.e_tag.to_string()),
+                version: None,
+            })
+            .collect();
+
+        futures::stream::once(async {
+            Ok(ListResult {
+                objects: values,
+                common_prefixes: vec![],
+            })
+        })
+        .boxed()
+    }
 }
 
 #[derive(Debug)]
@@ -548,6 +612,7 @@ mod tests {
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
+        list_with_composite_conditions(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;
@@ -564,6 +629,7 @@ mod tests {
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
+        list_with_composite_conditions(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;
@@ -577,6 +643,7 @@ mod tests {
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
+        list_with_composite_conditions(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;

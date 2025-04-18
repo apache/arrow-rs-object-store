@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::credential::{AuthorizedUserSigningCredentials, InstanceSigningCredentialProvider};
 use crate::client::{http_connector, HttpConnector, TokenCredentialProvider};
 use crate::config::ConfigValue;
 use crate::gcp::client::{GoogleCloudStorageClient, GoogleCloudStorageConfig};
@@ -32,8 +33,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
-
-use super::credential::{AuthorizedUserSigningCredentials, InstanceSigningCredentialProvider};
 
 const TOKEN_MIN_TTL: Duration = Duration::from_secs(4 * 60);
 

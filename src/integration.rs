@@ -29,8 +29,8 @@ use core::str;
 use crate::multipart::MultipartStore;
 use crate::path::Path;
 use crate::{
-    Attribute, Attributes, DynObjectStore, Error, GetOptions, GetRange, MultipartUpload,
-    ObjectStore, PutMode, PutPayload, UpdateVersion, WriteMultipart,
+    Attribute, Attributes, DynObjectStore, Error, GetOptions, GetRange, ListOpts, MultipartUpload,
+    ObjectMeta, ObjectStore, PutMode, PutPayload, UpdateVersion, WriteMultipart,
 };
 use bytes::Bytes;
 use futures::stream::FuturesUnordered;
@@ -958,6 +958,102 @@ pub async fn list_with_delimiter(storage: &DynObjectStore) {
     // ==================== check: store is empty ====================
     let content_list = flatten_list_stream(storage, None).await.unwrap();
     assert!(content_list.is_empty());
+}
+
+/// Tests listing with composite conditions by [`ObjectStore::list_opts`]
+pub async fn list_with_composite_conditions(storage: &DynObjectStore) {
+    delete_fixtures(storage).await;
+
+    // ==================== check: store is empty ====================
+    let content_list = flatten_list_stream(storage, None).await.unwrap();
+    assert!(content_list.is_empty());
+
+    // ==================== do: create files ====================
+    let data = Bytes::from("arbitrary data");
+
+    let files: Vec<_> = [
+        "test_file",
+        "mydb/wb/000/000/000.segment",
+        "mydb/wb/000/000/001.segment",
+        "mydb/wb/000/000/002.segment",
+        "mydb/wb/001/001/000.segment",
+        "mydb/wb/foo.json",
+        "mydb/wbwbwb/111/222/333.segment",
+        "mydb/data/whatevs",
+    ]
+    .iter()
+    .map(|&s| Path::from(s))
+    .collect();
+
+    for f in &files {
+        storage.put(f, data.clone().into()).await.unwrap();
+    }
+
+    // ==================== check: prefix-list `mydb/wb` (directory) ====================
+    let prefix = Path::from("mydb/wb");
+
+    let expected_000 = Path::from("mydb/wb/000");
+    let expected_001 = Path::from("mydb/wb/001");
+    let expected_location = Path::from("mydb/wb/foo.json");
+
+    let mut stream = storage.list_opts(Some(&prefix), ListOpts::default());
+    let result = stream.next().await.unwrap().unwrap();
+    assert_eq!(result.common_prefixes.len(), 0);
+    assert_eq!(result.objects.len(), 5);
+    assert!(stream.next().await.is_none());
+
+    // =========== check: prefix-list `mydb/wb` (directory) with delimiter ==============
+    let mut stream = storage.list_opts(
+        Some(&prefix),
+        ListOpts {
+            delimiter: true,
+            ..Default::default()
+        },
+    );
+    let result = stream.next().await.unwrap().unwrap();
+    assert_eq!(result.common_prefixes.len(), 2);
+    assert_eq!(
+        result.common_prefixes,
+        vec![expected_000.clone(), expected_001.clone()]
+    );
+    assert_eq!(result.objects.len(), 1);
+    assert_eq!(result.objects[0].location, expected_location);
+    assert!(stream.next().await.is_none());
+
+    // ======= check: prefix-list `mydb/wb` (directory) with delimiter and offset =========
+    let mut stream = storage.list_opts(
+        Some(&prefix),
+        ListOpts {
+            delimiter: true,
+            offset: Some(Path::from("mydb/wb/000/000/002.segment")),
+            ..Default::default()
+        },
+    );
+    let result = stream.next().await.unwrap().unwrap();
+    assert_eq!(result.common_prefixes.len(), 1);
+    assert_eq!(result.common_prefixes, vec![expected_001.clone()]);
+    assert_eq!(result.objects.len(), 1);
+    assert_eq!(result.objects[0].location, expected_location);
+    assert!(stream.next().await.is_none());
+
+    // ==================== do: remove all files ====================
+    for f in &files {
+        storage.delete(f).await.unwrap();
+    }
+    let result = storage
+        .list_opts(
+            Some(&prefix),
+            ListOpts {
+                ..Default::default()
+            },
+        )
+        .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok::<ObjectMeta, Error>)))
+        .try_flatten()
+        .boxed()
+        .try_collect::<Vec<ObjectMeta>>()
+        .await
+        .unwrap();
+    assert_eq!(result.len(), 0);
 }
 
 /// Tests fetching a non-existent object returns a not found error

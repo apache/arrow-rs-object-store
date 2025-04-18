@@ -22,8 +22,8 @@ use std::ops::Range;
 
 use crate::path::Path;
 use crate::{
-    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOpts,
-    PutOptions, PutPayload, PutResult, Result,
+    GetOptions, GetResult, ListOpts, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
 };
 
 /// Store wrapper that applies a constant prefix to all paths handled by the store.
@@ -52,26 +52,6 @@ impl<T: ObjectStore> PrefixStore<T> {
     fn full_path(&self, location: &Path) -> Path {
         self.prefix.parts().chain(location.parts()).collect()
     }
-
-    /// Strip the constant prefix from a given path
-    fn strip_prefix(&self, path: Path) -> Path {
-        // Note cannot use match because of borrow checker
-        if let Some(suffix) = path.prefix_match(&self.prefix) {
-            return suffix.collect();
-        }
-        path
-    }
-
-    /// Strip the constant prefix from a given ObjectMeta
-    fn strip_meta(&self, meta: ObjectMeta) -> ObjectMeta {
-        ObjectMeta {
-            last_modified: meta.last_modified,
-            size: meta.size,
-            location: self.strip_prefix(meta.location),
-            e_tag: meta.e_tag,
-            version: None,
-        }
-    }
 }
 
 // Note: This is a relative hack to move these two functions to pure functions so they don't rely
@@ -96,6 +76,23 @@ fn strip_meta(prefix: &Path, meta: ObjectMeta) -> ObjectMeta {
         version: None,
     }
 }
+
+/// Strip the common prefixes and objects within list result.
+fn strip_list_result(prefix: &Path, lst: ListResult) -> ListResult {
+    ListResult {
+        common_prefixes: lst
+            .common_prefixes
+            .into_iter()
+            .map(|p| strip_prefix(prefix, p))
+            .collect(),
+        objects: lst
+            .objects
+            .into_iter()
+            .map(|meta| strip_meta(prefix, meta))
+            .collect(),
+    }
+}
+
 #[async_trait::async_trait]
 impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
     async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
@@ -132,14 +129,14 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner.get(&full_path).await
     }
 
-    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
-        let full_path = self.full_path(location);
-        self.inner.get_range(&full_path, range).await
-    }
-
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let full_path = self.full_path(location);
         self.inner.get_opts(&full_path, options).await
+    }
+
+    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
+        let full_path = self.full_path(location);
+        self.inner.get_range(&full_path, range).await
     }
 
     async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
@@ -150,7 +147,7 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
         let full_path = self.full_path(location);
         let meta = self.inner.head(&full_path).await?;
-        Ok(self.strip_meta(meta))
+        Ok(strip_meta(&self.prefix, meta))
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
@@ -163,6 +160,24 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         let s = self.inner.list(Some(&prefix));
         let slf_prefix = self.prefix.clone();
         s.map_ok(move |meta| strip_meta(&slf_prefix, meta)).boxed()
+    }
+
+    fn list_opts(
+        &self,
+        prefix: Option<&Path>,
+        options: ListOpts,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        let prefix = self.full_path(prefix.unwrap_or(&Path::default()));
+        let offset = options.offset.map(|p| self.full_path(&p));
+        let opts = ListOpts {
+            offset,
+            delimiter: options.delimiter,
+            extensions: options.extensions,
+        };
+        let s = self.inner.list_opts(Some(&prefix), opts);
+
+        let slf_prefix = self.prefix.clone();
+        s.map_ok(move |lst| strip_list_result(&slf_prefix, lst)).boxed()
     }
 
     fn list_with_offset(
@@ -182,18 +197,7 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner
             .list_with_delimiter(Some(&prefix))
             .await
-            .map(|lst| ListResult {
-                common_prefixes: lst
-                    .common_prefixes
-                    .into_iter()
-                    .map(|p| self.strip_prefix(p))
-                    .collect(),
-                objects: lst
-                    .objects
-                    .into_iter()
-                    .map(|meta| self.strip_meta(meta))
-                    .collect(),
-            })
+            .map(|lst| strip_list_result(&self.prefix, lst))
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
@@ -239,6 +243,7 @@ mod tests {
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
+        list_with_composite_conditions(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;

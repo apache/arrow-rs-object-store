@@ -45,8 +45,9 @@ use crate::client::{http_connector, HttpConnector};
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
-    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, RetryConfig,
+    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListOpts, ListResult, MultipartUpload,
+    ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
+    RetryConfig,
 };
 
 mod client;
@@ -155,6 +156,93 @@ impl ObjectStore for HttpStore {
         })
         .try_flatten()
         .boxed()
+    }
+
+    fn list_opts(
+        &self,
+        prefix: Option<&Path>,
+        options: ListOpts,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        let client = Arc::<Client>::clone(&self.client);
+        let offset = options.offset.clone();
+        let prefix = prefix.cloned();
+        if options.delimiter {
+            futures::stream::once(async move {
+                let status = client.list(prefix.as_ref(), "1").await?;
+                let response: Vec<_> = status
+                    .response
+                    .into_iter()
+                    .filter(|r| {
+                        offset
+                            .as_ref()
+                            .map(|o| match r.path(client.base_url()) {
+                                Ok(path) => &path > o,
+                                Err(_) => false,
+                            })
+                            .unwrap_or(true)
+                    })
+                    .collect();
+
+                let prefix_len = prefix.map(|p| p.as_ref().len()).unwrap_or(0);
+                let key_count = response.len();
+
+                let mut objects: Vec<ObjectMeta> = Vec::with_capacity(key_count);
+                let mut common_prefixes = Vec::with_capacity(key_count);
+
+                for response in response {
+                    response.check_ok()?;
+
+                    match response.is_dir() {
+                        false => {
+                            let meta = response.object_meta(client.base_url())?;
+                            // Filter out exact prefix matches
+                            if meta.location.as_ref().len() > prefix_len {
+                                objects.push(meta);
+                            }
+                        }
+                        true => {
+                            let path = response.path(client.base_url())?;
+                            // Exclude the current object
+                            if path.as_ref().len() > prefix_len {
+                                common_prefixes.push(path);
+                            }
+                        }
+                    }
+                }
+
+                Ok(ListResult {
+                    common_prefixes,
+                    objects,
+                })
+            })
+            .boxed()
+        } else {
+            let stream = self.list(prefix.as_ref());
+            futures::stream::try_unfold((stream, offset), move |(mut stream, offset)| async move {
+                let mut buffer = Vec::with_capacity(1000);
+                while buffer.len() < 1000 {
+                    match stream.next().await.transpose()? {
+                        None => break,
+                        Some(meta) => {
+                            if offset.as_ref().map(|o| &meta.location > o).unwrap_or(true) {
+                                buffer.push(meta);
+                            }
+                        }
+                    }
+                }
+
+                if buffer.is_empty() {
+                    Ok(None)
+                } else {
+                    let result = ListResult {
+                        common_prefixes: vec![],
+                        objects: buffer,
+                    };
+                    Ok(Some((result, (stream, offset))))
+                }
+            })
+            .boxed()
+        }
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
