@@ -177,7 +177,8 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         let s = self.inner.list_opts(Some(&prefix), opts);
 
         let slf_prefix = self.prefix.clone();
-        s.map_ok(move |lst| strip_list_result(&slf_prefix, lst)).boxed()
+        s.map_ok(move |lst| strip_list_result(&slf_prefix, lst))
+            .boxed()
     }
 
     fn list_with_offset(

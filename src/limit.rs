@@ -173,7 +173,11 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         fut.into_stream().flatten().boxed()
     }
 
-    fn list_with_offset(&self, prefix: Option<&Path>, offset: &Path) -> BoxStream<'static, Result<ObjectMeta>> {
+    fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> BoxStream<'static, Result<ObjectMeta>> {
         let prefix = prefix.cloned();
         let offset = offset.clone();
         let inner = Arc::clone(&self.inner);

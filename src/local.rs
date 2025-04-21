@@ -516,27 +516,54 @@ impl ObjectStore for LocalFileSystem {
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        let mut stream = self.list_opts(
-            prefix,
-            ListOpts {
-                delimiter: true,
-                ..ListOpts::default()
-            },
-        );
+        let config = Arc::clone(&self.config);
 
-        let mut common_prefixes = BTreeSet::new();
-        let mut objects = Vec::new();
+        let prefix = prefix.cloned().unwrap_or_default();
+        let resolved_prefix = config.prefix_to_filesystem(&prefix)?;
 
-        while let Some(result) = stream.next().await {
-            let response = result?;
-            common_prefixes.extend(response.common_prefixes.into_iter());
-            objects.extend(response.objects.into_iter());
-        }
+        maybe_spawn_blocking(move || {
+            let walkdir = WalkDir::new(&resolved_prefix)
+                .min_depth(1)
+                .max_depth(1)
+                .follow_links(true);
 
-        Ok(ListResult {
-            common_prefixes: common_prefixes.into_iter().collect(),
-            objects,
+            let mut common_prefixes = BTreeSet::new();
+            let mut objects = Vec::new();
+
+            for entry_res in walkdir.into_iter().map(convert_walkdir_result) {
+                if let Some(entry) = entry_res? {
+                    let is_directory = entry.file_type().is_dir();
+                    let entry_location = config.filesystem_to_path(entry.path())?;
+                    if !is_directory && !is_valid_file_path(&entry_location) {
+                        continue;
+                    }
+
+                    let mut parts = match entry_location.prefix_match(&prefix) {
+                        Some(parts) => parts,
+                        None => continue,
+                    };
+
+                    let common_prefix = match parts.next() {
+                        Some(p) => p,
+                        None => continue,
+                    };
+
+                    drop(parts);
+
+                    if is_directory {
+                        common_prefixes.insert(prefix.child(common_prefix));
+                    } else if let Some(metadata) = convert_entry(entry, entry_location)? {
+                        objects.push(metadata);
+                    }
+                }
+            }
+
+            Ok(ListResult {
+                common_prefixes: common_prefixes.into_iter().collect(),
+                objects,
+            })
         })
+        .await
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {

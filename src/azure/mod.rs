@@ -23,11 +23,17 @@
 //!
 //! Unused blocks will automatically be dropped after 7 days.
 
-use std::collections::BTreeSet;
-use crate::{multipart::{MultipartStore, PartId}, path::Path, signer::Signer, GetOptions, GetResult, ListOpts, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart};
+use crate::{
+    multipart::{MultipartStore, PartId},
+    path::Path,
+    signer::Signer,
+    GetOptions, GetResult, ListOpts, ListResult, MultipartId, MultipartUpload, ObjectMeta,
+    ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
+};
 use async_trait::async_trait;
 use futures::stream::{BoxStream, StreamExt, TryStreamExt};
 use reqwest::Method;
+use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
@@ -147,10 +153,44 @@ impl ObjectStore for MicrosoftAzure {
         prefix: Option<&Path>,
         options: ListOpts,
     ) -> BoxStream<'static, Result<ListResult>> {
-        self.client.list_paginated(prefix, options)
+        if let Some(offset) = options.offset {
+            self.client
+                .list_paginated(
+                    prefix,
+                    ListOpts {
+                        offset: None,
+                        delimiter: options.delimiter,
+                        extensions: options.extensions,
+                    },
+                )
+                .map_ok(move |lst| {
+                    let objects = lst
+                        .objects
+                        .into_iter()
+                        .filter(|o| o.location > offset)
+                        .collect();
+                    let common_prefixes = lst
+                        .common_prefixes
+                        .into_iter()
+                        .filter(|p| p > &offset)
+                        .collect();
+                    ListResult {
+                        common_prefixes,
+                        objects,
+                    }
+                })
+                .try_filter(|x| x.common_prefixes.len() + x.objects.len() > 0)
+                .boxed()
+        } else {
+            self.client.list_paginated(prefix, options)
+        }
     }
 
-    fn list_with_offset(&self, prefix: Option<&Path>, offset: &Path) -> BoxStream<'static, Result<ObjectMeta>> {
+    fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> BoxStream<'static, Result<ObjectMeta>> {
         self.list_opts(
             prefix,
             ListOpts {
@@ -158,9 +198,9 @@ impl ObjectStore for MicrosoftAzure {
                 ..ListOpts::default()
             },
         )
-            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
-            .try_flatten()
-            .boxed()
+        .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
+        .try_flatten()
+        .boxed()
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {

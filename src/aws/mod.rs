@@ -33,8 +33,8 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use reqwest::header::{HeaderName, IF_MATCH, IF_NONE_MATCH};
 use reqwest::{Method, StatusCode};
-use std::{sync::Arc, time::Duration};
 use std::collections::BTreeSet;
+use std::{sync::Arc, time::Duration};
 use url::Url;
 
 use crate::aws::client::{CompleteMultipartMode, PutPartPayload, RequestError, S3Client};
@@ -336,7 +336,11 @@ impl ObjectStore for AmazonS3 {
         }
     }
 
-    fn list_with_offset(&self, prefix: Option<&Path>, offset: &Path) -> BoxStream<'static, Result<ObjectMeta>> {
+    fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> BoxStream<'static, Result<ObjectMeta>> {
         self.list_opts(
             prefix,
             ListOpts {
@@ -344,9 +348,9 @@ impl ObjectStore for AmazonS3 {
                 ..ListOpts::default()
             },
         )
-            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
-            .try_flatten()
-            .boxed()
+        .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
+        .try_flatten()
+        .boxed()
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
