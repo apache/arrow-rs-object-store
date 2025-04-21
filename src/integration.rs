@@ -29,8 +29,8 @@ use core::str;
 use crate::multipart::MultipartStore;
 use crate::path::Path;
 use crate::{
-    Attribute, Attributes, DynObjectStore, Error, GetOptions, GetRange, ListOpts, MultipartUpload,
-    ObjectMeta, ObjectStore, PutMode, PutPayload, UpdateVersion, WriteMultipart,
+    Attribute, Attributes, DynObjectStore, Error, GetOptions, GetRange, ListOptions,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutPayload, UpdateVersion, WriteMultipart,
 };
 use bytes::Bytes;
 use futures::stream::FuturesUnordered;
@@ -996,7 +996,7 @@ pub async fn list_with_composite_conditions(storage: &DynObjectStore) {
     let expected_001 = Path::from("mydb/wb/001");
     let expected_location = Path::from("mydb/wb/foo.json");
 
-    let mut stream = storage.list_opts(Some(&prefix), ListOpts::default());
+    let mut stream = storage.list_opts(Some(&prefix), ListOptions::default());
     let result = stream.next().await.unwrap().unwrap();
     assert_eq!(result.common_prefixes.len(), 0);
     assert_eq!(result.objects.len(), 5);
@@ -1005,7 +1005,7 @@ pub async fn list_with_composite_conditions(storage: &DynObjectStore) {
     // =========== check: prefix-list `mydb/wb` (directory) with delimiter ==============
     let mut stream = storage.list_opts(
         Some(&prefix),
-        ListOpts {
+        ListOptions {
             delimiter: true,
             ..Default::default()
         },
@@ -1023,7 +1023,7 @@ pub async fn list_with_composite_conditions(storage: &DynObjectStore) {
     // ======= check: prefix-list `mydb/wb` (directory) with delimiter and offset =========
     let mut stream = storage.list_opts(
         Some(&prefix),
-        ListOpts {
+        ListOptions {
             delimiter: true,
             offset: Some(Path::from("mydb/wb/000/000/002.segment")),
             ..Default::default()
@@ -1043,7 +1043,7 @@ pub async fn list_with_composite_conditions(storage: &DynObjectStore) {
     let result = storage
         .list_opts(
             Some(&prefix),
-            ListOpts {
+            ListOptions {
                 ..Default::default()
             },
         )

@@ -722,62 +722,16 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Note: the order of returned [`ObjectMeta`] is not guaranteed
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>>;
 
-    /// List all the objects with given options defined in [`ListOpts`]
+    /// List all the objects with given options defined in [`ListOptions`]
     ///
     /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar` is a prefix of `foo/bar/x` but not of
     /// `foo/bar_baz/x`. List is recursive, i.e. `foo/bar/more/x` will be included.
     fn list_opts(
         &self,
-        prefix: Option<&Path>,
-        options: ListOpts,
+        _prefix: Option<&Path>,
+        _options: ListOptions,
     ) -> BoxStream<'static, Result<ListResult>> {
-        // Add the default implementation via calling list_with_offset methods avoid bring
-        // a breaking change, the default implementation and other list methods will be removed
-        // in the future. All list request should call this method.
-        use std::collections::BTreeSet;
-
-        let prefix = prefix.cloned().unwrap_or_default();
-        let offset = options.offset.unwrap_or(prefix.clone());
-        self.list_with_offset(Some(&prefix), &offset)
-            .try_chunks(1000)
-            .map(move |batch| {
-                let batch = batch.map_err(|e| e.1)?;
-                if options.delimiter {
-                    let mut common_prefixes = BTreeSet::new();
-                    let mut objects = Vec::new();
-                    for obj in batch.into_iter() {
-                        let location = obj.location.clone();
-                        let mut parts = match location.prefix_match(&prefix) {
-                            Some(parts) => parts,
-                            None => continue,
-                        };
-
-                        match parts.next() {
-                            None => {}
-                            Some(p) => match parts.next() {
-                                None => objects.push(obj),
-                                Some(_) => {
-                                    let common_prefix = prefix.child(p);
-                                    if common_prefix > offset {
-                                        common_prefixes.insert(common_prefix);
-                                    }
-                                }
-                            },
-                        }
-                        drop(parts)
-                    }
-                    Ok(ListResult {
-                        common_prefixes: common_prefixes.into_iter().collect(),
-                        objects,
-                    })
-                } else {
-                    Ok(ListResult {
-                        common_prefixes: vec![],
-                        objects: batch,
-                    })
-                }
-            })
-            .boxed()
+        futures::stream::once(futures::future::ready(Err(Error::NotImplemented))).boxed()
     }
 
     /// List all the objects with the given prefix and a location greater than `offset`
@@ -910,7 +864,7 @@ macro_rules! as_ref_impl {
             fn list_opts(
                 &self,
                 prefix: Option<&Path>,
-                options: ListOpts,
+                options: ListOptions,
             ) -> BoxStream<'static, Result<ListResult>> {
                 self.as_ref().list_opts(prefix, options)
             }
@@ -1240,8 +1194,6 @@ pub struct PutOptions {
     /// that need to pass context-specific information (like tracing spans) via trait methods.
     ///
     /// These extensions are ignored entirely by backends offered through this crate.
-    ///
-    /// They are also eclused from [`PartialEq`] and [`Eq`].
     pub extensions: ::http::Extensions,
 }
 
@@ -1307,8 +1259,6 @@ pub struct PutMultipartOpts {
     /// that need to pass context-specific information (like tracing spans) via trait methods.
     ///
     /// These extensions are ignored entirely by backends offered through this crate.
-    ///
-    /// They are also eclused from [`PartialEq`] and [`Eq`].
     pub extensions: ::http::Extensions,
 }
 
@@ -1361,17 +1311,17 @@ pub struct PutResult {
 
 /// Options for [`ObjectStore::list_opts`]
 #[derive(Debug, Clone, Default)]
-pub struct ListOpts {
-    /// The listed objects whose locations are greater than `offset`
+pub struct ListOptions {
+    /// Only list objects greater than `offset`
     pub offset: Option<Path>,
-    /// True means returns common prefixes (directories) in addition to object in [`ListResult`]
+    /// Only list up to the next path delimiter `/`  [`ListResult`]
+    ///
+    /// See [`ObjectStore::list_with_delimiter`]
     pub delimiter: bool,
     /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
     /// that need to pass context-specific information (like tracing spans) via trait methods.
     ///
     /// These extensions are ignored entirely by backends offered through this crate.
-    ///
-    /// They are also eclused from [`PartialEq`] and [`Eq`].
     pub extensions: ::http::Extensions,
 }
 

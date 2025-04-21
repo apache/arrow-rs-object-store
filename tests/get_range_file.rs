@@ -66,7 +66,11 @@ impl ObjectStore for MyStore {
         todo!()
     }
 
-    fn list_opts(&self, _: Option<&Path>, _: ListOpts) -> BoxStream<'static, Result<ListResult>> {
+    fn list_opts(
+        &self,
+        _: Option<&Path>,
+        _: ListOptions,
+    ) -> BoxStream<'static, Result<ListResult>> {
         todo!()
     }
 

@@ -18,7 +18,7 @@
 //! An object store that limits the maximum concurrency of the wrapped implementation
 
 use crate::{
-    BoxStream, GetOptions, GetResult, GetResultPayload, ListOpts, ListResult, MultipartUpload,
+    BoxStream, GetOptions, GetResult, GetResultPayload, ListOptions, ListResult, MultipartUpload,
     ObjectMeta, ObjectStore, Path, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
     StreamExt, UploadPart,
 };
@@ -159,7 +159,7 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
     fn list_opts(
         &self,
         prefix: Option<&Path>,
-        options: ListOpts,
+        options: ListOptions,
     ) -> BoxStream<'static, Result<ListResult>> {
         let prefix = prefix.cloned();
         let options = options.clone();

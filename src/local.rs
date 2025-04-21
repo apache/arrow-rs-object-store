@@ -37,7 +37,7 @@ use crate::{
     maybe_spawn_blocking,
     path::{absolute_path_to_url, Path},
     util::InvalidGetRange,
-    Attributes, GetOptions, GetResult, GetResultPayload, ListOpts, ListResult, MultipartUpload,
+    Attributes, GetOptions, GetResult, GetResultPayload, ListOptions, ListResult, MultipartUpload,
     ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
     UploadPart,
 };
@@ -484,7 +484,7 @@ impl ObjectStore for LocalFileSystem {
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.list_opts(prefix, ListOpts::default())
+        self.list_opts(prefix, ListOptions::default())
             .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
             .try_flatten()
             .boxed()
@@ -493,7 +493,7 @@ impl ObjectStore for LocalFileSystem {
     fn list_opts(
         &self,
         prefix: Option<&Path>,
-        options: ListOpts,
+        options: ListOptions,
     ) -> BoxStream<'static, Result<ListResult>> {
         self.list_with_opts(prefix, options)
     }
@@ -505,9 +505,9 @@ impl ObjectStore for LocalFileSystem {
     ) -> BoxStream<'static, Result<ObjectMeta>> {
         self.list_opts(
             prefix,
-            ListOpts {
+            ListOptions {
                 offset: Some(offset.clone()),
-                ..ListOpts::default()
+                ..ListOptions::default()
             },
         )
         .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
@@ -647,9 +647,9 @@ impl LocalFileSystem {
     fn list_with_opts(
         &self,
         prefix: Option<&Path>,
-        options: ListOpts,
+        options: ListOptions,
     ) -> BoxStream<'static, Result<ListResult>> {
-        let ListOpts {
+        let ListOptions {
             offset, delimiter, ..
         } = options;
 
@@ -1168,8 +1168,8 @@ mod tests {
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
-        rename_and_copy(&integration).await;
         list_with_composite_conditions(&integration).await;
+        rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
         copy_rename_nonexistent_object(&integration).await;
         stream_get(&integration).await;

@@ -34,8 +34,6 @@
 //! enabled by setting [crate::ClientConfigKey::Http1Only] to false.
 //!
 //! [lifecycle rule]: https://cloud.google.com/storage/docs/lifecycle#abort-mpu
-
-use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -43,14 +41,13 @@ use crate::client::CredentialProvider;
 use crate::gcp::credential::GCSAuthorizer;
 use crate::signer::Signer;
 use crate::{
-    multipart::PartId, path::Path, GetOptions, GetResult, ListOpts, ListResult, MultipartId,
+    multipart::PartId, path::Path, GetOptions, GetResult, ListOptions, ListResult, MultipartId,
     MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult,
     Result, UploadPart,
 };
 use async_trait::async_trait;
 use client::GoogleCloudStorageClient;
 use futures::stream::BoxStream;
-use futures::{StreamExt, TryStreamExt};
 use http::Method;
 use url::Url;
 
@@ -187,18 +184,15 @@ impl ObjectStore for GoogleCloudStorage {
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.list_opts(prefix, ListOpts::default())
-            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
-            .try_flatten()
-            .boxed()
+        self.client.list(prefix)
     }
 
     fn list_opts(
         &self,
         prefix: Option<&Path>,
-        options: ListOpts,
+        options: ListOptions,
     ) -> BoxStream<'static, Result<ListResult>> {
-        self.client.list_paginated(prefix, options)
+        self.client.list_opts(prefix, options)
     }
 
     fn list_with_offset(
@@ -206,40 +200,11 @@ impl ObjectStore for GoogleCloudStorage {
         prefix: Option<&Path>,
         offset: &Path,
     ) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.list_opts(
-            prefix,
-            ListOpts {
-                offset: Some(offset.clone()),
-                ..ListOpts::default()
-            },
-        )
-        .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
-        .try_flatten()
-        .boxed()
+        self.client.list_with_offset(prefix, offset)
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        let mut stream = self.list_opts(
-            prefix,
-            ListOpts {
-                delimiter: true,
-                ..ListOpts::default()
-            },
-        );
-
-        let mut common_prefixes = BTreeSet::new();
-        let mut objects = Vec::new();
-
-        while let Some(result) = stream.next().await {
-            let response = result?;
-            common_prefixes.extend(response.common_prefixes.into_iter());
-            objects.extend(response.objects.into_iter());
-        }
-
-        Ok(ListResult {
-            common_prefixes: common_prefixes.into_iter().collect(),
-            objects,
-        })
+        self.client.list_with_delimiter(prefix).await
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
@@ -331,6 +296,7 @@ mod test {
         put_get_delete_list(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
+        list_with_composite_conditions(&integration).await;
         rename_and_copy(&integration).await;
         if integration.client.config().base_url == DEFAULT_GCS_BASE_URL {
             // Fake GCS server doesn't currently honor ifGenerationMatch

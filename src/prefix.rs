@@ -22,7 +22,7 @@ use std::ops::Range;
 
 use crate::path::Path;
 use crate::{
-    GetOptions, GetResult, ListOpts, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    GetOptions, GetResult, ListOptions, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
     PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
 };
 
@@ -165,11 +165,11 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
     fn list_opts(
         &self,
         prefix: Option<&Path>,
-        options: ListOpts,
+        options: ListOptions,
     ) -> BoxStream<'static, Result<ListResult>> {
         let prefix = self.full_path(prefix.unwrap_or(&Path::default()));
         let offset = options.offset.map(|p| self.full_path(&p));
-        let opts = ListOpts {
+        let opts = ListOptions {
             offset,
             delimiter: options.delimiter,
             extensions: options.extensions,

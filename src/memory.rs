@@ -29,7 +29,7 @@ use parking_lot::RwLock;
 use crate::multipart::{MultipartStore, PartId};
 use crate::util::InvalidGetRange;
 use crate::{
-    path::Path, Attributes, GetRange, GetResult, GetResultPayload, ListOpts, ListResult,
+    path::Path, Attributes, GetRange, GetResult, GetResultPayload, ListOptions, ListResult,
     MultipartId, MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions,
     PutResult, Result, UpdateVersion, UploadPart,
 };
@@ -312,7 +312,7 @@ impl ObjectStore for InMemory {
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.list_opts(prefix, ListOpts::default())
+        self.list_opts(prefix, ListOptions::default())
             .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
             .try_flatten()
             .boxed()
@@ -321,7 +321,7 @@ impl ObjectStore for InMemory {
     fn list_opts(
         &self,
         prefix: Option<&Path>,
-        options: ListOpts,
+        options: ListOptions,
     ) -> BoxStream<'static, Result<ListResult>> {
         if options.delimiter {
             self.list_with_delimiter_and_offset(prefix, options.offset.as_ref())
@@ -333,9 +333,9 @@ impl ObjectStore for InMemory {
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
         let mut stream = self.list_opts(
             prefix,
-            ListOpts {
+            ListOptions {
                 delimiter: true,
-                ..ListOpts::default()
+                ..ListOptions::default()
             },
         );
 

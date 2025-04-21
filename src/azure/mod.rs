@@ -22,18 +22,16 @@
 //! [ObjectStore::put_multipart] will upload data in blocks and write a blob from those blocks.
 //!
 //! Unused blocks will automatically be dropped after 7 days.
-
 use crate::{
     multipart::{MultipartStore, PartId},
     path::Path,
     signer::Signer,
-    GetOptions, GetResult, ListOpts, ListResult, MultipartId, MultipartUpload, ObjectMeta,
+    GetOptions, GetResult, ListOptions, ListResult, MultipartId, MultipartUpload, ObjectMeta,
     ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 use async_trait::async_trait;
 use futures::stream::{BoxStream, StreamExt, TryStreamExt};
 use reqwest::Method;
-use std::collections::BTreeSet;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
@@ -121,6 +119,10 @@ impl ObjectStore for MicrosoftAzure {
         self.client.delete_request(location, &()).await
     }
 
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+        self.client.list(prefix)
+    }
+
     fn delete_stream<'a>(
         &'a self,
         locations: BoxStream<'a, Result<Path>>,
@@ -141,23 +143,16 @@ impl ObjectStore for MicrosoftAzure {
             .boxed()
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.list_opts(prefix, ListOpts::default())
-            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
-            .try_flatten()
-            .boxed()
-    }
-
     fn list_opts(
         &self,
         prefix: Option<&Path>,
-        options: ListOpts,
+        options: ListOptions,
     ) -> BoxStream<'static, Result<ListResult>> {
         if let Some(offset) = options.offset {
             self.client
-                .list_paginated(
+                .list_opts(
                     prefix,
-                    ListOpts {
+                    ListOptions {
                         offset: None,
                         delimiter: options.delimiter,
                         extensions: options.extensions,
@@ -179,52 +174,14 @@ impl ObjectStore for MicrosoftAzure {
                         objects,
                     }
                 })
-                .try_filter(|x| x.common_prefixes.len() + x.objects.len() > 0)
                 .boxed()
         } else {
-            self.client.list_paginated(prefix, options)
+            self.client.list_opts(prefix, options)
         }
-    }
-
-    fn list_with_offset(
-        &self,
-        prefix: Option<&Path>,
-        offset: &Path,
-    ) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.list_opts(
-            prefix,
-            ListOpts {
-                offset: Some(offset.clone()),
-                ..ListOpts::default()
-            },
-        )
-        .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
-        .try_flatten()
-        .boxed()
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        let mut stream = self.list_opts(
-            prefix,
-            ListOpts {
-                delimiter: true,
-                ..ListOpts::default()
-            },
-        );
-
-        let mut common_prefixes = BTreeSet::new();
-        let mut objects = Vec::new();
-
-        while let Some(result) = stream.next().await {
-            let response = result?;
-            common_prefixes.extend(response.common_prefixes.into_iter());
-            objects.extend(response.objects.into_iter());
-        }
-
-        Ok(ListResult {
-            common_prefixes: common_prefixes.into_iter().collect(),
-            objects,
-        })
+        self.client.list_with_delimiter(prefix).await
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
@@ -389,6 +346,7 @@ mod tests {
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
+        list_with_composite_conditions(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;

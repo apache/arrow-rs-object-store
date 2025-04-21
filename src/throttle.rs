@@ -22,7 +22,7 @@ use std::{convert::TryInto, sync::Arc};
 
 use crate::multipart::{MultipartStore, PartId};
 use crate::{
-    path::Path, GetResult, GetResultPayload, ListOpts, ListResult, MultipartId, MultipartUpload,
+    path::Path, GetResult, GetResultPayload, ListOptions, ListResult, MultipartId, MultipartUpload,
     ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
 };
 use crate::{GetOptions, UploadPart};
@@ -253,7 +253,7 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
     fn list_opts(
         &self,
         prefix: Option<&Path>,
-        options: ListOpts,
+        options: ListOptions,
     ) -> BoxStream<'static, Result<ListResult>> {
         let stream = self.inner.list_opts(prefix, options);
         let config = Arc::clone(&self.config);
@@ -450,6 +450,7 @@ mod tests {
         put_get_delete_list(&store).await;
         list_uses_directories_correctly(&store).await;
         list_with_delimiter(&store).await;
+        list_with_composite_conditions(&store).await;
         rename_and_copy(&store).await;
         copy_if_not_exists(&store).await;
         stream_get(&store).await;
