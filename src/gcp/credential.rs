@@ -222,6 +222,7 @@ struct TokenClaims<'a> {
 struct TokenResponse {
     access_token: String,
     expires_in: u64,
+    id_token: Option<String>,
 }
 
 /// Self-signed JWT (JSON Web Token).
@@ -603,6 +604,11 @@ struct EmailResponse {
     email: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct IdTokenClaims {
+    email: String,
+}
+
 async fn get_token_response(
     client_id: &str,
     client_secret: &str,
@@ -648,6 +654,23 @@ impl AuthorizedUserSigningCredentials {
         )
         .await?;
 
+        // Extract email from id_token if available
+        if let Some(id_token) = response.id_token {
+            // Split the JWT string by dots to get the payload section
+            let parts: Vec<&str> = id_token.split('.').collect();
+            if parts.len() == 3 {
+                // Decode the base64-encoded payload (middle part)
+                if let Ok(payload) = BASE64_URL_SAFE_NO_PAD.decode(parts[1]) {
+                    // Parse the payload as JSON and extract the email
+                    if let Ok(claims) = serde_json::from_slice::<IdTokenClaims>(&payload) {
+                        return Ok(claims.email);
+                    }
+                }
+                // If any of the parsing steps fail, fallback to other method
+            }
+        }
+
+        // Fallback to the original method if id_token is not available or invalid
         let response = client
             .get("https://oauth2.googleapis.com/tokeninfo")
             .query(&[("access_token", response.access_token)])
