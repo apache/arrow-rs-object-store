@@ -162,6 +162,14 @@ impl ObjectStore for ChunkedStore {
         self.inner.list_opts(prefix, options)
     }
 
+    fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> BoxStream<'static, Result<ObjectMeta>> {
+        self.inner.list_with_offset(prefix, offset)
+    }
+
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
         self.inner.list_with_delimiter(prefix).await
     }

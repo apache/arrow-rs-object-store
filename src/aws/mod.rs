@@ -304,7 +304,7 @@ impl ObjectStore for AmazonS3 {
                     ..options
                 },
             );
-            filter_list_result(stream, options.offset.clone())
+            filter_list_result(stream, options.offset)
         } else {
             self.client.list_opts(prefix, options)
         }

@@ -38,7 +38,7 @@ use std::time::Duration;
 use url::Url;
 
 use crate::client::get::GetClientExt;
-use crate::client::list::ListClientExt;
+use crate::client::list::{filter_list_result, ListClientExt};
 use crate::client::CredentialProvider;
 pub use credential::{authority_hosts, AzureAccessKey, AzureAuthorizer};
 
@@ -119,10 +119,6 @@ impl ObjectStore for MicrosoftAzure {
         self.client.delete_request(location, &()).await
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.client.list(prefix)
-    }
-
     fn delete_stream<'a>(
         &'a self,
         locations: BoxStream<'a, Result<Path>>,
@@ -143,41 +139,24 @@ impl ObjectStore for MicrosoftAzure {
             .boxed()
     }
 
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+        self.client.list(prefix)
+    }
+
     fn list_opts(
         &self,
         prefix: Option<&Path>,
         options: ListOptions,
     ) -> BoxStream<'static, Result<ListResult>> {
-        if let Some(offset) = options.offset {
-            self.client
-                .list_opts(
-                    prefix,
-                    ListOptions {
-                        offset: None,
-                        delimiter: options.delimiter,
-                        extensions: options.extensions,
-                    },
-                )
-                .map_ok(move |lst| {
-                    let objects = lst
-                        .objects
-                        .into_iter()
-                        .filter(|o| o.location > offset)
-                        .collect();
-                    let common_prefixes = lst
-                        .common_prefixes
-                        .into_iter()
-                        .filter(|p| p > &offset)
-                        .collect();
-                    ListResult {
-                        common_prefixes,
-                        objects,
-                    }
-                })
-                .boxed()
-        } else {
-            self.client.list_opts(prefix, options)
-        }
+        // Azure does not support start-after
+        let stream = self.client.list_opts(
+            prefix,
+            ListOptions {
+                offset: None,
+                ..options
+            },
+        );
+        filter_list_result(stream, options.offset)
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
