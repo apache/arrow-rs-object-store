@@ -82,6 +82,7 @@ integration = ["rand"]
 [dev-dependencies] # In alphabetical order
 hyper = { version = "1.2", features = ["server"] }
 hyper-util = "0.1"
+mockito = "1.7"
 rand = "0.9"
 tempfile = "3.1.0"
 regex = "1.11.1"

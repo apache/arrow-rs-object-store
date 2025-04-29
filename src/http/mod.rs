@@ -267,6 +267,7 @@ impl HttpBuilder {
 mod tests {
     use crate::integration::*;
     use crate::tests::*;
+    use crate::OBJECT_STORE_COALESCE_DEFAULT;
 
     use super::*;
 
@@ -286,5 +287,46 @@ mod tests {
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
+    }
+
+    #[tokio::test]
+    async fn makes_a_request_per_range() {
+        let mut srv = mockito::Server::new_async().await;
+        let options = ClientOptions::new().with_allow_http(true);
+        let client = HttpBuilder::new()
+            .with_url(srv.url())
+            .with_client_options(options)
+            .build()
+            .unwrap();
+        let first = srv
+            .mock("GET", "/foo")
+            .match_header("range", "bytes=0-9")
+            .with_status(206)
+            .with_header("content-range", "bytes 0-9/424242424242")
+            .with_body([0; 10])
+            .create_async()
+            .await;
+        let second = srv
+            .mock("GET", "/foo")
+            .match_header("range", "bytes=2097152-3145727")
+            .with_status(206)
+            .with_header("content-range", "bytes 2097152-3145727/424242424242")
+            .with_body([0; 3145727 - 2097152])
+            .create_async()
+            .await;
+        let path = Path::from("/foo");
+        let res = client
+            .get_ranges(
+                &path,
+                &[
+                    0..10,
+                    // it only creates a second request when the gap is wide enough
+                    (OBJECT_STORE_COALESCE_DEFAULT * 2)..(OBJECT_STORE_COALESCE_DEFAULT * 3),
+                ],
+            )
+            .await;
+        first.assert_async().await;
+        second.assert_async().await;
+        res.unwrap();
     }
 }
