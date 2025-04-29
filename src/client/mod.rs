@@ -102,6 +102,12 @@ pub enum ClientConfigKey {
     ConnectTimeout,
     /// default CONTENT_TYPE for uploads
     DefaultContentType,
+    /// Allow requesting multiple ranges in a single request
+    ///
+    /// # Warning
+    ///
+    /// This depends on the cloud provider capability
+    HttpMultipleRanges,
     /// Only use http1 connections
     Http1Only,
     /// Interval for HTTP2 Ping frames should be sent to keep a connection alive.
@@ -146,6 +152,7 @@ impl AsRef<str> for ClientConfigKey {
             Self::AllowInvalidCertificates => "allow_invalid_certificates",
             Self::ConnectTimeout => "connect_timeout",
             Self::DefaultContentType => "default_content_type",
+            Self::HttpMultipleRanges => "http_multiple_ranges",
             Self::Http1Only => "http1_only",
             Self::Http2Only => "http2_only",
             Self::Http2KeepAliveInterval => "http2_keep_alive_interval",
@@ -271,6 +278,7 @@ pub struct ClientOptions {
     http1_only: ConfigValue<bool>,
     http2_only: ConfigValue<bool>,
     randomize_addresses: ConfigValue<bool>,
+    http_multiple_ranges: ConfigValue<bool>,
 }
 
 impl Default for ClientOptions {
@@ -308,6 +316,7 @@ impl Default for ClientOptions {
             http1_only: true.into(),
             http2_only: Default::default(),
             randomize_addresses: true.into(),
+            http_multiple_ranges: Default::default(),
         }
     }
 }
@@ -327,6 +336,7 @@ impl ClientOptions {
                 self.connect_timeout = Some(ConfigValue::Deferred(value.into()))
             }
             ClientConfigKey::DefaultContentType => self.default_content_type = Some(value.into()),
+            ClientConfigKey::HttpMultipleRanges => self.http_multiple_ranges.parse(value),
             ClientConfigKey::Http1Only => self.http1_only.parse(value),
             ClientConfigKey::Http2Only => self.http2_only.parse(value),
             ClientConfigKey::Http2KeepAliveInterval => {
@@ -368,6 +378,7 @@ impl ClientOptions {
             ClientConfigKey::AllowInvalidCertificates => Some(self.allow_insecure.to_string()),
             ClientConfigKey::ConnectTimeout => self.connect_timeout.as_ref().map(fmt_duration),
             ClientConfigKey::DefaultContentType => self.default_content_type.clone(),
+            ClientConfigKey::HttpMultipleRanges => Some(self.http_multiple_ranges.to_string()),
             ClientConfigKey::Http1Only => Some(self.http1_only.to_string()),
             ClientConfigKey::Http2KeepAliveInterval => {
                 self.http2_keep_alive_interval.as_ref().map(fmt_duration)
@@ -459,6 +470,12 @@ impl ClientOptions {
     /// as a last resort or for testing
     pub fn with_allow_invalid_certificates(mut self, allow_insecure: bool) -> Self {
         self.allow_insecure = allow_insecure.into();
+        self
+    }
+
+    /// Allows to query multiple ranges in the same query
+    pub fn with_http_multiple_ranges(mut self) -> Self {
+        self.http_multiple_ranges = true.into();
         self
     }
 
