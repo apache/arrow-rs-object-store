@@ -290,6 +290,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn makes_a_single_request_with_wide_range() {
+        let mut srv = mockito::Server::new_async().await;
+        let options = ClientOptions::new().with_allow_http(true);
+        let client = HttpBuilder::new()
+            .with_url(srv.url())
+            .with_client_options(options)
+            .build()
+            .unwrap();
+        let first = srv
+            .mock("GET", "/foo")
+            .match_header("range", "bytes=0-29")
+            .with_status(206)
+            .with_header("content-range", "bytes 0-29/42")
+            .with_body([0; 30])
+            .create_async()
+            .await;
+        let path = Path::from("/foo");
+        let res = client.get_ranges(&path, &[0..5, 25..30]).await;
+        first.assert_async().await;
+        res.unwrap();
+    }
+
+    #[tokio::test]
     async fn makes_a_request_per_range() {
         let mut srv = mockito::Server::new_async().await;
         let options = ClientOptions::new().with_allow_http(true);
