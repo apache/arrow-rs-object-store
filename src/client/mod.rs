@@ -629,6 +629,12 @@ impl ClientOptions {
         }
     }
 
+    /// Returns wether or not the client is configured to support multiple querying multiple ranges
+    /// in a single request
+    pub(crate) fn supports_multiple_ranges(&self) -> bool {
+        self.http_multiple_ranges.get().unwrap_or(false)
+    }
+
     /// Returns a copy of this [`ClientOptions`] with overrides necessary for metadata endpoint access
     ///
     /// In particular:
@@ -754,12 +760,15 @@ impl ClientOptions {
     }
 }
 
-pub(crate) trait GetOptionsExt {
-    fn with_get_options(self, options: GetOptions) -> Self;
+pub(crate) trait GetOptionsExt<R>
+where
+    R: ToString,
+{
+    fn with_get_options(self, options: GetOptions<R>) -> Self;
 }
 
-impl GetOptionsExt for HttpRequestBuilder {
-    fn with_get_options(mut self, options: GetOptions) -> Self {
+impl<R: ToString> GetOptionsExt<R> for HttpRequestBuilder {
+    fn with_get_options(mut self, options: GetOptions<R>) -> Self {
         use hyper::header::*;
 
         let GetOptions {

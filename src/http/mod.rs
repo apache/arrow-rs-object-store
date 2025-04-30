@@ -31,9 +31,11 @@
 //! [rfc2518]: https://datatracker.ietf.org/doc/html/rfc2518
 //! [WebDAV]: https://en.wikipedia.org/wiki/WebDAV
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -44,12 +46,14 @@ use crate::client::header::get_etag;
 use crate::client::{http_connector, HttpConnector};
 use crate::http::client::Client;
 use crate::path::Path;
+use crate::util::GetManyRanges;
 use crate::{
     ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
     ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, RetryConfig,
 };
 
 mod client;
+// mod range;
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
@@ -127,6 +131,24 @@ impl ObjectStore for HttpStore {
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         self.client.get_opts(location, options).await
+    }
+
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
+        if self.client.supports_multiple_ranges() {
+            let options = GetOptions {
+                range: Some(GetManyRanges::from(ranges)),
+                ..Default::default()
+            };
+            self.client.get_ranges_opts(location, options).await
+        } else {
+            // use the default implementation if not supported
+            crate::util::coalesce_ranges(
+                ranges,
+                |range| self.get_range(location, range),
+                crate::util::OBJECT_STORE_COALESCE_DEFAULT,
+            )
+            .await
+        }
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
@@ -368,9 +390,18 @@ mod tests {
             .mock("GET", "/foo")
             .match_header("range", "bytes=0-9, 2097152-3145727")
             .with_status(206)
-            .with_header("content-range", "bytes 0-9/424242424242")
-            .with_header("content-range", "bytes 2097152-3145727/424242424242")
-            .with_body([0; 10 + OBJECT_STORE_COALESCE_DEFAULT as usize])
+            .with_header("Content-Type", "multipart/byteranges; boundary=boundary")
+            .with_body(
+                "--boundary\r\n\
+                Content-Type: text/plain\r\n\
+                \r\n\
+                This is part 1\r\n\
+                --boundary\r\n\
+                Content-Type: text/plain\r\n\
+                \r\n\
+                This is part 2\r\n\
+                --boundary--\r\n",
+            )
             .create_async()
             .await;
         let path = Path::from("/foo");

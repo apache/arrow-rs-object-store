@@ -17,7 +17,7 @@
 
 //! Common logic for interacting with remote object stores
 use std::{
-    fmt::Display,
+    fmt::{Display, Write},
     ops::{Range, RangeBounds},
 };
 
@@ -173,6 +173,44 @@ fn merge_ranges(ranges: &[Range<u64>], coalesce: u64) -> Vec<Range<u64>> {
     ret
 }
 
+#[derive(Debug, Default, PartialEq, Eq, Clone)]
+pub(crate) struct GetManyRanges(Vec<GetRange>);
+
+impl From<&[Range<u64>]> for GetManyRanges {
+    fn from(ranges: &[Range<u64>]) -> Self {
+        Self(ranges.into_iter().cloned().map(GetRange::from).collect())
+    }
+}
+
+impl AsRef<[GetRange]> for GetManyRanges {
+    fn as_ref(&self) -> &[GetRange] {
+        &self.0
+    }
+}
+
+impl GetManyRanges {
+    pub(crate) fn into_inner(self) -> Vec<GetRange> {
+        self.0
+    }
+}
+
+impl std::fmt::Display for GetManyRanges {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("bytes=")?;
+        if self.0.is_empty() {
+            f.write_char('*')
+        } else {
+            for (index, part) in self.0.iter().enumerate() {
+                if index > 0 {
+                    f.write_str(", ")?;
+                }
+                part.write_partial(f)?;
+            }
+            Ok(())
+        }
+    }
+}
+
 /// Request only a portion of an object's bytes
 ///
 /// These can be created from [usize] ranges, like
@@ -205,6 +243,12 @@ pub enum GetRange {
     Offset(u64),
     /// Request up to the last n bytes
     Suffix(u64),
+}
+
+impl Default for GetRange {
+    fn default() -> Self {
+        Self::Offset(0)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -269,15 +313,20 @@ impl GetRange {
             Self::Suffix(n) => Ok(len.saturating_sub(*n)..len),
         }
     }
+
+    pub(crate) fn write_partial(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bounded(r) => write!(f, "{}-{}", r.start, r.end - 1),
+            Self::Offset(o) => write!(f, "{o}-"),
+            Self::Suffix(n) => write!(f, "{n}"),
+        }
+    }
 }
 
 impl Display for GetRange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Bounded(r) => write!(f, "bytes={}-{}", r.start, r.end - 1),
-            Self::Offset(o) => write!(f, "bytes={o}-"),
-            Self::Suffix(n) => write!(f, "bytes=-{n}"),
-        }
+        f.write_str("bytes=")?;
+        self.write_partial(f)
     }
 }
 

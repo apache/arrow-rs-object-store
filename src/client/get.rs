@@ -20,8 +20,10 @@ use std::ops::Range;
 use crate::client::header::{header_meta, HeaderConfig};
 use crate::client::HttpResponse;
 use crate::path::Path;
+use crate::util::GetManyRanges;
 use crate::{Attribute, Attributes, GetOptions, GetRange, GetResult, GetResultPayload, Result};
 use async_trait::async_trait;
+use bytes::{Buf, Bytes, BytesMut};
 use futures::{StreamExt, TryStreamExt};
 use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_RANGE,
@@ -38,13 +40,22 @@ pub(crate) trait GetClient: Send + Sync + 'static {
     /// Configure the [`HeaderConfig`] for this client
     const HEADER_CONFIG: HeaderConfig;
 
-    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<HttpResponse>;
+    async fn get_request<R: Send + ToString>(
+        &self,
+        path: &Path,
+        options: GetOptions<R>,
+    ) -> Result<HttpResponse>;
 }
 
 /// Extension trait for [`GetClient`] that adds common retrieval functionality
 #[async_trait]
 pub(crate) trait GetClientExt {
-    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult>;
+    async fn get_opts(&self, location: &Path, options: GetOptions<GetRange>) -> Result<GetResult>;
+    async fn get_ranges_opts(
+        &self,
+        location: &Path,
+        options: GetOptions<GetManyRanges>,
+    ) -> Result<Vec<Bytes>>;
 }
 
 #[async_trait]
@@ -62,6 +73,29 @@ impl<T: GetClient> GetClientExt for T {
             store: T::STORE,
             source: Box::new(e),
         })
+    }
+
+    async fn get_ranges_opts(
+        &self,
+        location: &Path,
+        options: GetOptions<GetManyRanges>,
+    ) -> Result<Vec<Bytes>> {
+        let range = options.range.clone();
+        if let Some(ranges) = range.as_ref() {
+            for r in ranges.as_ref().iter() {
+                r.is_valid().map_err(|e| crate::Error::Generic {
+                    store: T::STORE,
+                    source: Box::new(e),
+                })?;
+            }
+        }
+        let response = self.get_request(location, options).await?;
+        get_manyranges::<T>(location, range.unwrap_or_default(), response)
+            .await
+            .map_err(|e| crate::Error::Generic {
+                store: T::STORE,
+                source: Box::new(e),
+            })
     }
 }
 
@@ -143,6 +177,15 @@ enum GetResultError {
         expected: Range<u64>,
         actual: Range<u64>,
     },
+
+    #[error("Missing Content-Type header")]
+    MissingContentType,
+
+    #[error("No boundary found in Content-Type header, received {value:?}")]
+    NoBoundaryFound { value: String },
+
+    #[error(transparent)]
+    HttpError(#[from] super::HttpError),
 }
 
 fn get_result<T: GetClient>(
@@ -257,6 +300,169 @@ fn get_result<T: GetClient>(
     })
 }
 
+async fn get_manyranges<T: GetClient>(
+    location: &Path,
+    ranges: GetManyRanges,
+    response: HttpResponse,
+) -> Result<Vec<bytes::Bytes>, GetResultError> {
+    let ranges = ranges.into_inner();
+    if ranges.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // ensure that we receive the range we asked for
+    if response.status() != StatusCode::PARTIAL_CONTENT {
+        return Err(GetResultError::NotPartial);
+    }
+
+    macro_rules! parse_attributes {
+        ($headers:expr, $(($header:expr, $attr:expr, $map_err:expr)),*) => {{
+            let mut attributes = Attributes::new();
+            $(
+            if let Some(x) = $headers.get($header) {
+                let x = x.to_str().map_err($map_err)?;
+                attributes.insert($attr, x.to_string().into());
+            }
+            )*
+            attributes
+        }}
+    }
+
+    let mut attributes = parse_attributes!(
+        response.headers(),
+        (CACHE_CONTROL, Attribute::CacheControl, |source| {
+            GetResultError::InvalidCacheControl { source }
+        }),
+        (
+            CONTENT_DISPOSITION,
+            Attribute::ContentDisposition,
+            |source| GetResultError::InvalidContentDisposition { source }
+        ),
+        (CONTENT_ENCODING, Attribute::ContentEncoding, |source| {
+            GetResultError::InvalidContentEncoding { source }
+        }),
+        (CONTENT_LANGUAGE, Attribute::ContentLanguage, |source| {
+            GetResultError::InvalidContentLanguage { source }
+        }),
+        (CONTENT_TYPE, Attribute::ContentType, |source| {
+            GetResultError::InvalidContentType { source }
+        })
+    );
+
+    // Add attributes that match the user-defined metadata prefix (e.g. x-amz-meta-)
+    if let Some(prefix) = T::HEADER_CONFIG.user_defined_metadata_prefix {
+        for (key, val) in response.headers() {
+            if let Some(suffix) = key.as_str().strip_prefix(prefix) {
+                if let Ok(val_str) = val.to_str() {
+                    attributes.insert(
+                        Attribute::Metadata(suffix.to_string().into()),
+                        val_str.to_string().into(),
+                    );
+                } else {
+                    return Err(GetResultError::InvalidMetadata {
+                        key: key.to_string(),
+                    });
+                }
+            }
+        }
+    }
+
+    let content_type = response.headers().get(CONTENT_TYPE);
+    let is_multiranges = content_type
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.starts_with("multipart/byteranges"))
+        .unwrap_or(false);
+
+    if ranges.len() == 1 && !is_multiranges {
+        let body = response.into_body().bytes().await?;
+        return Ok(vec![body]);
+    }
+
+    parse_multipart_byteranges(response).await
+}
+
+async fn parse_multipart_byteranges(response: HttpResponse) -> Result<Vec<Bytes>, GetResultError> {
+    use futures::StreamExt;
+
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .ok_or(GetResultError::MissingContentType)?
+        .to_str()
+        .map_err(|source| GetResultError::InvalidContentType { source })?;
+
+    // extract boundary from content-type
+    let boundary = content_type
+        .split(";")
+        .find_map(|part| {
+            let trimmed = part.trim();
+            trimmed
+                .strip_prefix("boundary=")
+                .map(|b| b.trim_matches('"'))
+        })
+        .ok_or_else(|| GetResultError::NoBoundaryFound {
+            value: content_type.to_owned(),
+        })?;
+
+    // prepare boundary markers
+    let boundary_bytes = format!("--{}", boundary).into_bytes();
+    let end_boundary_bytes = format!("--{}--", boundary).into_bytes();
+    let double_crlf = b"\r\n\r\n";
+
+    let mut buffer = BytesMut::new();
+    let mut stream = response.into_body().bytes_stream();
+    let mut parts = Vec::new();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        buffer.extend_from_slice(&chunk);
+
+        loop {
+            // look for start of the next boundary
+            let start = match find_subslice(&buffer, &boundary_bytes) {
+                Some(idx) => idx,
+                // not enough data yet
+                None => break,
+            };
+
+            // check if it's the end boundary
+            if buffer.len() >= start + end_boundary_bytes.len()
+                && &buffer[start..start + end_boundary_bytes.len()] == end_boundary_bytes.as_slice()
+            {
+                // end of multipart body
+                return Ok(parts);
+            }
+
+            // find next boundary after current one
+            let after_start = start + boundary_bytes.len();
+            let next_start = match find_subslice(&buffer[after_start..], &boundary_bytes) {
+                Some(offset) => after_start + offset,
+                // wait for more data
+                None => break,
+            };
+
+            let part_data = buffer[start..next_start].to_vec();
+
+            // extract body after headers (skip CRLF, headers, double CRLF)
+            if let Some(header_end) = find_subslice(&part_data, double_crlf) {
+                let body_start = header_end + double_crlf.len();
+                parts.push(Bytes::copy_from_slice(&part_data[body_start..]));
+            }
+
+            // consume processed part
+            buffer.advance(next_start);
+        }
+    }
+
+    Ok(parts)
+}
+
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,7 +481,11 @@ mod tests {
             user_defined_metadata_prefix: Some("x-test-meta-"),
         };
 
-        async fn get_request(&self, _: &Path, _: GetOptions) -> Result<HttpResponse> {
+        async fn get_request<R: ToString + Send>(
+            &self,
+            _: &Path,
+            _: GetOptions<R>,
+        ) -> Result<HttpResponse> {
             unimplemented!()
         }
     }
