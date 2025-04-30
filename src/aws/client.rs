@@ -851,6 +851,16 @@ impl GetClient for S3Client {
             false => Method::GET,
         };
 
+        match options.range.as_ref() {
+            Some(inner) if inner.as_single().is_none() => {
+                // https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html#API_GetObject_RequestSyntax
+                return Err(crate::Error::NotSupported {
+                    source: "AWS does not support multiple range requests".into(),
+                });
+            }
+            _ => {}
+        }
+
         let mut builder = self.client.request(method, url);
         if self
             .config
