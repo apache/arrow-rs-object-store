@@ -35,6 +35,7 @@ use crate::client::s3::{
 use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpResponse};
 use crate::multipart::PartId;
 use crate::path::DELIMITER;
+use crate::util::RangeValue;
 use crate::{
     Attribute, Attributes, ClientOptions, GetOptions, ListResult, MultipartId, Path,
     PutMultipartOpts, PutPayload, PutResult, Result, RetryConfig, TagSet,
@@ -838,7 +839,11 @@ impl GetClient for S3Client {
     };
 
     /// Make an S3 GET request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html>
-    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<HttpResponse> {
+    async fn get_request<R: RangeValue>(
+        &self,
+        path: &Path,
+        options: GetOptions<R>,
+    ) -> Result<HttpResponse> {
         let credential = self.config.get_session_credential().await?;
         let url = self.config.path_url(path);
         let method = match options.head {

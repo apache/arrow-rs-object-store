@@ -173,6 +173,26 @@ fn merge_ranges(ranges: &[Range<u64>], coalesce: u64) -> Vec<Range<u64>> {
     ret
 }
 
+pub(crate) trait RangeValue: Send + Sized + ToString {
+    fn as_single(&self) -> Option<&GetRange>;
+}
+
+impl RangeValue for GetRange {
+    fn as_single(&self) -> Option<&GetRange> {
+        Some(&self)
+    }
+}
+
+impl RangeValue for GetManyRanges {
+    fn as_single(&self) -> Option<&GetRange> {
+        if self.0.len() == 1 {
+            self.0.get(0)
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
 pub(crate) struct GetManyRanges(Vec<GetRange>);
 
@@ -318,7 +338,7 @@ impl GetRange {
         match self {
             Self::Bounded(r) => write!(f, "{}-{}", r.start, r.end - 1),
             Self::Offset(o) => write!(f, "{o}-"),
-            Self::Suffix(n) => write!(f, "{n}"),
+            Self::Suffix(n) => write!(f, "-{n}"),
         }
     }
 }

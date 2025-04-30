@@ -20,7 +20,7 @@ use std::ops::Range;
 use crate::client::header::{header_meta, HeaderConfig};
 use crate::client::HttpResponse;
 use crate::path::Path;
-use crate::util::GetManyRanges;
+use crate::util::{GetManyRanges, RangeValue};
 use crate::{Attribute, Attributes, GetOptions, GetRange, GetResult, GetResultPayload, Result};
 use async_trait::async_trait;
 use bytes::{Buf, Bytes, BytesMut};
@@ -40,7 +40,7 @@ pub(crate) trait GetClient: Send + Sync + 'static {
     /// Configure the [`HeaderConfig`] for this client
     const HEADER_CONFIG: HeaderConfig;
 
-    async fn get_request<R: Send + ToString>(
+    async fn get_request<R: RangeValue>(
         &self,
         path: &Path,
         options: GetOptions<R>,
@@ -301,7 +301,7 @@ fn get_result<T: GetClient>(
 }
 
 async fn get_manyranges<T: GetClient>(
-    location: &Path,
+    _location: &Path,
     ranges: GetManyRanges,
     response: HttpResponse,
 ) -> Result<Vec<bytes::Bytes>, GetResultError> {
