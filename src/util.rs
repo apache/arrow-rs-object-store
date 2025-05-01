@@ -179,14 +179,14 @@ pub(crate) trait RangeValue: Send + Sized + ToString {
 
 impl RangeValue for GetRange {
     fn as_single(&self) -> Option<&GetRange> {
-        Some(&self)
+        Some(self)
     }
 }
 
 impl RangeValue for GetManyRanges {
     fn as_single(&self) -> Option<&GetRange> {
         if self.0.len() == 1 {
-            self.0.get(0)
+            self.0.first()
         } else {
             None
         }
@@ -198,7 +198,7 @@ pub(crate) struct GetManyRanges(Vec<GetRange>);
 
 impl From<&[Range<u64>]> for GetManyRanges {
     fn from(ranges: &[Range<u64>]) -> Self {
-        Self(ranges.into_iter().cloned().map(GetRange::from).collect())
+        Self(ranges.iter().cloned().map(GetRange::from).collect())
     }
 }
 

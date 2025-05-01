@@ -83,7 +83,7 @@ impl<T: GetClient> GetClientExt for T {
     ) -> Result<Vec<Bytes>> {
         let range = options.range.clone();
         if let Some(ranges) = range.as_ref() {
-            for r in ranges.as_ref().iter() {
+            for r in ranges.as_ref() {
                 r.is_valid().map_err(|e| crate::Error::Generic {
                     store: T::STORE,
                     source: Box::new(e),
