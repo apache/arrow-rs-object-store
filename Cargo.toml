@@ -60,6 +60,7 @@ serde = { version = "1.0", default-features = false, features = ["derive"], opti
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
 serde_urlencoded = { version = "0.7", optional = true }
 tokio = { version = "1.29.0", features = ["sync", "macros", "rt", "time", "io-util"] }
+mpart-async = "0.7.0"
 
 [target.'cfg(target_family="unix")'.dev-dependencies]
 nix = { version = "0.29.0", features = ["fs"] }

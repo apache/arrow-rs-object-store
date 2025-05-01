@@ -23,13 +23,14 @@ use crate::path::Path;
 use crate::util::{GetManyRanges, RangeValue};
 use crate::{Attribute, Attributes, GetOptions, GetRange, GetResult, GetResultPayload, Result};
 use async_trait::async_trait;
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use futures::{StreamExt, TryStreamExt};
 use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_RANGE,
     CONTENT_TYPE,
 };
 use http::StatusCode;
+use mpart_async::server::MultipartStream;
 use reqwest::header::ToStrError;
 
 /// A client that can perform a get request
@@ -382,8 +383,6 @@ async fn get_manyranges<T: GetClient>(
 }
 
 async fn parse_multipart_byteranges(response: HttpResponse) -> Result<Vec<Bytes>, GetResultError> {
-    use futures::StreamExt;
-
     let content_type = response
         .headers()
         .get(CONTENT_TYPE)
@@ -400,67 +399,25 @@ async fn parse_multipart_byteranges(response: HttpResponse) -> Result<Vec<Bytes>
                 .strip_prefix("boundary=")
                 .map(|b| b.trim_matches('"'))
         })
+        .map(String::from)
         .ok_or_else(|| GetResultError::NoBoundaryFound {
             value: content_type.to_owned(),
         })?;
 
-    // prepare boundary markers
-    let boundary_bytes = format!("--{}", boundary).into_bytes();
-    let end_boundary_bytes = format!("--{}--", boundary).into_bytes();
-    let double_crlf = b"\r\n\r\n";
+    let body = response.into_body().bytes_stream();
 
-    let mut buffer = BytesMut::new();
-    let mut stream = response.into_body().bytes_stream();
     let mut parts = Vec::new();
+    let mut stream = MultipartStream::new(boundary, body);
 
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk?;
-        buffer.extend_from_slice(&chunk);
-
-        loop {
-            // look for start of the next boundary
-            let start = match find_subslice(&buffer, &boundary_bytes) {
-                Some(idx) => idx,
-                // not enough data yet
-                None => break,
-            };
-
-            // check if it's the end boundary
-            if buffer.len() >= start + end_boundary_bytes.len()
-                && &buffer[start..start + end_boundary_bytes.len()] == end_boundary_bytes.as_slice()
-            {
-                // end of multipart body
-                return Ok(parts);
-            }
-
-            // find next boundary after current one
-            let after_start = start + boundary_bytes.len();
-            let next_start = match find_subslice(&buffer[after_start..], &boundary_bytes) {
-                Some(offset) => after_start + offset,
-                // wait for more data
-                None => break,
-            };
-
-            let part_data = buffer[start..next_start].to_vec();
-
-            // extract body after headers (skip CRLF, headers, double CRLF)
-            if let Some(header_end) = find_subslice(&part_data, double_crlf) {
-                let body_start = header_end + double_crlf.len();
-                parts.push(Bytes::copy_from_slice(&part_data[body_start..]));
-            }
-
-            // consume processed part
-            buffer.advance(next_start);
+    while let Ok(Some(mut chunk)) = stream.try_next().await {
+        let mut buffer = BytesMut::new();
+        while let Ok(Some(part)) = chunk.try_next().await {
+            buffer.extend_from_slice(&part);
         }
+        parts.push(buffer.freeze());
     }
 
     Ok(parts)
-}
-
-fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
 }
 
 #[cfg(test)]
