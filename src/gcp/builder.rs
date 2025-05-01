@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::client::{http_connector, HttpConnector, TokenCredentialProvider};
+use crate::config::ConfigValue;
 use crate::gcp::client::{GoogleCloudStorageClient, GoogleCloudStorageConfig};
 use crate::gcp::credential::{
     ApplicationDefaultCredentials, InstanceCredentialProvider, ServiceAccountCredentials,
@@ -109,6 +110,8 @@ pub struct GoogleCloudStorageBuilder {
     client_options: ClientOptions,
     /// Credentials
     credentials: Option<GcpCredentialProvider>,
+    /// Skip signing requests
+    skip_signature: ConfigValue<bool>,
     /// Credentials for sign url
     signing_credentials: Option<GcpSigningCredentialProvider>,
     /// The [`HttpConnector`] to use
@@ -161,6 +164,9 @@ pub enum GoogleConfigKey {
     /// See [`GoogleCloudStorageBuilder::with_application_credentials`].
     ApplicationCredentials,
 
+    /// Skip signing request
+    SkipSignature,
+
     /// Client options
     Client(ClientConfigKey),
 }
@@ -172,6 +178,7 @@ impl AsRef<str> for GoogleConfigKey {
             Self::ServiceAccountKey => "google_service_account_key",
             Self::Bucket => "google_bucket",
             Self::ApplicationCredentials => "google_application_credentials",
+            Self::SkipSignature => "google_skip_signature",
             Self::Client(key) => key.as_ref(),
         }
     }
@@ -189,6 +196,7 @@ impl FromStr for GoogleConfigKey {
             "google_service_account_key" | "service_account_key" => Ok(Self::ServiceAccountKey),
             "google_bucket" | "google_bucket_name" | "bucket" | "bucket_name" => Ok(Self::Bucket),
             "google_application_credentials" => Ok(Self::ApplicationCredentials),
+            "google_skip_signature" | "skip_signature" => Ok(Self::SkipSignature),
             _ => match s.strip_prefix("google_").unwrap_or(s).parse() {
                 Ok(key) => Ok(Self::Client(key)),
                 Err(_) => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
@@ -208,6 +216,7 @@ impl Default for GoogleCloudStorageBuilder {
             client_options: ClientOptions::new().with_allow_http(true),
             url: None,
             credentials: None,
+            skip_signature: Default::default(),
             signing_credentials: None,
             http_connector: None,
         }
@@ -288,6 +297,7 @@ impl GoogleCloudStorageBuilder {
             GoogleConfigKey::ApplicationCredentials => {
                 self.application_credentials_path = Some(value.into())
             }
+            GoogleConfigKey::SkipSignature => self.skip_signature.parse(value),
             GoogleConfigKey::Client(key) => {
                 self.client_options = self.client_options.with_config(key, value)
             }
@@ -312,6 +322,7 @@ impl GoogleCloudStorageBuilder {
             GoogleConfigKey::ServiceAccountKey => self.service_account_key.clone(),
             GoogleConfigKey::Bucket => self.bucket_name.clone(),
             GoogleConfigKey::ApplicationCredentials => self.application_credentials_path.clone(),
+            GoogleConfigKey::SkipSignature => Some(self.skip_signature.to_string()),
             GoogleConfigKey::Client(key) => self.client_options.get_config_value(key),
         }
     }
@@ -386,6 +397,14 @@ impl GoogleCloudStorageBuilder {
         application_credentials_path: impl Into<String>,
     ) -> Self {
         self.application_credentials_path = Some(application_credentials_path.into());
+        self
+    }
+
+    /// If enabled, [`GoogleCloudStorage`] will not fetch credentials and will not sign requests.
+    ///
+    /// This can be useful when interacting with public GCS buckets that deny authorized requests.
+    pub fn with_skip_signature(mut self, skip_signature: bool) -> Self {
+        self.skip_signature = skip_signature.into();
         self
     }
 
@@ -546,14 +565,15 @@ impl GoogleCloudStorageBuilder {
             )) as _
         };
 
-        let config = GoogleCloudStorageConfig::new(
-            gcs_base_url,
+        let config = GoogleCloudStorageConfig {
+            base_url: gcs_base_url,
             credentials,
             signing_credentials,
             bucket_name,
-            self.retry_config,
-            self.client_options,
-        );
+            retry_config: self.retry_config,
+            client_options: self.client_options,
+            skip_signature: self.skip_signature.get()?,
+        };
 
         let http_client = http.connect(&config.client_options)?;
         Ok(GoogleCloudStorage {

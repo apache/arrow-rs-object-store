@@ -597,6 +597,7 @@ mod tests {
     }
 
     #[allow(dead_code)]
+    #[cfg(target_os = "linux")]
     async fn measure_get(store: &ThrottledStore<InMemory>, n_bytes: Option<usize>) -> Duration {
         let path = place_test_object(store, n_bytes).await;
 

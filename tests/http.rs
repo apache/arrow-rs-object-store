@@ -20,11 +20,34 @@
 #[cfg(feature = "http")]
 use object_store::{http::HttpBuilder, path::Path, GetOptions, GetRange, ObjectStore};
 
+#[cfg(all(feature = "http", target_arch = "wasm32", target_os = "unknown"))]
+use wasm_bindgen_test::*;
+
 /// Tests that even when reqwest has the `gzip` feature enabled, the HTTP store
 /// does not error on a missing `Content-Length` header.
 #[tokio::test]
 #[cfg(feature = "http")]
 async fn test_http_store_gzip() {
+    let http_store = HttpBuilder::new()
+        .with_url("https://raw.githubusercontent.com/apache/arrow-rs/refs/heads/main")
+        .build()
+        .unwrap();
+
+    let _ = http_store
+        .get_opts(
+            &Path::parse("LICENSE.txt").unwrap(),
+            GetOptions {
+                range: Some(GetRange::Bounded(0..100)),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+}
+
+#[cfg(all(feature = "http", target_arch = "wasm32", target_os = "unknown"))]
+#[wasm_bindgen_test]
+async fn basic_wasm_get() {
     let http_store = HttpBuilder::new()
         .with_url("https://raw.githubusercontent.com/apache/arrow-rs/refs/heads/main")
         .build()

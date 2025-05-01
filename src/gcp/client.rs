@@ -25,6 +25,7 @@ use crate::client::s3::{
     ListResponse,
 };
 use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpResponse};
+use crate::gcp::credential::CredentialExt;
 use crate::gcp::{GcpCredential, GcpCredentialProvider, GcpSigningCredentialProvider, STORE};
 use crate::multipart::PartId;
 use crate::path::{Path, DELIMITER};
@@ -144,29 +145,20 @@ pub(crate) struct GoogleCloudStorageConfig {
     pub retry_config: RetryConfig,
 
     pub client_options: ClientOptions,
+
+    pub skip_signature: bool,
 }
 
 impl GoogleCloudStorageConfig {
-    pub(crate) fn new(
-        base_url: String,
-        credentials: GcpCredentialProvider,
-        signing_credentials: GcpSigningCredentialProvider,
-        bucket_name: String,
-        retry_config: RetryConfig,
-        client_options: ClientOptions,
-    ) -> Self {
-        Self {
-            base_url,
-            credentials,
-            signing_credentials,
-            bucket_name,
-            retry_config,
-            client_options,
-        }
-    }
-
     pub(crate) fn path_url(&self, path: &Path) -> String {
         format!("{}/{}/{}", self.base_url, self.bucket_name, path)
+    }
+
+    pub(crate) async fn get_credential(&self) -> Result<Option<Arc<GcpCredential>>> {
+        Ok(match self.skip_signature {
+            false => Some(self.credentials.get_credential().await?),
+            true => None,
+        })
     }
 }
 
@@ -304,8 +296,8 @@ impl GoogleCloudStorageClient {
         &self.config
     }
 
-    async fn get_credential(&self) -> Result<Arc<GcpCredential>> {
-        self.config.credentials.get_credential().await
+    async fn get_credential(&self) -> Result<Option<Arc<GcpCredential>>> {
+        self.config.get_credential().await
     }
 
     /// Create a signature from a string-to-sign using Google Cloud signBlob method.
@@ -341,7 +333,7 @@ impl GoogleCloudStorageClient {
         let response = self
             .client
             .post(&url)
-            .bearer_auth(&credential.bearer)
+            .with_bearer_auth(credential.as_deref())
             .json(&body)
             .retryable(&self.config.retry_config)
             .idempotent(true)
@@ -493,7 +485,7 @@ impl GoogleCloudStorageClient {
 
         self.client
             .request(Method::DELETE, &url)
-            .bearer_auth(&credential.bearer)
+            .with_bearer_auth(credential.as_deref())
             .header(CONTENT_TYPE, "application/octet-stream")
             .header(CONTENT_LENGTH, "0")
             .query(&[("uploadId", multipart_id)])
@@ -538,7 +530,7 @@ impl GoogleCloudStorageClient {
         let response = self
             .client
             .request(Method::POST, &url)
-            .bearer_auth(&credential.bearer)
+            .with_bearer_auth(credential.as_deref())
             .query(&[("uploadId", upload_id)])
             .body(data)
             .retryable(&self.config.retry_config)
@@ -594,7 +586,7 @@ impl GoogleCloudStorageClient {
         }
 
         builder
-            .bearer_auth(&credential.bearer)
+            .with_bearer_auth(credential.as_deref())
             // Needed if reqwest is compiled with native-tls instead of rustls-tls
             // See https://github.com/apache/arrow-rs/pull/3921
             .header(CONTENT_LENGTH, 0)
@@ -640,11 +632,8 @@ impl GetClient for GoogleCloudStorageClient {
             request = request.query(&[("generation", version)]);
         }
 
-        if !credential.bearer.is_empty() {
-            request = request.bearer_auth(&credential.bearer);
-        }
-
         let response = request
+            .with_bearer_auth(credential.as_deref())
             .with_get_options(options)
             .send_retry(&self.config.retry_config)
             .await
@@ -696,7 +685,7 @@ impl ListClient for Arc<GoogleCloudStorageClient> {
             .client
             .request(Method::GET, url)
             .query(&query)
-            .bearer_auth(&credential.bearer)
+            .with_bearer_auth(credential.as_deref())
             .send_retry(&self.config.retry_config)
             .await
             .map_err(|source| Error::ListRequest { source })?

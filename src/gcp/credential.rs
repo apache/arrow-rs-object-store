@@ -16,6 +16,7 @@
 // under the License.
 
 use super::client::GoogleCloudStorageClient;
+use crate::client::builder::HttpRequestBuilder;
 use crate::client::retry::RetryExt;
 use crate::client::token::TemporaryToken;
 use crate::client::{HttpClient, HttpError, TokenProvider};
@@ -424,7 +425,7 @@ impl TokenProvider for InstanceCredentialProvider {
     /// Since the connection is local we need to enable http access and don't actually use the client object passed in.
     /// Respects the `GCE_METADATA_HOST`, `GCE_METADATA_ROOT`, and `GCE_METADATA_IP`
     /// environment variables.
-    ///  
+    ///
     /// References: <https://googleapis.dev/python/google-auth/latest/reference/google.auth.environment_vars.html>
     async fn fetch_token(
         &self,
@@ -494,7 +495,7 @@ impl TokenProvider for InstanceSigningCredentialProvider {
     /// Since the connection is local we need to enable http access and don't actually use the client object passed in.
     /// Respects the `GCE_METADATA_HOST`, `GCE_METADATA_ROOT`, and `GCE_METADATA_IP`
     /// environment variables.
-    ///  
+    ///
     /// References: <https://googleapis.dev/python/google-auth/latest/reference/google.auth.environment_vars.html>
     async fn fetch_token(
         &self,
@@ -851,6 +852,26 @@ impl GCSAuthorizer {
             scope,
             hashed_canonical_req
         )
+    }
+}
+
+pub(crate) trait CredentialExt {
+    /// Apply bearer authentication to the request if the credential is not None
+    fn with_bearer_auth(self, credential: Option<&GcpCredential>) -> Self;
+}
+
+impl CredentialExt for HttpRequestBuilder {
+    fn with_bearer_auth(self, credential: Option<&GcpCredential>) -> Self {
+        match credential {
+            Some(credential) => {
+                if credential.bearer.is_empty() {
+                    self
+                } else {
+                    self.bearer_auth(&credential.bearer)
+                }
+            }
+            None => self,
+        }
     }
 }
 
