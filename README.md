@@ -52,13 +52,16 @@ cargo build -p object_store --target wasm32-unknown-unknown
 
 Here are several related crates in different repositories
 
-| Crate                    | Description                                 | Documentation                           |
-| ------------------------ | ------------------------------------------- | --------------------------------------- |
-| [`object_store_opendal`] | Use [`opendal`] as [`object_store`] backend | [(README)][object_store_opendal-readme] |
+| Crate                    | Description                                                           | Documentation                           |
+| ------------------------ | --------------------------------------------------------------------- | --------------------------------------- |
+| [`object_store_opendal`] | Use [`opendal`] as [`object_store`] backend                           | [(README)][object_store_opendal-readme] |
+| [`anda_object_store`]    | Extends the [`object_store`] with metadata management and encryption. | [(README)][anda_object_store-readme]    |
 
 [`object_store_opendal`]: https://crates.io/crates/object_store_opendal
 [`opendal`]: https://crates.io/crates/opendal
 [object_store_opendal-readme]: https://github.com/apache/opendal/blob/main/integrations/object_store/README.md
+[`anda_object_store`]: https://crates.io/crates/anda_object_store
+[anda_object_store-readme]: https://github.com/ldclabs/anda-db/blob/main/rs/anda_object_store/README.md
 
 ## Release Schedule
 
@@ -70,6 +73,6 @@ versions approximately every 2 months.
 
 Planned Release Schedule
 
-| Approximate Date | Version  | Notes                                   | Ticket                                                             |
-| ---------------- | -------- | --------------------------------------- |:-------------------------------------------------------------------|
-| Apr 2025         | `0.12.1` | Minor, NO breaking API changes          | [#287](https://github.com/apache/arrow-rs-object-store/issues/287)                                                                   |
+| Approximate Date | Version  | Notes                          | Ticket                                                             |
+| ---------------- | -------- | ------------------------------ | :----------------------------------------------------------------- |
+| Apr 2025         | `0.12.1` | Minor, NO breaking API changes | [#287](https://github.com/apache/arrow-rs-object-store/issues/287) |
