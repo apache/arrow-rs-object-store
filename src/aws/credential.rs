@@ -759,8 +759,17 @@ async fn eks_credential(
     url: &str,
     token_file: &str,
 ) -> Result<TemporaryToken<Arc<AwsCredential>>, StdError> {
-    let token = std::fs::read_to_string(token_file)
-        .map_err(|e| format!("Failed to read EKS token file '{token_file}': {e}"))?;
+    // Spawn IO to blocking tokio pool if running in tokio context
+    let token = match tokio::runtime::Handle::try_current() {
+        Ok(runtime) => {
+            let path = token_file.to_string();
+            runtime
+                .spawn_blocking(move || std::fs::read_to_string(&path))
+                .await?
+        }
+        Err(_) => std::fs::read_to_string(token_file),
+    }
+    .map_err(|e| format!("Failed to read EKS token file '{token_file}': {e}"))?;
 
     let mut req = client.request(Method::GET, url);
     req = req.header("Authorization", token);
