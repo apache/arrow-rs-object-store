@@ -108,12 +108,15 @@ impl HttpError {
                 } else if e.is_timeout() {
                     kind = HttpErrorKind::Timeout;
                 }
-                break;
             }
             if let Some(e) = e.downcast_ref::<std::io::Error>() {
                 match e.kind() {
                     std::io::ErrorKind::TimedOut => kind = HttpErrorKind::Timeout,
+                    std::io::ErrorKind::ConnectionRefused
+                    | std::io::ErrorKind::HostUnreachable
+                    | std::io::ErrorKind::NetworkUnreachable => kind = HttpErrorKind::Connect,
                     std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::ConnectionReset
                     | std::io::ErrorKind::BrokenPipe
                     | std::io::ErrorKind::UnexpectedEof => kind = HttpErrorKind::Interrupted,
                     _ => {}
