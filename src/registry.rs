@@ -22,8 +22,6 @@
 //! to avoid repeated creation.
 
 use dashmap::DashMap;
-#[cfg(not(target_arch = "wasm32"))]
-use crate::local::LocalFileSystem;
 use crate::ObjectStore;
 use std::sync::Arc;
 use url::Url;
@@ -113,22 +111,12 @@ impl DefaultObjectStoreRegistry {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn new() -> Self {
         let object_stores: DashMap<String, Arc<dyn ObjectStore>> = DashMap::new();
-        object_stores.insert("file://".to_string(), Arc::new(LocalFileSystem::new()));
-        Self { object_stores }
-    }
-
-    /// Default without any backend registered.
-    #[cfg(target_arch = "wasm32")]
-    pub fn new() -> Self {
-        let object_stores: DashMap<String, Arc<dyn ObjectStore>> = DashMap::new();
         Self { object_stores }
     }
 }
 
 ///
-/// Stores are registered based on the scheme, host and port of the provided URL
-/// with a [`LocalFileSystem::new`] automatically registered for `file://` (if the
-/// target arch is not `wasm32`).
+/// Stores are registered based on the scheme, host and port of the provided URL.
 ///
 /// For example:
 ///
