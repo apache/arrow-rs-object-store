@@ -176,4 +176,42 @@ mod tests {
         let key = get_url_key(&url);
         assert_eq!(key.as_str(), "s3://host:123");
     }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn test_register_store() {
+        use crate::local::LocalFileSystem;
+        let registry = DefaultObjectStoreRegistry::new();
+        let url = Url::parse("file:///foo/bar").unwrap();
+        let store = Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>;
+        let old_store = registry.register_store(&url, Arc::clone(&store));
+        assert!(old_store.is_none(), "Should not return a previous store when registering a new one");
+        let retrieved_store = registry
+            .get_store(&url)
+            .expect("Should retrieve a store when a valid URL is used");
+        // Validate that it’s exactly the same Arc we registered above
+        assert!(
+            Arc::ptr_eq(&retrieved_store, &store),
+            "Retrieved store is not the same LocalFileSystem instance"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn test_register_store_on_get() {
+        let registry = DefaultObjectStoreRegistry::new();
+        let url = Url::parse("file:///foo/bar").unwrap();
+        // on first get, should lazily create & register a LocalFileSystem
+        let retrieved_store = registry
+            .get_store(&url)
+            .expect("Should retrieve a store when a valid URL is used");
+        // Validate that this really is a LocalFileSystem under the hood by
+        // looking at its Debug representation
+        let dbg = format!("{:?}", retrieved_store);
+        assert!(
+            dbg.starts_with("LocalFileSystem"),
+            "Expected a LocalFileSystem, but Debug printed: {}",
+            dbg
+        );
+    }
 }
