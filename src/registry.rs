@@ -17,7 +17,7 @@
 
 //! ObjectStoreRegistry holds all the object stores at Runtime with a scheme for each store.
 //! This allows the user to resolve a URL to an ObjectStore at runtime. Unlike
-//! [`object_store::parse:parse_url`], this allows for custom logic to be executed
+//! [`crate::parse_url`], this allows for custom logic to be executed
 //! when a URL is resolved to an ObjectStore. It also serves as a cache for object stores
 //! to avoid repeated creation.
 
@@ -57,8 +57,6 @@ use url::Url;
 ///
 /// 2. Systems relying on ad-hoc discovery, without corresponding DDL, can create [`ObjectStore`]
 ///    lazily by providing a custom implementation of [`ObjectStoreRegistry`]
-///
-/// [`ObjectStore`]: object_store::ObjectStore
 pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     /// If a store with the same key existed before, it is replaced and returned
     fn register_store(
@@ -110,8 +108,7 @@ impl Default for DefaultObjectStoreRegistry {
 }
 
 impl DefaultObjectStoreRegistry {
-    /// This will register [`LocalFileSystem`] to handle `file://` paths
-    #[cfg(not(target_arch = "wasm32"))]
+    /// Create a new [`DefaultObjectStoreRegistry`] with no registered stores
     pub fn new() -> Self {
         let object_stores: DashMap<String, Arc<dyn ObjectStore>> = DashMap::new();
         Self { object_stores }
