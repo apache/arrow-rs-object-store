@@ -359,7 +359,7 @@ impl HttpConnector for SpawnedReqwestConnector {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", target_os = "wasi"))]
 pub(crate) fn http_connector(
     custom: Option<Arc<dyn HttpConnector>>,
 ) -> crate::Result<Arc<dyn HttpConnector>> {
