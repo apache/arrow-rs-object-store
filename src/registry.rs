@@ -22,7 +22,7 @@
 //! to avoid repeated creation.
 
 use dashmap::DashMap;
-use crate::ObjectStore;
+use crate::{parse_url, ObjectStore};
 use std::sync::Arc;
 use url::Url;
 
@@ -135,7 +135,16 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
 
     fn get_store(&self, url: &Url) -> Option<Arc<dyn ObjectStore>> {
         let s = get_url_key(url);
-        self.object_stores.get(&s).map(|o| Arc::clone(o.value()))
+        self.object_stores
+            .entry(s)
+            .or_try_insert_with(|| {
+                match parse_url(url) {
+                    Ok((store, _)) => Ok(Arc::new(store)),
+                    Err(e) => Err(e),
+                }
+            })
+            .map(|o| Arc::clone(o.value()))
+            .ok()
     }
 }
 
