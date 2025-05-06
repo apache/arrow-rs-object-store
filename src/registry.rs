@@ -21,11 +21,10 @@
 //! when a URL is resolved to an ObjectStore. It also serves as a cache for object stores
 //! to avoid repeated creation.
 
-use dashmap::DashMap;
 use crate::{parse_url, ObjectStore};
+use dashmap::DashMap;
 use std::sync::Arc;
 use url::Url;
-
 
 /// [`ObjectStoreRegistry`] maps a URL to an [`ObjectStore`] instance,
 /// and allows users to read from different [`ObjectStore`]
@@ -137,11 +136,9 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
         let s = get_url_key(url);
         self.object_stores
             .entry(s)
-            .or_try_insert_with(|| {
-                match parse_url(url) {
-                    Ok((store, _)) => Ok(Arc::new(store)),
-                    Err(e) => Err(e),
-                }
+            .or_try_insert_with(|| match parse_url(url) {
+                Ok((store, _)) => Ok(Arc::new(store)),
+                Err(e) => Err(e),
             })
             .map(|o| Arc::clone(o.value()))
             .ok()
@@ -189,7 +186,10 @@ mod tests {
         let url = Url::parse("file:///foo/bar").unwrap();
         let store = Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>;
         let old_store = registry.register_store(&url, Arc::clone(&store));
-        assert!(old_store.is_none(), "Should not return a previous store when registering a new one");
+        assert!(
+            old_store.is_none(),
+            "Should not return a previous store when registering a new one"
+        );
         let retrieved_store = registry
             .get_store(&url)
             .expect("Should retrieve a store when a valid URL is used");
