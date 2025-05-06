@@ -77,6 +77,9 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     /// the `url` and [`ObjectStoreRegistry`] implementation. An [`ObjectStore`] may be lazily
     /// created and registered.
     fn get_store(&self, url: &Url) -> Option<Arc<dyn ObjectStore>>;
+
+    /// List all registered URLs
+    fn list_urls(&self) -> Vec<String>;
 }
 
 /// The default [`ObjectStoreRegistry`]
@@ -146,6 +149,10 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
             .map(|o| Arc::clone(o.value()))
             .ok()
     }
+
+    fn list_urls(&self) -> Vec<String> {
+        self.object_stores.iter().map(|o| o.key().clone()).collect()
+    }
 }
 
 /// Get the key of a url for object store registration.
@@ -213,5 +220,25 @@ mod tests {
             "Expected a LocalFileSystem, but Debug printed: {}",
             dbg
         );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn test_list_urls() {
+        use crate::local::LocalFileSystem;
+        let registry = DefaultObjectStoreRegistry::new();
+        let url = Url::parse("file:///foo/bar").unwrap();
+        let store = Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>;
+        registry.register_store(&url, store);
+        let urls = registry.list_urls();
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0], "file://");
+    }
+
+    #[test]
+    fn test_registry_with_bad_scheme() {
+        let registry = DefaultObjectStoreRegistry::new();
+        let url = Url::parse("unknown://foo/bar").unwrap();
+        assert!(registry.get_store(&url).is_none());
     }
 }
