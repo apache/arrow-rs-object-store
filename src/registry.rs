@@ -137,8 +137,8 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
 
         match parse_url(url) {
             Ok((store, _)) => {
-                let store = Arc::new(store);
-                stores.insert(s, store.clone());
+                let store = Arc::from(store);
+                stores.insert(s, Arc::clone(&store));
                 Some(store)
             }
             Err(_) => None,
