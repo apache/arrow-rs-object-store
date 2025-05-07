@@ -33,7 +33,6 @@ all-features = true
 async-trait = "0.1.53"
 bytes = "1.0"
 chrono = { version = "0.4.34", default-features = false, features = ["clock"] }
-dashmap = "6.1.0"
 futures = "0.3"
 http = "1.2.0"
 humantime = "2.1"

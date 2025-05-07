@@ -22,8 +22,8 @@
 //! to avoid repeated creation.
 
 use crate::{parse_url, ObjectStore};
-use dashmap::DashMap;
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 use url::Url;
 
 /// [`ObjectStoreRegistry`] maps a URL to an [`ObjectStore`] instance,
@@ -82,20 +82,14 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
 /// The default [`ObjectStoreRegistry`]
 pub struct DefaultObjectStoreRegistry {
     /// A map from scheme to object store that serve list / read operations for the store
-    object_stores: DashMap<String, Arc<dyn ObjectStore>>,
+    object_stores: RwLock<HashMap<String, Arc<dyn ObjectStore>>>,
 }
 
 impl std::fmt::Debug for DefaultObjectStoreRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let stores = self.object_stores.read().unwrap();
         f.debug_struct("DefaultObjectStoreRegistry")
-            .field(
-                "schemes",
-                &self
-                    .object_stores
-                    .iter()
-                    .map(|o| o.key().clone())
-                    .collect::<Vec<_>>(),
-            )
+            .field("schemes", &stores.keys().cloned().collect::<Vec<_>>())
             .finish()
     }
 }
@@ -109,7 +103,7 @@ impl Default for DefaultObjectStoreRegistry {
 impl DefaultObjectStoreRegistry {
     /// Create a new [`DefaultObjectStoreRegistry`] with no registered stores
     pub fn new() -> Self {
-        let object_stores: DashMap<String, Arc<dyn ObjectStore>> = DashMap::new();
+        let object_stores = RwLock::new(HashMap::new());
         Self { object_stores }
     }
 }
@@ -129,23 +123,31 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
         let s = get_url_key(url);
-        self.object_stores.insert(s, store)
+        let mut stores = self.object_stores.write().unwrap();
+        stores.insert(s, store)
     }
 
     fn get_store(&self, url: &Url) -> Option<Arc<dyn ObjectStore>> {
         let s = get_url_key(url);
-        self.object_stores
-            .entry(s)
-            .or_try_insert_with(|| match parse_url(url) {
-                Ok((store, _)) => Ok(Arc::new(store)),
-                Err(e) => Err(e),
-            })
-            .map(|o| Arc::clone(o.value()))
-            .ok()
+        let mut stores = self.object_stores.write().unwrap();
+
+        if let Some(store) = stores.get(&s) {
+            return Some(Arc::clone(store));
+        }
+
+        match parse_url(url) {
+            Ok((store, _)) => {
+                let store = Arc::new(store);
+                stores.insert(s, store.clone());
+                Some(store)
+            }
+            Err(_) => None,
+        }
     }
 
     fn list_urls(&self) -> Vec<String> {
-        self.object_stores.iter().map(|o| o.key().clone()).collect()
+        let stores = self.object_stores.read().unwrap();
+        stores.keys().cloned().collect()
     }
 }
 
