@@ -19,53 +19,64 @@
 
 # Changelog
 
-## [object_store_0.12.0](https://github.com/apache/arrow-rs/tree/object_store_0.12.0) (2025-03-05)
+## [v0.12.1](https://github.com/apache/arrow-rs-object-store/tree/v0.12.1) (2025-05-08)
 
-[Full Changelog](https://github.com/apache/arrow-rs/compare/object_store_0.11.2...object_store_0.12.0)
-
-**Breaking changes:**
-
-- feat: add `Extensions` to object store `PutMultipartOpts` [\#7214](https://github.com/apache/arrow-rs/pull/7214) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([crepererum](https://github.com/crepererum))
-- feat: add `Extensions` to object store `PutOptions` [\#7213](https://github.com/apache/arrow-rs/pull/7213) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([crepererum](https://github.com/crepererum))
-- chore: enable conditional put by default for S3 [\#7181](https://github.com/apache/arrow-rs/pull/7181) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([meteorgan](https://github.com/meteorgan))
-- feat: add `Extensions` to object store `GetOptions` [\#7170](https://github.com/apache/arrow-rs/pull/7170) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([crepererum](https://github.com/crepererum))
-- feat\(object\_store\): Override DNS Resolution to Randomize IP Selection [\#7123](https://github.com/apache/arrow-rs/pull/7123) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([crepererum](https://github.com/crepererum))
-- Use `u64` range instead of `usize`, for better wasm32 support [\#6961](https://github.com/apache/arrow-rs/pull/6961) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([XiangpengHao](https://github.com/XiangpengHao))
-- object\_store: Add enabled-by-default "fs" feature [\#6636](https://github.com/apache/arrow-rs/pull/6636) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([Turbo87](https://github.com/Turbo87))
-- Return `BoxStream` with `'static` lifetime from `ObjectStore::list` [\#6619](https://github.com/apache/arrow-rs/pull/6619) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([kylebarron](https://github.com/kylebarron))
-- object\_store: Migrate from snafu to thiserror [\#6266](https://github.com/apache/arrow-rs/pull/6266) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([Turbo87](https://github.com/Turbo87))
+[Full Changelog](https://github.com/apache/arrow-rs-object-store/compare/v0.12.0...v0.12.1)
 
 **Implemented enhancements:**
 
-- Object Store: S3 IP address selection is biased [\#7117](https://github.com/apache/arrow-rs/issues/7117) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- object\_store: GCSObjectStore should derive Clone [\#7113](https://github.com/apache/arrow-rs/issues/7113) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- Remove all RCs after release [\#7059](https://github.com/apache/arrow-rs/issues/7059) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- LocalFileSystem::list\_with\_offset is very slow over network file system [\#7018](https://github.com/apache/arrow-rs/issues/7018) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
-- Release object store `0.11.2` \(non API breaking\) Around Dec 15 2024 [\#6902](https://github.com/apache/arrow-rs/issues/6902) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- Support Alibaba OSS Object Storage [\#323](https://github.com/apache/arrow-rs-object-store/issues/323)
+- Enable anonymous access to GCS buckets [\#302](https://github.com/apache/arrow-rs-object-store/issues/302)
+- \[object\_store\] Run requests on a different tokio runtime [\#13](https://github.com/apache/arrow-rs-object-store/issues/13)
+- \[object\_store\] consider migrating `humantime` to `jiff` [\#292](https://github.com/apache/arrow-rs-object-store/issues/292)
+- Support EKS Pod Identity \(alternative to IRSA\) [\#282](https://github.com/apache/arrow-rs-object-store/issues/282)
+- Release object\_store `0.12.0` \(API breaking\) Around Feb 30 2025 [\#28](https://github.com/apache/arrow-rs-object-store/issues/28)
+- Object\_store: Create an upload method that handles concurrency [\#279](https://github.com/apache/arrow-rs-object-store/issues/279)
+- Discuss: Release object store `0.12.0` \(breaking\) or `0.11.2` \(non breaking API\) around Dec 15, 2024 [\#306](https://github.com/apache/arrow-rs-object-store/issues/306)
+- object\_store: Retry on connection duration timeouts \(retry / recover after partially reading a streaming response\) [\#53](https://github.com/apache/arrow-rs-object-store/issues/53)
+- \[object-store\] re-export `hyper` [\#293](https://github.com/apache/arrow-rs-object-store/issues/293)
+- object\_store: abort\_multipart\(\) should return NotFound error if not found [\#146](https://github.com/apache/arrow-rs-object-store/issues/146)
+- Make `GetOptionsExt` publicly usable [\#261](https://github.com/apache/arrow-rs-object-store/issues/261)
 
 **Fixed bugs:**
 
-- LocalFileSystem errors with satisfiable range request [\#6749](https://github.com/apache/arrow-rs/issues/6749) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)]
+- Incorrect token sent as part of url signing function. [\#337](https://github.com/apache/arrow-rs-object-store/issues/337)
+- Azure Gen2 broken on latest [\#320](https://github.com/apache/arrow-rs-object-store/issues/320)
+- object\_store: Azure brokenness on 0.12.0 [\#326](https://github.com/apache/arrow-rs-object-store/issues/326)
+- Generic S3 error: Client error with status 411 Length Required [\#278](https://github.com/apache/arrow-rs-object-store/issues/278)
+
+**Closed issues:**
+
+- CI doesn't run on PRs [\#335](https://github.com/apache/arrow-rs-object-store/issues/335)
+- Some Inconsistencies in the Path and List [\#327](https://github.com/apache/arrow-rs-object-store/issues/327)
+- Add allow-list to restrict access to local files with LocalFileSystem [\#312](https://github.com/apache/arrow-rs-object-store/issues/312)
+- Query on usage of experimental package ring [\#310](https://github.com/apache/arrow-rs-object-store/issues/310)
+- \[EPIC\] Port object\_store content from arrow-rs repository [\#2](https://github.com/apache/arrow-rs-object-store/issues/2)
+- \[Object Store\] Make the service account used when interacting with the metadata url more flexible [\#265](https://github.com/apache/arrow-rs-object-store/issues/265)
 
 **Merged pull requests:**
 
-- ObjectStore WASM32 Support [\#7226](https://github.com/apache/arrow-rs/pull/7226) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
-- \[main\] Bump arrow version to 54.2.1 \(\#7207\) [\#7212](https://github.com/apache/arrow-rs/pull/7212) ([alamb](https://github.com/alamb))
-- Decouple ObjectStore from Reqwest [\#7183](https://github.com/apache/arrow-rs/pull/7183) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
-- object\_store: Disable all compression formats in HTTP reqwest client [\#7143](https://github.com/apache/arrow-rs/pull/7143) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([kylewlacy](https://github.com/kylewlacy))
-- refactor: remove unused `async` from `InMemory::entry` [\#7133](https://github.com/apache/arrow-rs/pull/7133) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([crepererum](https://github.com/crepererum))
-- object\_store/gcp: derive Clone for GoogleCloudStorage [\#7112](https://github.com/apache/arrow-rs/pull/7112) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([james-rms](https://github.com/james-rms))
-- Update version to 54.2.0 and add CHANGELOG [\#7110](https://github.com/apache/arrow-rs/pull/7110) ([alamb](https://github.com/alamb))
-- Remove all RCs after release [\#7060](https://github.com/apache/arrow-rs/pull/7060) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([kou](https://github.com/kou))
-- Update release schedule README.md [\#7053](https://github.com/apache/arrow-rs/pull/7053) ([alamb](https://github.com/alamb))
-- Create GitHub releases automatically on tagging [\#7042](https://github.com/apache/arrow-rs/pull/7042) ([kou](https://github.com/kou))
-- Change Log On Succesful S3 Copy / Multipart Upload to Debug [\#7033](https://github.com/apache/arrow-rs/pull/7033) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([diptanu](https://github.com/diptanu))
-- Prepare for `54.1.0` release [\#7031](https://github.com/apache/arrow-rs/pull/7031) ([alamb](https://github.com/alamb))
-- Add a custom implementation `LocalFileSystem::list_with_offset`  [\#7019](https://github.com/apache/arrow-rs/pull/7019) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([corwinjoy](https://github.com/corwinjoy))
-- Improve docs for `AmazonS3Builder::from_env` [\#6977](https://github.com/apache/arrow-rs/pull/6977) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([kylebarron](https://github.com/kylebarron))
-- Fix WASM CI for Rust 1.84 release [\#6963](https://github.com/apache/arrow-rs/pull/6963) ([alamb](https://github.com/alamb))
-- Update itertools requirement from 0.13.0 to 0.14.0 in /object\_store [\#6925](https://github.com/apache/arrow-rs/pull/6925) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([dependabot[bot]](https://github.com/apps/dependabot))
-- Fix LocalFileSystem with range request that ends beyond end of file [\#6751](https://github.com/apache/arrow-rs/pull/6751) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([kylebarron](https://github.com/kylebarron))
+- chore: Add anda\_object\_store to README [\#346](https://github.com/apache/arrow-rs-object-store/pull/346) ([zensh](https://github.com/zensh))
+- Update nix requirement from 0.29.0 to 0.30.0 [\#344](https://github.com/apache/arrow-rs-object-store/pull/344) ([dependabot[bot]](https://github.com/apps/dependabot))
+- Fix GCP signing token [\#338](https://github.com/apache/arrow-rs-object-store/pull/338) ([jackm-mimica](https://github.com/jackm-mimica))
+- Fix query parameter signing in Azure [\#334](https://github.com/apache/arrow-rs-object-store/pull/334) ([AdamGS](https://github.com/AdamGS))
+- feat: add EKS Pod Identity support \(\#282\) [\#333](https://github.com/apache/arrow-rs-object-store/pull/333) ([andreasbros](https://github.com/andreasbros))
+- feat: Add `SpawnService` and `SpawnedReqwestConnector` for running requests on a different runtime [\#332](https://github.com/apache/arrow-rs-object-store/pull/332) ([ion-elgreco](https://github.com/ion-elgreco))
+- Support `object_store` with wasm: Default wasm32-unknown-unknown HttpConnector [\#329](https://github.com/apache/arrow-rs-object-store/pull/329) ([H-Plus-Time](https://github.com/H-Plus-Time))
+- Enable anonymous access to GCS buckets [\#322](https://github.com/apache/arrow-rs-object-store/pull/322) ([kylebarron](https://github.com/kylebarron))
+- Fix semantic versioning link in README.md [\#317](https://github.com/apache/arrow-rs-object-store/pull/317) ([lewiszlw](https://github.com/lewiszlw))
+- feat: make some helpers/utils public [\#316](https://github.com/apache/arrow-rs-object-store/pull/316) ([crepererum](https://github.com/crepererum))
+- chore: fix `integration` feature [\#314](https://github.com/apache/arrow-rs-object-store/pull/314) ([crepererum](https://github.com/crepererum))
+- Minor: Update release calendar [\#308](https://github.com/apache/arrow-rs-object-store/pull/308) ([alamb](https://github.com/alamb))
+- Update dependabot config after repo move [\#305](https://github.com/apache/arrow-rs-object-store/pull/305) ([mbrobbel](https://github.com/mbrobbel))
+- Update repo link in Cargo.toml [\#304](https://github.com/apache/arrow-rs-object-store/pull/304) ([mbrobbel](https://github.com/mbrobbel))
+- Bump `rand` to 0.9 [\#303](https://github.com/apache/arrow-rs-object-store/pull/303) ([mbrobbel](https://github.com/mbrobbel))
+- Add content length to PUT GCP multipart complete [\#257](https://github.com/apache/arrow-rs-object-store/pull/257) ([jkosh44](https://github.com/jkosh44))
+- Update README.md and Contributing guidelines [\#8](https://github.com/apache/arrow-rs-object-store/pull/8) ([alamb](https://github.com/alamb))
+- Tweaks: homepage and fix RAT [\#7](https://github.com/apache/arrow-rs-object-store/pull/7) ([alamb](https://github.com/alamb))
+- Fix CI jobs [\#6](https://github.com/apache/arrow-rs-object-store/pull/6) ([alamb](https://github.com/alamb))
+- Port `.github` templates and checks to arrow-rs-object-store crate [\#4](https://github.com/apache/arrow-rs-object-store/pull/4) ([alamb](https://github.com/alamb))
+- Import `object_store`, with history, from arrow-rs [\#3](https://github.com/apache/arrow-rs-object-store/pull/3) ([alamb](https://github.com/alamb))
 
 
 

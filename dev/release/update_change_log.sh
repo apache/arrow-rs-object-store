@@ -43,7 +43,7 @@ sed -i.bak '1,18d' "${OUTPUT_PATH}"
 pushd "${SOURCE_TOP_DIR}"
 docker run -it --rm -e CHANGELOG_GITHUB_TOKEN="$CHANGELOG_GITHUB_TOKEN" -v "$(pwd)":/usr/local/src/your-app githubchangeloggenerator/github-changelog-generator \
     --user apache \
-    --project arrow-rs \
+    --project arrow-rs-object-store \
     --cache-file=.githubchangeloggenerator.cache \
     --cache-log=.githubchangeloggenerator.cache.log \
     --http-cache \
