@@ -21,7 +21,7 @@
 //! when a URL is resolved to an ObjectStore. It also serves as a cache for object stores
 //! to avoid repeated creation.
 
-use crate::{parse_url_opts, ObjectStore};
+use crate::{parse_url, ObjectStore};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use url::Url;
@@ -74,22 +74,6 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     /// the `url` and [`ObjectStoreRegistry`] implementation. An [`ObjectStore`] may be lazily
     /// created and registered.
     fn get_store(&self, url: &Url) -> Option<Arc<dyn ObjectStore>>;
-
-    /// Get a suitable store for the provided URL. For example:
-    ///
-    /// - URL with scheme `file:///` or no scheme will return the default LocalFS store
-    /// - URL with scheme `s3://bucket/` will return the S3 store
-    /// - URL with scheme `hdfs://hostname:port/` will return the hdfs store
-    ///
-    /// If no [`ObjectStore`] found for the `url`, ad-hoc discovery may be executed depending on
-    /// the `url` and [`ObjectStoreRegistry`] implementation. An [`ObjectStore`] may be lazily
-    /// created and registered. If `opts` are supplied, they will be passed to the ad-hoc discovery
-    /// function.
-    fn get_store_with_opts<I, K, V>(&self, url: &Url, opts: I) -> Option<Arc<dyn ObjectStore>>
-    where
-        I: IntoIterator<Item = (K, V)>,
-        K: AsRef<str>,
-        V: Into<String>;
 
     /// List all registered URLs
     fn list_urls(&self) -> Vec<String>;
@@ -144,15 +128,6 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     }
 
     fn get_store(&self, url: &Url) -> Option<Arc<dyn ObjectStore>> {
-        self.get_store_with_opts(url, std::iter::empty::<(&str, &str)>())
-    }
-
-    fn get_store_with_opts<I, K, V>(&self, url: &Url, opts: I) -> Option<Arc<dyn ObjectStore>>
-    where
-        I: IntoIterator<Item = (K, V)>,
-        K: AsRef<str>,
-        V: Into<String>,
-    {
         let s = get_url_key(url);
         let mut stores = self.object_stores.write().unwrap();
 
@@ -160,7 +135,7 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
             return Some(Arc::clone(store));
         }
 
-        match parse_url_opts(url, opts) {
+        match parse_url(url) {
             Ok((store, _)) => {
                 let store = Arc::from(store);
                 stores.insert(s, Arc::clone(&store));
