@@ -53,8 +53,7 @@ fi
 
 object_store_version=$1
 rc=$2
-
-tag=object_store_${object_store_version}
+tag=v${object_store_version}
 
 release=apache-arrow-object-store-rs-${object_store_version}
 distdir=${SOURCE_TOP_DIR}/dev/dist/${release}-rc${rc}
@@ -98,16 +97,16 @@ The vote will be open for at least 72 hours.
 [ ] +0
 [ ] -1 Do not release this as Apache Arrow Rust Object Store ${version} because...
 
-[1]: https://github.com/apache/arrow-rs/tree/${release_hash}
+[1]: https://github.com/apache/arrow-rs-object-store/tree/${release_hash}
 [2]: ${url}
-[3]: https://github.com/apache/arrow-rs/blob/${release_hash}/object_store/CHANGELOG.md
-[4]: https://github.com/apache/arrow-rs/blob/main/object_store/dev/release/verify-release-candidate.sh
+[3]: https://github.com/apache/arrow-rs-object-store/blob/${release_hash}/object_store/CHANGELOG.md
+[4]: https://github.com/apache/arrow-rs-object-store/blob/main/object_store/dev/release/verify-release-candidate.sh
 MAIL
 echo "---------------------------------------------------------"
 
 
 # create <tarball> containing the files in git at $release_hash
-# the files in the tarball are prefixed with {object_store_version=} (e.g. 0.4.0)
+# the files in the tarball are prefixed with {tag=} (e.g. 0.4.0)
 mkdir -p ${distdir}
 (cd "${SOURCE_TOP_DIR}" && git archive ${release_hash} --prefix ${release}/ | gzip > ${tarball})
 

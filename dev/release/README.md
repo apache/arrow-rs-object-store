@@ -106,7 +106,7 @@ distribution servers.
 
 While the official release artifact is a signed tarball, we also tag the commit it was created for convenience and code archaeology.
 
-For `object_store` releases, use a string such as `object_store_0.4.0` as the `<version>`.
+Use a string such as `v0.4.0` as the `<version>`.
 
 Create and push the tag thusly:
 
