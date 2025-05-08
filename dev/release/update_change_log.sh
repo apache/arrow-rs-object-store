@@ -22,15 +22,15 @@
 # https://github.com/github-changelog-generator/github-changelog-generator
 #
 # With the config located in
-# arrow-rs/object_store/.github_changelog_generator
+# arrow-rs-object-store/.github_changelog_generator
 #
 # Usage:
 # CHANGELOG_GITHUB_TOKEN=<TOKEN> ./update_change_log.sh
 
 set -e
 
-SINCE_TAG="object_store_0.11.2"
-FUTURE_RELEASE="object_store_0.12.0"
+SINCE_TAG="v0.12.0"
+FUTURE_RELEASE="v0.12.1"
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
@@ -40,8 +40,6 @@ OUTPUT_PATH="${SOURCE_TOP_DIR}/CHANGELOG.md"
 # remove license header so github-changelog-generator has a clean base to append
 sed -i.bak '1,18d' "${OUTPUT_PATH}"
 
-# use exclude-tags-regex to filter out tags used for arrow
-# crates and only look at tags that begin with `object_store_`
 pushd "${SOURCE_TOP_DIR}"
 docker run -it --rm -e CHANGELOG_GITHUB_TOKEN="$CHANGELOG_GITHUB_TOKEN" -v "$(pwd)":/usr/local/src/your-app githubchangeloggenerator/github-changelog-generator \
     --user apache \
@@ -50,8 +48,6 @@ docker run -it --rm -e CHANGELOG_GITHUB_TOKEN="$CHANGELOG_GITHUB_TOKEN" -v "$(pw
     --cache-log=.githubchangeloggenerator.cache.log \
     --http-cache \
     --max-issues=600 \
-    --include-labels="object-store" \
-    --exclude-tags-regex "(^\d+\.\d+\.\d+$)|(rc)" \
     --since-tag ${SINCE_TAG} \
     --future-release ${FUTURE_RELEASE}
 
