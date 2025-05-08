@@ -30,9 +30,7 @@
 - \[object\_store\] Run requests on a different tokio runtime [\#13](https://github.com/apache/arrow-rs-object-store/issues/13)
 - \[object\_store\] consider migrating `humantime` to `jiff` [\#292](https://github.com/apache/arrow-rs-object-store/issues/292)
 - Support EKS Pod Identity \(alternative to IRSA\) [\#282](https://github.com/apache/arrow-rs-object-store/issues/282)
-- Release object\_store `0.12.0` \(API breaking\) Around Feb 30 2025 [\#28](https://github.com/apache/arrow-rs-object-store/issues/28)
 - Object\_store: Create an upload method that handles concurrency [\#279](https://github.com/apache/arrow-rs-object-store/issues/279)
-- Discuss: Release object store `0.12.0` \(breaking\) or `0.11.2` \(non breaking API\) around Dec 15, 2024 [\#306](https://github.com/apache/arrow-rs-object-store/issues/306)
 - object\_store: Retry on connection duration timeouts \(retry / recover after partially reading a streaming response\) [\#53](https://github.com/apache/arrow-rs-object-store/issues/53)
 - \[object-store\] re-export `hyper` [\#293](https://github.com/apache/arrow-rs-object-store/issues/293)
 - object\_store: abort\_multipart\(\) should return NotFound error if not found [\#146](https://github.com/apache/arrow-rs-object-store/issues/146)
@@ -51,7 +49,6 @@
 - Some Inconsistencies in the Path and List [\#327](https://github.com/apache/arrow-rs-object-store/issues/327)
 - Add allow-list to restrict access to local files with LocalFileSystem [\#312](https://github.com/apache/arrow-rs-object-store/issues/312)
 - Query on usage of experimental package ring [\#310](https://github.com/apache/arrow-rs-object-store/issues/310)
-- \[EPIC\] Port object\_store content from arrow-rs repository [\#2](https://github.com/apache/arrow-rs-object-store/issues/2)
 - \[Object Store\] Make the service account used when interacting with the metadata url more flexible [\#265](https://github.com/apache/arrow-rs-object-store/issues/265)
 
 **Merged pull requests:**
@@ -67,15 +64,10 @@
 - Fix semantic versioning link in README.md [\#317](https://github.com/apache/arrow-rs-object-store/pull/317) ([lewiszlw](https://github.com/lewiszlw))
 - feat: make some helpers/utils public [\#316](https://github.com/apache/arrow-rs-object-store/pull/316) ([crepererum](https://github.com/crepererum))
 - chore: fix `integration` feature [\#314](https://github.com/apache/arrow-rs-object-store/pull/314) ([crepererum](https://github.com/crepererum))
-- Minor: Update release calendar [\#308](https://github.com/apache/arrow-rs-object-store/pull/308) ([alamb](https://github.com/alamb))
-- Update dependabot config after repo move [\#305](https://github.com/apache/arrow-rs-object-store/pull/305) ([mbrobbel](https://github.com/mbrobbel))
-- Update repo link in Cargo.toml [\#304](https://github.com/apache/arrow-rs-object-store/pull/304) ([mbrobbel](https://github.com/mbrobbel))
 - Bump `rand` to 0.9 [\#303](https://github.com/apache/arrow-rs-object-store/pull/303) ([mbrobbel](https://github.com/mbrobbel))
 - Add content length to PUT GCP multipart complete [\#257](https://github.com/apache/arrow-rs-object-store/pull/257) ([jkosh44](https://github.com/jkosh44))
 - Update README.md and Contributing guidelines [\#8](https://github.com/apache/arrow-rs-object-store/pull/8) ([alamb](https://github.com/alamb))
 - Tweaks: homepage and fix RAT [\#7](https://github.com/apache/arrow-rs-object-store/pull/7) ([alamb](https://github.com/alamb))
-- Fix CI jobs [\#6](https://github.com/apache/arrow-rs-object-store/pull/6) ([alamb](https://github.com/alamb))
-- Port `.github` templates and checks to arrow-rs-object-store crate [\#4](https://github.com/apache/arrow-rs-object-store/pull/4) ([alamb](https://github.com/alamb))
 - Import `object_store`, with history, from arrow-rs [\#3](https://github.com/apache/arrow-rs-object-store/pull/3) ([alamb](https://github.com/alamb))
 
 
