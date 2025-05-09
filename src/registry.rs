@@ -166,6 +166,8 @@ fn get_url_key(url: &Url) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(target_arch = "wasm32"))]
+    use crate::local::LocalFileSystem;
 
     #[test]
     fn test_get_url_key() {
@@ -185,23 +187,13 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn test_register_store() {
-        use crate::local::LocalFileSystem;
         let registry = DefaultObjectStoreRegistry::new();
         let url = Url::parse("file:///foo/bar").unwrap();
         let store = Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>;
         let old_store = registry.register_store(&url, Arc::clone(&store));
-        assert!(
-            old_store.is_none(),
-            "Should not return a previous store when registering a new one"
-        );
-        let retrieved_store = registry
-            .get_store(&url)
-            .expect("Should retrieve a store when a valid URL is used");
-        // Validate that it’s exactly the same Arc we registered above
-        assert!(
-            Arc::ptr_eq(&retrieved_store, &store),
-            "Retrieved store is not the same LocalFileSystem instance"
-        );
+        assert!(old_store.is_none());
+        let retrieved_store = registry.get_store(&url).unwrap();
+        assert!(Arc::ptr_eq(&retrieved_store, &store));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -210,9 +202,7 @@ mod tests {
         let registry = DefaultObjectStoreRegistry::new();
         let url = Url::parse("file:///foo/bar").unwrap();
         // on first get, should lazily create & register a LocalFileSystem
-        let retrieved_store = registry
-            .get_store(&url)
-            .expect("Should retrieve a store when a valid URL is used");
+        let retrieved_store = registry.get_store(&url).unwrap();
         // Validate that this really is a LocalFileSystem under the hood by
         // looking at its Debug representation
         let dbg = format!("{:?}", retrieved_store);
@@ -226,7 +216,6 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn test_list_urls() {
-        use crate::local::LocalFileSystem;
         let registry = DefaultObjectStoreRegistry::new();
         let url = Url::parse("file:///foo/bar").unwrap();
         let store = Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>;
@@ -241,5 +230,28 @@ mod tests {
         let registry = DefaultObjectStoreRegistry::new();
         let url = Url::parse("unknown://foo/bar").unwrap();
         assert!(registry.get_store(&url).is_none());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn test_subprefix_url_resolution() {
+        let registry = DefaultObjectStoreRegistry::new();
+        let base_url = Url::parse("file:///foo/bar").unwrap();
+        let store = Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>;
+        registry.register_store(&base_url, Arc::clone(&store));
+        let subprefix_url = Url::parse("file:///foo/bar/baz").unwrap();
+        let retrieved_store = registry.get_store(&subprefix_url).unwrap();
+        assert!(Arc::ptr_eq(&retrieved_store, &store));
+    }
+
+    #[test]
+    fn test_invalid_file_url_format() {
+        let registry = DefaultObjectStoreRegistry::new();
+        let base_url = Url::parse("file:///foo/bar").unwrap();
+        let store = Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>;
+        registry.register_store(&base_url, Arc::clone(&store));
+        let invalid_url = Url::parse("file://foo/bar").unwrap();
+        let result = registry.get_store(&invalid_url);
+        assert!(result.is_none());
     }
 }
