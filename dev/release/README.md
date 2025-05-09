@@ -126,7 +126,7 @@ Pick numbers in sequential order, with `1` for `rc1`, `2` for `rc2`, etc.
 Run `create-tarball.sh` with the `<version>` tag and `<rc>` and you found in previous steps.
 
 ```shell
-./object_store/dev/release/create-tarball.sh 0.11.1 1
+./dev/release/create-tarball.sh 0.11.1 1
 ```
 
 The `create-tarball.sh` script
