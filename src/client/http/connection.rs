@@ -114,6 +114,7 @@ impl HttpError {
                 match e.kind() {
                     std::io::ErrorKind::TimedOut => kind = HttpErrorKind::Timeout,
                     std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::ConnectionReset
                     | std::io::ErrorKind::BrokenPipe
                     | std::io::ErrorKind::UnexpectedEof => kind = HttpErrorKind::Interrupted,
                     _ => {}
