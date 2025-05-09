@@ -244,6 +244,7 @@ mod tests {
         assert!(Arc::ptr_eq(&retrieved_store, &store));
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn test_invalid_file_url_format() {
         let registry = DefaultObjectStoreRegistry::new();
