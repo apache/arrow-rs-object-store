@@ -77,8 +77,8 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     /// created and registered.
     fn get_store(&self, url: &Url) -> Option<Arc<dyn ObjectStore>>;
 
-    /// List all registered URLs
-    fn list_urls(&self) -> Vec<String>;
+    /// List all registered store prefixes
+    fn get_store_prefixes(&self) -> Vec<String>;
 }
 
 /// The default [`ObjectStoreRegistry`]
@@ -121,10 +121,10 @@ impl DefaultObjectStoreRegistry {
 impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     fn register_store(
         &self,
-        url: &Url,
+        prefix: &Url,
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
-        let s = get_url_key(url);
+        let s = get_url_key(prefix);
         let mut stores = self.object_stores.write().unwrap();
         stores.insert(s, store)
     }
@@ -147,7 +147,7 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
         }
     }
 
-    fn list_urls(&self) -> Vec<String> {
+    fn get_store_prefixes(&self) -> Vec<String> {
         let stores = self.object_stores.read().unwrap();
         stores.keys().cloned().collect()
     }
@@ -231,7 +231,7 @@ mod tests {
         let url = Url::parse("file:///foo/bar").unwrap();
         let store = Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>;
         registry.register_store(&url, store);
-        let urls = registry.list_urls();
+        let urls = registry.get_store_prefixes();
         assert_eq!(urls.len(), 1);
         assert_eq!(urls[0], "file://");
     }
