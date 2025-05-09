@@ -51,7 +51,7 @@ use url::Url;
 ///
 /// This allows for two different use-cases:
 ///
-/// 1. Systems where object store buckets are explicitly created using DDL, can register these
+/// 1. Systems where object store buckets are explicitly created using DDL, can use the provided [`DefaultObjectStoreRegistry`] to register these
 ///    buckets using [`ObjectStoreRegistry::register_store`]
 ///
 /// 2. Systems relying on ad-hoc discovery, without corresponding DDL, can create [`ObjectStore`]
