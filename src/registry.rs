@@ -57,8 +57,8 @@ use url::Url;
 /// 2. Systems relying on ad-hoc discovery, without corresponding DDL, can create [`ObjectStore`]
 ///    lazily by providing a custom implementation of [`ObjectStoreRegistry`]
 pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
-    /// Register a new store for any url's that begin with `prefix` 
-    /// 
+    /// Register a new store for any url's that begin with `prefix`
+    ///
     /// If a store with the same key existed before, it is replaced and returned
     fn register_store(
         &self,
