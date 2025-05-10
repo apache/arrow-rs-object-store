@@ -1061,15 +1061,15 @@ impl Debug for GetResultPayload {
     }
 }
 
-impl GetResult {
+impl GetResultPayload {
     /// Collects the data into a [`Bytes`]
-    pub async fn bytes(self) -> Result<Bytes> {
-        let len = self.range.end - self.range.start;
-        match self.payload {
+    pub async fn bytes(self, range: Range<u64>) -> Result<Bytes> {
+        let len = range.end - range.start;
+        match self {
             #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
-            GetResultPayload::File(mut file, path) => {
+            Self::File(mut file, path) => {
                 maybe_spawn_blocking(move || {
-                    file.seek(SeekFrom::Start(self.range.start as _))
+                    file.seek(SeekFrom::Start(range.start as _))
                         .map_err(|source| local::Error::Seek {
                             source,
                             path: path.clone(),
@@ -1088,7 +1088,7 @@ impl GetResult {
                 })
                 .await
             }
-            GetResultPayload::Stream(s) => collect_bytes(s, Some(len)).await,
+            Self::Stream(s) => collect_bytes(s, Some(len)).await,
         }
     }
 
@@ -1106,15 +1106,29 @@ impl GetResult {
     ///
     /// If not called from a tokio context, this will perform IO on the current thread with
     /// no additional complexity or overheads
-    pub fn into_stream(self) -> BoxStream<'static, Result<Bytes>> {
-        match self.payload {
+    pub fn into_stream(self, range: Range<u64>) -> BoxStream<'static, Result<Bytes>> {
+        match self {
             #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
-            GetResultPayload::File(file, path) => {
+            Self::File(file, path) => {
                 const CHUNK_SIZE: usize = 8 * 1024;
-                local::chunked_stream(file, path, self.range, CHUNK_SIZE)
+                local::chunked_stream(file, path, range, CHUNK_SIZE)
             }
-            GetResultPayload::Stream(s) => s,
+            Self::Stream(s) => s,
         }
+    }
+}
+
+impl GetResult {
+    /// Collects the data into a [`Bytes`]
+    pub async fn bytes(self) -> Result<Bytes> {
+        self.payload.bytes(self.range).await
+    }
+
+    /// Converts this into a byte stream
+    ///
+    /// See [`GetResultPayload::into_stream`] for more details.
+    pub fn into_stream(self) -> BoxStream<'static, Result<Bytes>> {
+        self.payload.into_stream(self.range)
     }
 }
 
