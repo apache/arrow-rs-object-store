@@ -29,7 +29,7 @@ use crate::gcp::credential::CredentialExt;
 use crate::gcp::{GcpCredential, GcpCredentialProvider, GcpSigningCredentialProvider, STORE};
 use crate::multipart::PartId;
 use crate::path::{Path, DELIMITER};
-use crate::util::hex_encode;
+use crate::util::{hex_encode, RangeValue};
 use crate::{
     Attribute, Attributes, ClientOptions, GetOptions, ListResult, MultipartId, PutMode,
     PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, RetryConfig,
@@ -617,7 +617,11 @@ impl GetClient for GoogleCloudStorageClient {
     };
 
     /// Perform a get request <https://cloud.google.com/storage/docs/xml-api/get-object-download>
-    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<HttpResponse> {
+    async fn get_request<R: RangeValue>(
+        &self,
+        path: &Path,
+        options: GetOptions<R>,
+    ) -> Result<HttpResponse> {
         let credential = self.get_credential().await?;
         let url = self.object_url(path);
 

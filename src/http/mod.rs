@@ -31,9 +31,11 @@
 //! [rfc2518]: https://datatracker.ietf.org/doc/html/rfc2518
 //! [WebDAV]: https://en.wikipedia.org/wiki/WebDAV
 
+use std::ops::Range;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use itertools::Itertools;
@@ -44,12 +46,14 @@ use crate::client::header::get_etag;
 use crate::client::{http_connector, HttpConnector};
 use crate::http::client::Client;
 use crate::path::Path;
+use crate::util::GetManyRanges;
 use crate::{
     ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
     ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, RetryConfig,
 };
 
 mod client;
+// mod range;
 
 #[derive(Debug, thiserror::Error)]
 enum Error {
@@ -127,6 +131,24 @@ impl ObjectStore for HttpStore {
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         self.client.get_opts(location, options).await
+    }
+
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
+        if self.client.supports_multiple_ranges() {
+            let options = GetOptions {
+                range: Some(GetManyRanges::from(ranges)),
+                ..Default::default()
+            };
+            self.client.get_ranges_opts(location, options).await
+        } else {
+            // use the default implementation if not supported
+            crate::util::coalesce_ranges(
+                ranges,
+                |range| self.get_range(location, range),
+                crate::util::OBJECT_STORE_COALESCE_DEFAULT,
+            )
+            .await
+        }
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
@@ -267,6 +289,7 @@ impl HttpBuilder {
 mod tests {
     use crate::integration::*;
     use crate::tests::*;
+    use crate::OBJECT_STORE_COALESCE_DEFAULT;
 
     use super::*;
 
@@ -286,5 +309,114 @@ mod tests {
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
+    }
+
+    #[tokio::test]
+    async fn makes_a_single_request_with_wide_range() {
+        let mut srv = mockito::Server::new_async().await;
+        let options = ClientOptions::new().with_allow_http(true);
+        let client = HttpBuilder::new()
+            .with_url(srv.url())
+            .with_client_options(options)
+            .build()
+            .unwrap();
+        let first = srv
+            .mock("GET", "/foo")
+            .match_header("range", "bytes=0-29")
+            .with_status(206)
+            .with_header("content-range", "bytes 0-29/42")
+            .with_body([0; 30])
+            .create_async()
+            .await;
+        let path = Path::from("/foo");
+        let res = client.get_ranges(&path, &[0..5, 25..30]).await;
+        first.assert_async().await;
+        res.unwrap();
+    }
+
+    #[tokio::test]
+    async fn makes_a_request_per_range() {
+        let mut srv = mockito::Server::new_async().await;
+        let options = ClientOptions::new().with_allow_http(true);
+        let client = HttpBuilder::new()
+            .with_url(srv.url())
+            .with_client_options(options)
+            .build()
+            .unwrap();
+        let first = srv
+            .mock("GET", "/foo")
+            .match_header("range", "bytes=0-9")
+            .with_status(206)
+            .with_header("content-range", "bytes 0-9/424242424242")
+            .with_body([0; 10])
+            .create_async()
+            .await;
+        let second = srv
+            .mock("GET", "/foo")
+            .match_header("range", "bytes=2097152-3145727")
+            .with_status(206)
+            .with_header("content-range", "bytes 2097152-3145727/424242424242")
+            .with_body([0; 3145727 - 2097152])
+            .create_async()
+            .await;
+        let path = Path::from("/foo");
+        let res = client
+            .get_ranges(
+                &path,
+                &[
+                    0..10,
+                    // it only creates a second request when the gap is wide enough
+                    (OBJECT_STORE_COALESCE_DEFAULT * 2)..(OBJECT_STORE_COALESCE_DEFAULT * 3),
+                ],
+            )
+            .await;
+        first.assert_async().await;
+        second.assert_async().await;
+        res.unwrap();
+    }
+
+    #[tokio::test]
+    async fn makes_a_request_with_multiple_range() {
+        let mut srv = mockito::Server::new_async().await;
+        let options = ClientOptions::new()
+            .with_allow_http(true)
+            .with_http_multiple_ranges();
+        let client = HttpBuilder::new()
+            .with_url(srv.url())
+            .with_client_options(options)
+            .build()
+            .unwrap();
+        let req = srv
+            .mock("GET", "/foo")
+            .match_header("range", "bytes=0-9, 2097152-3145727")
+            .with_status(206)
+            .with_header("Content-Type", "multipart/byteranges; boundary=boundary")
+            .with_body(
+                "--boundary\r\n\
+                Content-Type: text/plain\r\n\
+                \r\n\
+                This is part 1\r\n\
+                --boundary\r\n\
+                Content-Type: text/plain\r\n\
+                \r\n\
+                This is part 2\r\n\
+                --boundary--\r\n",
+            )
+            .create_async()
+            .await;
+        let path = Path::from("/foo");
+        let res = client
+            .get_ranges(
+                &path,
+                &[
+                    0..10,
+                    // it only creates a second request when the gap is wide enough
+                    (OBJECT_STORE_COALESCE_DEFAULT * 2)..(OBJECT_STORE_COALESCE_DEFAULT * 3),
+                ],
+            )
+            .await;
+        req.assert_async().await;
+        let values = res.unwrap();
+        assert_eq!(values.len(), 2);
     }
 }

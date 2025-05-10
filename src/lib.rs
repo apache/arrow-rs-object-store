@@ -923,7 +923,7 @@ pub struct ObjectMeta {
 
 /// Options for a get request, such as range
 #[derive(Debug, Default, Clone)]
-pub struct GetOptions {
+pub struct GetOptions<Range = GetRange> {
     /// Request will succeed if the `ObjectMeta::e_tag` matches
     /// otherwise returning [`Error::Precondition`]
     ///
@@ -966,7 +966,7 @@ pub struct GetOptions {
     /// otherwise returning [`Error::NotModified`]
     ///
     /// <https://datatracker.ietf.org/doc/html/rfc9110#name-range>
-    pub range: Option<GetRange>,
+    pub range: Option<Range>,
     /// Request a particular object version
     pub version: Option<String>,
     /// Request transfer of no content

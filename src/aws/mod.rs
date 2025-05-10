@@ -501,6 +501,7 @@ mod tests {
     use crate::integration::*;
     use crate::tests::*;
     use crate::ClientOptions;
+    use crate::GetRange;
     use base64::prelude::BASE64_STANDARD;
     use base64::Engine;
     use http::HeaderMap;
@@ -744,7 +745,7 @@ mod tests {
         for location in &locations {
             let res = store
                 .client
-                .get_request(location, GetOptions::default())
+                .get_request::<GetRange>(location, GetOptions::default())
                 .await
                 .unwrap();
             let headers = res.headers();
@@ -800,7 +801,7 @@ mod tests {
         for location in &locations {
             let res = store
                 .client
-                .get_request(location, GetOptions::default())
+                .get_request::<GetRange>(location, GetOptions::default())
                 .await
                 .unwrap();
             let headers = res.headers();

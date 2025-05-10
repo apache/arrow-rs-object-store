@@ -106,6 +106,10 @@ impl Client {
         }
     }
 
+    pub(crate) fn supports_multiple_ranges(&self) -> bool {
+        self.client_options.supports_multiple_ranges()
+    }
+
     pub(crate) fn base_url(&self) -> &Url {
         &self.url
     }
@@ -161,6 +165,67 @@ impl Client {
 
         Ok(())
     }
+
+    // pub(crate) async fn get_ranges(
+    //     &self,
+    //     location: &Path,
+    //     ranges: &[Range<u64>],
+    // ) -> Result<Vec<Bytes>> {
+    //     if ranges.is_empty() {
+    //         return Ok(Vec::default());
+    //     }
+
+    //     let url = self.path_url(location);
+
+    //     let res = self
+    //         .client
+    //         .request(Method::GET, url)
+    //         .header("Range", RangeValue::from(ranges).to_string())
+    //         .retryable(&self.retry_config)
+    //         .idempotent(true)
+    //         .send()
+    //         .await
+    //         .map_err(|source| match source.status() {
+    //             // some stores return METHOD_NOT_ALLOWED for get on directories
+    //             Some(StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED) => {
+    //                 crate::Error::NotFound {
+    //                     source: Box::new(source),
+    //                     path: location.to_string(),
+    //                 }
+    //             }
+    //             _ => Error::Request { source }.into(),
+    //         })?;
+
+    //     if res.status() != StatusCode::PARTIAL_CONTENT {
+    //         return Err(crate::Error::NotSupported {
+    //             source: Box::new(Error::RangeNotSupported {
+    //                 href: location.to_string(),
+    //             }),
+    //         });
+    //     }
+
+    //     let content_type = res.headers().get(CONTENT_TYPE);
+    //     let is_multiranges = content_type
+    //         .and_then(|v| v.to_str().ok())
+    //         .map(|v| v.starts_with("multipart/byteranges"))
+    //         .unwrap_or(false);
+
+    //     if ranges.len() == 1 && !is_multiranges {
+    //         let body = res
+    //             .into_body()
+    //             .bytes()
+    //             .await
+    //             .map_err(|source| Error::Reqwest { source })?;
+    //         return Ok(vec![body]);
+    //     }
+
+    //     super::range::parse_multipart_byteranges(res)
+    //         .await
+    //         .map_err(|err| crate::Error::Generic {
+    //             store: "HTTP",
+    //             source: Box::new(err),
+    //         })
+    // }
 
     pub(crate) async fn put(
         &self,
@@ -333,7 +398,11 @@ impl GetClient for Client {
         user_defined_metadata_prefix: None,
     };
 
-    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<HttpResponse> {
+    async fn get_request<R: Send + ToString>(
+        &self,
+        path: &Path,
+        options: GetOptions<R>,
+    ) -> Result<HttpResponse> {
         let url = self.path_url(path);
         let method = match options.head {
             true => Method::HEAD,

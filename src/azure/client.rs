@@ -26,7 +26,7 @@ use crate::client::retry::RetryExt;
 use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpRequest, HttpResponse};
 use crate::multipart::PartId;
 use crate::path::DELIMITER;
-use crate::util::{deserialize_rfc1123, GetRange};
+use crate::util::{deserialize_rfc1123, GetRange, RangeValue};
 use crate::{
     Attribute, Attributes, ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode,
     PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, RetryConfig, TagSet,
@@ -899,13 +899,27 @@ impl GetClient for AzureClient {
     /// Make an Azure GET request
     /// <https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob>
     /// <https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties>
-    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<HttpResponse> {
+    async fn get_request<R: RangeValue>(
+        &self,
+        path: &Path,
+        options: GetOptions<R>,
+    ) -> Result<HttpResponse> {
         // As of 2024-01-02, Azure does not support suffix requests,
         // so we should fail fast here rather than sending one
-        if let Some(GetRange::Suffix(_)) = options.range.as_ref() {
-            return Err(crate::Error::NotSupported {
-                source: "Azure does not support suffix range requests".into(),
-            });
+        if let Some(range) = options.range.as_ref() {
+            match range.as_single() {
+                Some(&GetRange::Suffix(_)) => {
+                    return Err(crate::Error::NotSupported {
+                        source: "Azure does not support suffix range requests".into(),
+                    });
+                }
+                None => {
+                    return Err(crate::Error::NotSupported {
+                        source: "Azure does not support multiple range requests".into(),
+                    });
+                }
+                _ => {}
+            }
         }
 
         let credential = self.get_credential().await?;
