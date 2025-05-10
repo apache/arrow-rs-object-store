@@ -41,9 +41,9 @@ use crate::client::CredentialProvider;
 use crate::gcp::credential::GCSAuthorizer;
 use crate::signer::Signer;
 use crate::{
-    multipart::PartId, path::Path, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
-    UploadPart,
+    multipart::PartId, path::Path, GetOptions, GetResult, ListOptions, ListResult, MultipartId,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult,
+    Result, UploadPart,
 };
 use async_trait::async_trait;
 use client::GoogleCloudStorageClient;
@@ -187,6 +187,14 @@ impl ObjectStore for GoogleCloudStorage {
         self.client.list(prefix)
     }
 
+    fn list_opts(
+        &self,
+        prefix: Option<&Path>,
+        options: ListOptions,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        self.client.list_opts(prefix, options)
+    }
+
     fn list_with_offset(
         &self,
         prefix: Option<&Path>,
@@ -288,6 +296,7 @@ mod test {
         put_get_delete_list(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
+        list_with_composite_conditions(&integration).await;
         rename_and_copy(&integration).await;
         if integration.client.config().base_url == DEFAULT_GCS_BASE_URL {
             // Fake GCS server doesn't currently honor ifGenerationMatch

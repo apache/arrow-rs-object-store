@@ -730,6 +730,18 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Note: the order of returned [`ObjectMeta`] is not guaranteed
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>>;
 
+    /// List all the objects with given options defined in [`ListOptions`]
+    ///
+    /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar` is a prefix of `foo/bar/x` but not of
+    /// `foo/bar_baz/x`. List is recursive, i.e. `foo/bar/more/x` will be included.
+    fn list_opts(
+        &self,
+        _prefix: Option<&Path>,
+        _options: ListOptions,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        futures::stream::once(futures::future::ready(Err(Error::NotImplemented))).boxed()
+    }
+
     /// List all the objects with the given prefix and a location greater than `offset`
     ///
     /// Some stores, such as S3 and GCS, may be able to push `offset` down to reduce
@@ -855,6 +867,14 @@ macro_rules! as_ref_impl {
 
             fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
                 self.as_ref().list(prefix)
+            }
+
+            fn list_opts(
+                &self,
+                prefix: Option<&Path>,
+                options: ListOptions,
+            ) -> BoxStream<'static, Result<ListResult>> {
+                self.as_ref().list_opts(prefix, options)
             }
 
             fn list_with_offset(
@@ -1172,8 +1192,6 @@ pub struct PutOptions {
     /// that need to pass context-specific information (like tracing spans) via trait methods.
     ///
     /// These extensions are ignored entirely by backends offered through this crate.
-    ///
-    /// They are also eclused from [`PartialEq`] and [`Eq`].
     pub extensions: ::http::Extensions,
 }
 
@@ -1239,8 +1257,6 @@ pub struct PutMultipartOpts {
     /// that need to pass context-specific information (like tracing spans) via trait methods.
     ///
     /// These extensions are ignored entirely by backends offered through this crate.
-    ///
-    /// They are also eclused from [`PartialEq`] and [`Eq`].
     pub extensions: ::http::Extensions,
 }
 
@@ -1289,6 +1305,22 @@ pub struct PutResult {
     pub e_tag: Option<String>,
     /// A version indicator for the newly created object
     pub version: Option<String>,
+}
+
+/// Options for [`ObjectStore::list_opts`]
+#[derive(Debug, Clone, Default)]
+pub struct ListOptions {
+    /// Only list objects greater than `offset`
+    pub offset: Option<Path>,
+    /// Only list up to the next path delimiter `/`  [`ListResult`]
+    ///
+    /// See [`ObjectStore::list_with_delimiter`]
+    pub delimiter: bool,
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to pass context-specific information (like tracing spans) via trait methods.
+    ///
+    /// These extensions are ignored entirely by backends offered through this crate.
+    pub extensions: ::http::Extensions,
 }
 
 /// A specialized `Result` for object store-related errors

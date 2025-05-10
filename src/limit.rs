@@ -18,9 +18,9 @@
 //! An object store that limits the maximum concurrency of the wrapped implementation
 
 use crate::{
-    BoxStream, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, Path, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, StreamExt,
-    UploadPart,
+    BoxStream, GetOptions, GetResult, GetResultPayload, ListOptions, ListResult, MultipartUpload,
+    ObjectMeta, ObjectStore, Path, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
+    StreamExt, UploadPart,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -151,6 +151,23 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
             .acquire_owned()
             .map(move |permit| {
                 let s = inner.list(prefix.as_ref());
+                PermitWrapper::new(s, permit.unwrap())
+            });
+        fut.into_stream().flatten().boxed()
+    }
+
+    fn list_opts(
+        &self,
+        prefix: Option<&Path>,
+        options: ListOptions,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        let prefix = prefix.cloned();
+        let options = options.clone();
+        let inner = Arc::clone(&self.inner);
+        let fut = Arc::clone(&self.semaphore)
+            .acquire_owned()
+            .map(move |permit| {
+                let s = inner.list_opts(prefix.as_ref(), options);
                 PermitWrapper::new(s, permit.unwrap())
             });
         fut.into_stream().flatten().boxed()

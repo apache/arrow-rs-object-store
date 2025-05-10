@@ -655,6 +655,7 @@ impl ListClient for Arc<GoogleCloudStorageClient> {
         delimiter: bool,
         page_token: Option<&str>,
         offset: Option<&str>,
+        extensions: http::Extensions,
     ) -> Result<(ListResult, Option<String>)> {
         let credential = self.get_credential().await?;
         let url = format!("{}/{}", self.config.base_url, self.bucket_name_encoded);
@@ -686,6 +687,7 @@ impl ListClient for Arc<GoogleCloudStorageClient> {
             .request(Method::GET, url)
             .query(&query)
             .with_bearer_auth(credential.as_deref())
+            .extensions(extensions)
             .send_retry(&self.config.retry_config)
             .await
             .map_err(|source| Error::ListRequest { source })?

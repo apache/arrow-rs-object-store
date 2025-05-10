@@ -26,8 +26,8 @@ use crate::{
     multipart::{MultipartStore, PartId},
     path::Path,
     signer::Signer,
-    GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
+    GetOptions, GetResult, ListOptions, ListResult, MultipartId, MultipartUpload, ObjectMeta,
+    ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 use async_trait::async_trait;
 use futures::stream::{BoxStream, StreamExt, TryStreamExt};
@@ -38,7 +38,7 @@ use std::time::Duration;
 use url::Url;
 
 use crate::client::get::GetClientExt;
-use crate::client::list::ListClientExt;
+use crate::client::list::{filter_list_result, ListClientExt};
 use crate::client::CredentialProvider;
 pub use credential::{authority_hosts, AzureAccessKey, AzureAuthorizer};
 
@@ -119,9 +119,6 @@ impl ObjectStore for MicrosoftAzure {
         self.client.delete_request(location, &()).await
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.client.list(prefix)
-    }
     fn delete_stream<'a>(
         &'a self,
         locations: BoxStream<'a, Result<Path>>,
@@ -140,6 +137,26 @@ impl ObjectStore for MicrosoftAzure {
             .buffered(20)
             .try_flatten()
             .boxed()
+    }
+
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+        self.client.list(prefix)
+    }
+
+    fn list_opts(
+        &self,
+        prefix: Option<&Path>,
+        options: ListOptions,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        // Azure does not support start-after
+        let stream = self.client.list_opts(
+            prefix,
+            ListOptions {
+                offset: None,
+                ..options
+            },
+        );
+        filter_list_result(stream, options.offset)
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
@@ -308,6 +325,7 @@ mod tests {
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
+        list_with_composite_conditions(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;

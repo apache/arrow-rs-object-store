@@ -28,8 +28,8 @@ use futures::StreamExt;
 
 use crate::path::Path;
 use crate::{
-    GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMultipartOpts, PutOptions, PutResult,
+    GetOptions, GetResult, GetResultPayload, ListOptions, ListResult, MultipartUpload, ObjectMeta,
+    ObjectStore, PutMultipartOpts, PutOptions, PutResult,
 };
 use crate::{PutPayload, Result};
 
@@ -154,6 +154,14 @@ impl ObjectStore for ChunkedStore {
         self.inner.list(prefix)
     }
 
+    fn list_opts(
+        &self,
+        prefix: Option<&Path>,
+        options: ListOptions,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        self.inner.list_opts(prefix, options)
+    }
+
     fn list_with_offset(
         &self,
         prefix: Option<&Path>,
@@ -228,6 +236,7 @@ mod tests {
             get_opts(&integration).await;
             list_uses_directories_correctly(&integration).await;
             list_with_delimiter(&integration).await;
+            list_with_composite_conditions(&integration).await;
             rename_and_copy(&integration).await;
             copy_if_not_exists(&integration).await;
             stream_get(&integration).await;

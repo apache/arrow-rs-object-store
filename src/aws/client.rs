@@ -880,6 +880,7 @@ impl ListClient for Arc<S3Client> {
         delimiter: bool,
         token: Option<&str>,
         offset: Option<&str>,
+        extensions: http::Extensions,
     ) -> Result<(ListResult, Option<String>)> {
         let credential = self.config.get_session_credential().await?;
         let url = self.config.bucket_endpoint.clone();
@@ -909,6 +910,7 @@ impl ListClient for Arc<S3Client> {
             .request(Method::GET, &url)
             .query(&query)
             .with_aws_sigv4(credential.authorizer(), None)
+            .extensions(extensions)
             .send_retry(&self.config.retry_config)
             .await
             .map_err(|source| Error::ListRequest { source })?
