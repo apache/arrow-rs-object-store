@@ -964,6 +964,7 @@ impl ListClient for Arc<AzureClient> {
         delimiter: bool,
         token: Option<&str>,
         offset: Option<&str>,
+        ignore_unparsable_paths: bool
     ) -> Result<(ListResult, Option<String>)> {
         assert!(offset.is_none()); // Not yet supported
 
@@ -1010,7 +1011,7 @@ impl ListClient for Arc<AzureClient> {
 
         let token = response.next_marker.take();
 
-        Ok((to_list_result(response, prefix)?, token))
+        Ok((to_list_result(response, prefix, ignore_unparsable_paths)?, token))
     }
 }
 
@@ -1025,7 +1026,7 @@ struct ListResultInternal {
     pub blobs: Blobs,
 }
 
-fn to_list_result(value: ListResultInternal, prefix: Option<&str>) -> Result<ListResult> {
+fn to_list_result(value: ListResultInternal, prefix: Option<&str>, ignore_unparsable_paths: bool) -> Result<ListResult> {
     let prefix = prefix.unwrap_or_default();
     let common_prefixes = value
         .blobs
@@ -1045,6 +1046,9 @@ fn to_list_result(value: ListResultInternal, prefix: Option<&str>) -> Result<Lis
             !matches!(blob.properties.resource_type.as_ref(), Some(typ) if typ == "directory")
                 && blob.name.len() > prefix.len()
         })
+        .map(BlobInternal::try_from)
+        .filter(|parsed| !ignore_unparsable_paths || parsed.is_ok())
+        .map(|parsed| parsed.unwrap())
         .map(ObjectMeta::try_from)
         .collect::<Result<_>>()?;
 
@@ -1083,15 +1087,31 @@ struct Blob {
     pub metadata: Option<HashMap<String, String>>,
 }
 
-impl TryFrom<Blob> for ObjectMeta {
+struct BlobInternal {
+    pub blob: Blob,
+    pub path: Path,
+}
+
+impl TryFrom<Blob> for BlobInternal {
+    type Error = crate::path::Error;
+
+    fn try_from(value: Blob) -> Result<Self, crate::path::Error> {
+        Ok(BlobInternal {
+            path: Path::parse(&value.name)?,
+            blob: value,
+        })
+    }
+}
+
+impl TryFrom<BlobInternal> for ObjectMeta {
     type Error = crate::Error;
 
-    fn try_from(value: Blob) -> Result<Self> {
+    fn try_from(value: BlobInternal) -> Result<Self> {
         Ok(Self {
-            location: Path::parse(value.name)?,
-            last_modified: value.properties.last_modified,
-            size: value.properties.content_length,
-            e_tag: value.properties.e_tag,
+            location: value.path,
+            last_modified: value.blob.properties.last_modified,
+            size: value.blob.properties.content_length,
+            e_tag: value.blob.properties.e_tag,
             version: None, // For consistency with S3 and GCP which don't include this
         })
     }

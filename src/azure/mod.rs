@@ -119,8 +119,8 @@ impl ObjectStore for MicrosoftAzure {
         self.client.delete_request(location, &()).await
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.client.list(prefix)
+    fn list(&self, prefix: Option<&Path>, ignore_unparsable_paths: bool) -> BoxStream<'static, Result<ObjectMeta>> {
+        self.client.list(prefix, ignore_unparsable_paths)
     }
     fn delete_stream<'a>(
         &'a self,
@@ -142,8 +142,8 @@ impl ObjectStore for MicrosoftAzure {
             .boxed()
     }
 
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        self.client.list_with_delimiter(prefix).await
+    async fn list_with_delimiter(&self, prefix: Option<&Path>, ignore_unparsable_paths: bool) -> Result<ListResult> {
+        self.client.list_with_delimiter(prefix, ignore_unparsable_paths).await
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
