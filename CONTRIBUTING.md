@@ -19,6 +19,8 @@
 
 # Development instructions
 
+Many dependencies are behind [cargo feature flags](https://doc.rust-lang.org/cargo/reference/features.html). When developing locally you may want to enable some or all of them. You can use `--all-features` option with cargo. If you're using VSCode you may want to add: `"rust-analyzer.cargo.features": "all"` to your `.vscode/settings.json` file to have full IDE support.
+
 ## Running Tests
 
 Tests can be run using `cargo`
