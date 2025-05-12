@@ -29,10 +29,10 @@
 //! let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
 //! let registry = DefaultObjectStoreRegistry::new();
 //! let url = Url::parse("inmemory://").unwrap();
-//! registry.register_store(&url, store.clone());
+//! registry.register_store(&url, Arc::clone(&store));
 //! let found_store = registry.get_store(&url).unwrap();
 //! assert!(Arc::ptr_eq(&found_store, &store));
-//! let found_url = registry.get_url(store.clone()).unwrap();
+//! let found_url = registry.get_url(Arc::clone(&store)).unwrap();
 //! assert_eq!(found_url, url);
 //! ```
 use crate::ObjectStore;
@@ -68,10 +68,16 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     fn get_store_prefixes(&self) -> Vec<Url>;
 }
 
-/// A simple [`ObjectStoreRegistry`] implementation that registers stores based on the provided
-/// URL prefix.
+/// A simple [`ObjectStoreRegistry`] implementation that has no prefix logic. It simply returns
+/// a store registered with the provided URL if one exists. For example, if a store is registered
+/// with `file:///foo`, then:
+///
+/// - `file:///foo` will match
+/// - `file://foo` will not match
+/// - `file:///foo/bar` will not match
+/// - `s3://foo` will not match
 pub struct DefaultObjectStoreRegistry {
-    /// A map from URL prefix to object store that serve list / read operations for the store
+    /// A map from URL to object store that serve list / read operations for the store
     object_stores: RwLock<HashMap<Url, Arc<dyn ObjectStore>>>,
 }
 
@@ -98,32 +104,30 @@ impl DefaultObjectStoreRegistry {
     }
 }
 
-///
-/// Stores are registered based on the URL prefix of the provided URL.
-///
-/// For example:
-///
-/// - `file:///foo/bar` will return a store registered with `file:///foo/bar` if any
-/// - `s3://bucket/path` will return a store registered with `s3://bucket/path` if any
-/// - `hdfs://host:port/path` will return a store registered with `hdfs://host:port/path` if any
 impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
+    /// Register a new store for the provided URL
+    ///
+    /// If a store with the same URL existed before, it is replaced and returned
     fn register_store(
         &self,
-        prefix: &Url,
+        url: &Url,
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
         let mut stores = self.object_stores.write().unwrap();
-        stores.insert(prefix.clone(), store)
+        stores.insert(url.clone(), store)
     }
 
-    /// Get a store that was registered with the provided URL prefix.
+    /// Get a store that was registered with the provided URL.
     ///
-    /// If no store was registered with the provided URL prefix, `None` is returned.
-    fn get_store(&self, prefix: &Url) -> Option<Arc<dyn ObjectStore>> {
+    /// If no store was registered with the provided URL, `None` is returned.
+    fn get_store(&self, url: &Url) -> Option<Arc<dyn ObjectStore>> {
         let stores = self.object_stores.read().unwrap();
-        stores.get(prefix).map(Arc::clone)
+        stores.get(url).map(Arc::clone)
     }
 
+    /// Given one of the `Arc<dyn ObjectStore>`s you registered, return its URL.
+    ///
+    /// If no store was registered with the provided `Arc<dyn ObjectStore>`, `None` is returned.
     fn get_url(&self, store: Arc<dyn ObjectStore>) -> Option<Url> {
         let map = self.object_stores.read().unwrap();
         // scan for pointer-equal entry
@@ -181,7 +185,7 @@ mod tests {
         let registry = DefaultObjectStoreRegistry::new();
         let url = Url::parse("inmemory://").unwrap();
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-        registry.register_store(&url, store.clone());
+        registry.register_store(&url, Arc::clone(&store));
         assert_eq!(registry.get_url(Arc::clone(&store)).unwrap(), url);
     }
 
