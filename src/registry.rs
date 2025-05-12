@@ -233,8 +233,7 @@ impl ObjectStoreRegistry for PrefixObjectStoreRegistry {
     fn get_store(&self, url: &Url) -> Option<Arc<dyn ObjectStore>> {
         (self.prefix_fn)(url)
             .ok()
-            .map(|prefix| self.inner.get_store(&prefix))
-            .flatten()
+            .and_then(|prefix| self.inner.get_store(&prefix))
     }
 
     fn get_prefix(&self, store: Arc<dyn ObjectStore>) -> Option<Url> {
