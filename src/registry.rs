@@ -121,7 +121,7 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     /// If no store was registered with the provided URL prefix, `None` is returned.
     fn get_store(&self, prefix: &Url) -> Option<Arc<dyn ObjectStore>> {
         let stores = self.object_stores.read().unwrap();
-        stores.get(prefix).map(|s| Arc::clone(s))
+        stores.get(prefix).map(Arc::clone)
     }
 
     fn get_url(&self, store: Arc<dyn ObjectStore>) -> Option<Url> {
@@ -182,7 +182,7 @@ mod tests {
         let url = Url::parse("inmemory://").unwrap();
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
         registry.register_store(&url, store.clone());
-        assert_eq!(registry.get_url(store.clone()).unwrap(), url);
+        assert_eq!(registry.get_url(Arc::clone(&store)).unwrap(), url);
     }
 
     #[test]
