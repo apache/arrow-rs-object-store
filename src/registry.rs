@@ -17,7 +17,8 @@
 
 //! ObjectStoreRegistry holds object stores at runtime with a URL for each store.
 //! The registry serves as a cache for object stores to avoid repeated creation.
-//! It also lets you convert an [`ObjectStore`] back to its registered URL via `get_url`:
+//! It also lets you convert an [`ObjectStore`] back to its registered URL via
+//! `get_prefix`:
 //!
 //! ```rust
 //! use std::sync::Arc;
@@ -32,7 +33,7 @@
 //! registry.register_store(&url, Arc::clone(&store));
 //! let found_store = registry.get_store(&url).unwrap();
 //! assert!(Arc::ptr_eq(&found_store, &store));
-//! let found_url = registry.get_url(Arc::clone(&store)).unwrap();
+//! let found_url = registry.get_prefix(Arc::clone(&store)).unwrap();
 //! assert_eq!(found_url, url);
 //! ```
 use crate::ObjectStore;
@@ -62,7 +63,7 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     fn get_store(&self, url: &Url) -> Option<Arc<dyn ObjectStore>>;
 
     /// Given one of the `Arc<dyn ObjectStore>`s you registered, return its URL.
-    fn get_url(&self, store: Arc<dyn ObjectStore>) -> Option<Url>;
+    fn get_prefix(&self, store: Arc<dyn ObjectStore>) -> Option<Url>;
 
     /// List all registered store prefixes
     fn get_store_prefixes(&self) -> Vec<Url>;
@@ -128,7 +129,7 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     /// Given one of the `Arc<dyn ObjectStore>`s you registered, return its URL.
     ///
     /// If no store was registered with the provided `Arc<dyn ObjectStore>`, `None` is returned.
-    fn get_url(&self, store: Arc<dyn ObjectStore>) -> Option<Url> {
+    fn get_prefix(&self, store: Arc<dyn ObjectStore>) -> Option<Url> {
         let map = self.object_stores.read().unwrap();
         // scan for pointer-equal entry
         for (url, registered) in map.iter() {
@@ -143,6 +144,74 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     fn get_store_prefixes(&self) -> Vec<Url> {
         let stores = self.object_stores.read().unwrap();
         stores.keys().cloned().collect()
+    }
+}
+
+struct PrefixObjectStoreRegistry {
+    inner: DefaultObjectStoreRegistry,
+    prefix_fn: Box<dyn Fn(&Url) -> Result<Url, url::ParseError> + Send + Sync>,
+}
+
+impl std::fmt::Debug for PrefixObjectStoreRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PrefixObjectStoreRegistry")
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
+
+impl Default for PrefixObjectStoreRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PrefixObjectStoreRegistry {
+    fn new() -> Self {
+        Self::with_prefix_fn(Box::new(Self::default_prefix_fn))
+    }
+
+    fn with_prefix_fn(
+        prefix_fn: Box<dyn Fn(&Url) -> Result<Url, url::ParseError> + Send + Sync>,
+    ) -> Self {
+        Self {
+            inner: DefaultObjectStoreRegistry::new(),
+            prefix_fn,
+        }
+    }
+
+    fn default_prefix_fn(url: &Url) -> Result<Url, url::ParseError> {
+        let prefix = format!(
+            "{}://{}",
+            url.scheme(),
+            &url[url::Position::BeforeHost..url::Position::AfterPort],
+        );
+        Url::parse(&prefix)
+    }
+}
+
+impl ObjectStoreRegistry for PrefixObjectStoreRegistry {
+    fn register_store(
+        &self,
+        prefix: &Url,
+        store: Arc<dyn ObjectStore>,
+    ) -> Option<Arc<dyn ObjectStore>> {
+        self.inner.register_store(prefix, store)
+    }
+
+    fn get_store(&self, url: &Url) -> Option<Arc<dyn ObjectStore>> {
+        (self.prefix_fn)(url)
+            .ok()
+            .map(|prefix| self.inner.get_store(&prefix))
+            .flatten()
+    }
+
+    fn get_prefix(&self, store: Arc<dyn ObjectStore>) -> Option<Url> {
+        self.inner.get_prefix(store)
+    }
+
+    fn get_store_prefixes(&self) -> Vec<Url> {
+        self.inner.get_store_prefixes()
     }
 }
 
@@ -181,19 +250,19 @@ mod tests {
     }
 
     #[test]
-    fn test_get_url_round_trip() {
+    fn test_get_prefix_round_trip() {
         let registry = DefaultObjectStoreRegistry::new();
         let url = Url::parse("inmemory://").unwrap();
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
         registry.register_store(&url, Arc::clone(&store));
-        assert_eq!(registry.get_url(Arc::clone(&store)).unwrap(), url);
+        assert_eq!(registry.get_prefix(Arc::clone(&store)).unwrap(), url);
     }
 
     #[test]
-    fn test_get_url_miss() {
+    fn test_get_prefix_miss() {
         let registry = DefaultObjectStoreRegistry::new();
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-        assert!(registry.get_url(store).is_none());
+        assert!(registry.get_prefix(store).is_none());
     }
 
     #[test]
