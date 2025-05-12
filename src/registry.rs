@@ -164,8 +164,8 @@ pub type PrefixFn = Box<dyn Fn(&Url) -> Result<Url, url::ParseError> + Send + Sy
 ///
 /// let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
 /// let registry = PrefixObjectStoreRegistry::new();
-/// let parent_url = Url::parse("memory://").unwrap();
-/// let child_url = Url::parse("memory://child").unwrap();
+/// let parent_url = Url::parse("memory://parent").unwrap();
+/// let child_url = Url::parse("memory://parent/child").unwrap();
 /// registry.register_store(&parent_url, Arc::clone(&store));
 /// let found_store = registry.get_store(&child_url).unwrap();
 /// assert!(Arc::ptr_eq(&found_store, &store));
