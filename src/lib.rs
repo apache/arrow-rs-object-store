@@ -1055,6 +1055,8 @@ impl Debug for GetResultPayload {
 
 impl GetResultPayload {
     /// Collects the data into a [`Bytes`]
+    ///
+    /// Note that the `range` parameter is only used when the payload is a [file][Self::File].
     pub async fn bytes(self, range: Range<u64>) -> Result<Bytes> {
         let len = range.end - range.start;
         match self {
@@ -1088,6 +1090,8 @@ impl GetResultPayload {
     ///
     /// If the `self.kind` is [`GetResultPayload::File`] will perform chunked reads of the file,
     /// otherwise will return the [`GetResultPayload::Stream`].
+    ///
+    /// Note that the `range` parameter is only used when the payload is a [file][Self::File].
     ///
     /// # Tokio Compatibility
     ///
