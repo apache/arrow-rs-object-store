@@ -194,15 +194,16 @@ impl Default for PrefixObjectStoreRegistry {
 impl PrefixObjectStoreRegistry {
     /// Create a new [`PrefixObjectStoreRegistry`] with the default prefix function
     pub fn new() -> Self {
-        Self::with_prefix_fn(Box::new(Self::default_prefix_fn))
+        Self {
+            inner: DefaultObjectStoreRegistry::new(),
+            prefix_fn: Box::new(Self::default_prefix_fn),
+        }
     }
 
     /// Create a new [`PrefixObjectStoreRegistry`] with the provided prefix function
-    pub fn with_prefix_fn(prefix_fn: PrefixFn) -> Self {
-        Self {
-            inner: DefaultObjectStoreRegistry::new(),
-            prefix_fn,
-        }
+    pub fn with_prefix_fn(mut self, prefix_fn: PrefixFn) -> Self {
+        self.prefix_fn = prefix_fn;
+        self
     }
 
     /// The default prefix function. Returns a URL with in the format
@@ -479,7 +480,7 @@ mod tests {
             Ok(prefix)
         });
 
-        let registry = PrefixObjectStoreRegistry::with_prefix_fn(custom_prefix_fn);
+        let registry = PrefixObjectStoreRegistry::new().with_prefix_fn(custom_prefix_fn);
 
         // Register a store with this prefix
         let url = Url::parse("s3://bucket/custom").unwrap();
