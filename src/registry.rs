@@ -15,12 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! ObjectStoreRegistry holds all the object stores at Runtime with a scheme for each store.
-//! This allows the user to resolve a URL to an ObjectStore at runtime. Unlike
-//! [`crate::parse_url`], this allows for custom logic to be executed
-//! when a URL is resolved to an ObjectStore. It also serves as a cache for object stores
-//! to avoid repeated creation.
-
+//! ObjectStoreRegistry holds object stores at runtime with a URL for each store.
+//! The registry serves as a cache for object stores to avoid repeated creation. It
+//! also simplifies converting an [`ObjectStore`] back to a URL:
+//!
+//! ```rust
+//! use std::sync::Arc;
+//! use url::Url;
+//! use object_store::ObjectStore;
+//! use object_store::memory::InMemory;
+//! use object_store::registry::{DefaultObjectStoreRegistry, ObjectStoreRegistry};
+//!
+//! let expected_store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+//! let registry = DefaultObjectStoreRegistry::new();
+//! let url = Url::parse("inmemory://").unwrap();
+//! registry.register_store(&url, expected_store.clone());
+//! let prefixes = registry.get_store_prefixes();
+//! for prefix in prefixes {
+//!     let store = registry.get_store(&prefix).unwrap();
+//!     if Arc::ptr_eq(&store, &expected_store) {
+//!         assert_eq!(prefix, url);
+//!     }
+//! }
+//! ```
 use crate::ObjectStore;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
