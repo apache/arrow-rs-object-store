@@ -21,70 +21,42 @@
 //! when a URL is resolved to an ObjectStore. It also serves as a cache for object stores
 //! to avoid repeated creation.
 
-use crate::{parse_url, ObjectStore};
+use crate::ObjectStore;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use url::Url;
 
-/// [`ObjectStoreRegistry`] maps a URL to an [`ObjectStore`] instance,
-/// and allows users to read from different [`ObjectStore`]
-/// instances. For example the registry might be configured so that
-///
-/// 1. `s3://my_bucket/lineitem/` mapped to the `/lineitem` path on an
-///    AWS S3 object store bound to `my_bucket`
-///
-/// 2. `s3://my_other_bucket/lineitem/` mapped to the (same)
-///    `/lineitem` path on a *different* AWS S3 object store bound to
-///    `my_other_bucket`
-///
-/// In this particular case, the url `s3://my_bucket/lineitem/` will be provided to
-/// [`ObjectStoreRegistry::get_store`] and one of three things will happen:
-///
-/// - If an [`ObjectStore`] has been registered with [`ObjectStoreRegistry::register_store`] with
-///   `s3://my_bucket`, that [`ObjectStore`] will be returned
-///
-/// - If an AWS S3 object store can be ad-hoc discovered by the url `s3://my_bucket/lineitem/`, this
-///   object store will be registered with key `s3://my_bucket` and returned.
-///
-/// - Otherwise `None` will be returned, indicating that no suitable [`ObjectStore`] could
-///   be found
-///
-/// This allows for two different use-cases:
-///
-/// 1. Systems where object store buckets are explicitly created using DDL, can use the provided [`DefaultObjectStoreRegistry`] to register these
-///    buckets using [`ObjectStoreRegistry::register_store`]
-///
-/// 2. Systems relying on ad-hoc discovery, without corresponding DDL, can create [`ObjectStore`]
-///    lazily by providing a custom implementation of [`ObjectStoreRegistry`]
+/// [`ObjectStoreRegistry`] maps a URL prefix to an [`ObjectStore`] instance. The definition of
+/// a URL prefix depends on the [`ObjectStoreRegistry`] implementation. See implementation docs
+/// for more details.
 pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
-    /// Register a new store for any url's that begin with `prefix`
+    /// Register a new store for any URL that begins with `prefix`
     ///
-    /// If a store with the same key existed before, it is replaced and returned
+    /// If a store with the same prefix existed before, it is replaced and returned
     fn register_store(
         &self,
         prefix: &Url,
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>>;
 
-    /// Get a suitable store for the provided URL. For example:
-    ///
-    /// - URL with scheme `file:///` or no scheme will return the default LocalFS store
-    /// - URL with scheme `s3://bucket/` will return the S3 store
-    /// - URL with scheme `hdfs://hostname:port/` will return the hdfs store
+    /// Get a suitable store for the provided URL. The definition of a "suitable store" depends on
+    /// the [`ObjectStoreRegistry`] implementation. See implementation docs for more details.
     ///
     /// If no [`ObjectStore`] found for the `url`, ad-hoc discovery may be executed depending on
     /// the `url` and [`ObjectStoreRegistry`] implementation. An [`ObjectStore`] may be lazily
-    /// created and registered.
+    /// created and registered. The logic for doing so is left to each [`ObjectStoreRegistry`]
+    /// implementation.
     fn get_store(&self, url: &Url) -> Option<Arc<dyn ObjectStore>>;
 
     /// List all registered store prefixes
-    fn get_store_prefixes(&self) -> Vec<String>;
+    fn get_store_prefixes(&self) -> Vec<Url>;
 }
 
-/// The default [`ObjectStoreRegistry`]
+/// A simple [`ObjectStoreRegistry`] implementation that registers stores based on the provided
+/// URL prefix.
 pub struct DefaultObjectStoreRegistry {
-    /// A map from scheme to object store that serve list / read operations for the store
-    object_stores: RwLock<HashMap<String, Arc<dyn ObjectStore>>>,
+    /// A map from URL prefix to object store that serve list / read operations for the store
+    object_stores: RwLock<HashMap<Url, Arc<dyn ObjectStore>>>,
 }
 
 impl std::fmt::Debug for DefaultObjectStoreRegistry {
@@ -111,56 +83,36 @@ impl DefaultObjectStoreRegistry {
 }
 
 ///
-/// Stores are registered based on the scheme, host and port of the provided URL.
+/// Stores are registered based on the URL prefix of the provided URL.
 ///
 /// For example:
 ///
-/// - `file:///my_path` will return the default LocalFS store
-/// - `s3://bucket/path` will return a store registered with `s3://bucket` if any
-/// - `hdfs://host:port/path` will return a store registered with `hdfs://host:port` if any
+/// - `file:///foo/bar` will return a store registered with `file:///foo/bar` if any
+/// - `s3://bucket/path` will return a store registered with `s3://bucket/path` if any
+/// - `hdfs://host:port/path` will return a store registered with `hdfs://host:port/path` if any
 impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     fn register_store(
         &self,
         prefix: &Url,
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
-        let s = get_url_key(prefix);
         let mut stores = self.object_stores.write().unwrap();
-        stores.insert(s, store)
+        stores.insert(prefix.clone(), store)
     }
 
-    fn get_store(&self, url: &Url) -> Option<Arc<dyn ObjectStore>> {
-        let s = get_url_key(url);
-        let mut stores = self.object_stores.write().unwrap();
-
-        if let Some(store) = stores.get(&s) {
-            return Some(Arc::clone(store));
-        }
-
-        match parse_url(url) {
-            Ok((store, _)) => {
-                let store = Arc::from(store);
-                stores.insert(s, Arc::clone(&store));
-                Some(store)
-            }
-            Err(_) => None,
-        }
+    /// Get a store that was registered with the provided URL prefix.
+    ///
+    /// If no store was registered with the provided URL prefix, `None` is returned.
+    fn get_store(&self, prefix: &Url) -> Option<Arc<dyn ObjectStore>> {
+        let stores = self.object_stores.read().unwrap();
+        stores.get(prefix).map(|s| Arc::clone(s))
     }
 
-    fn get_store_prefixes(&self) -> Vec<String> {
+    /// Returns a vector of all registered store prefixes.
+    fn get_store_prefixes(&self) -> Vec<Url> {
         let stores = self.object_stores.read().unwrap();
         stores.keys().cloned().collect()
     }
-}
-
-/// Get the key of a url for object store registration.
-/// The credential info will be removed
-fn get_url_key(url: &Url) -> String {
-    format!(
-        "{}://{}",
-        url.scheme(),
-        &url[url::Position::BeforeHost..url::Position::AfterPort],
-    )
 }
 
 #[cfg(test)]
@@ -168,21 +120,6 @@ mod tests {
     use super::*;
     #[cfg(not(target_arch = "wasm32"))]
     use crate::local::LocalFileSystem;
-
-    #[test]
-    fn test_get_url_key() {
-        let file = Url::parse("file://").unwrap();
-        let key = get_url_key(&file);
-        assert_eq!(key.as_str(), "file://");
-
-        let url = Url::parse("s3://bucket").unwrap();
-        let key = get_url_key(&url);
-        assert_eq!(key.as_str(), "s3://bucket");
-
-        let url = Url::parse("s3://username:password@host:123").unwrap();
-        let key = get_url_key(&url);
-        assert_eq!(key.as_str(), "s3://host:123");
-    }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
@@ -198,19 +135,10 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn test_register_store_on_get() {
+    fn test_get_store_miss() {
         let registry = DefaultObjectStoreRegistry::new();
         let url = Url::parse("file:///foo/bar").unwrap();
-        // on first get, should lazily create & register a LocalFileSystem
-        let retrieved_store = registry.get_store(&url).unwrap();
-        // Validate that this really is a LocalFileSystem under the hood by
-        // looking at its Debug representation
-        let dbg = format!("{:?}", retrieved_store);
-        assert!(
-            dbg.starts_with("LocalFileSystem"),
-            "Expected a LocalFileSystem, but Debug printed: {}",
-            dbg
-        );
+        assert!(registry.get_store(&url).is_none());
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -222,7 +150,7 @@ mod tests {
         registry.register_store(&url, store);
         let urls = registry.get_store_prefixes();
         assert_eq!(urls.len(), 1);
-        assert_eq!(urls[0], "file://");
+        assert_eq!(urls[0], Url::parse("file:///foo/bar").unwrap());
     }
 
     #[test]
@@ -234,14 +162,14 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn test_subprefix_url_resolution() {
+    fn test_subprefix_miss() {
         let registry = DefaultObjectStoreRegistry::new();
         let base_url = Url::parse("file:///foo/bar").unwrap();
         let store = Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>;
         registry.register_store(&base_url, Arc::clone(&store));
         let subprefix_url = Url::parse("file:///foo/bar/baz").unwrap();
-        let retrieved_store = registry.get_store(&subprefix_url).unwrap();
-        assert!(Arc::ptr_eq(&retrieved_store, &store));
+        let retrieved_store = registry.get_store(&subprefix_url);
+        assert!(retrieved_store.is_none());
     }
 
     #[cfg(not(target_arch = "wasm32"))]
