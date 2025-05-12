@@ -217,4 +217,33 @@ mod tests {
         let retrieved_store = registry.get_store(&subprefix_url);
         assert!(retrieved_store.is_none());
     }
+
+    #[test]
+    fn test_exact_url_match_behavior() {
+        let registry = DefaultObjectStoreRegistry::new();
+        let base_url = Url::parse("file:///foo").unwrap();
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        registry.register_store(&base_url, Arc::clone(&store));
+
+        // Case 1: Exact match should work
+        let exact_match = Url::parse("file:///foo").unwrap();
+        let retrieved_store = registry.get_store(&exact_match);
+        assert!(retrieved_store.is_some());
+        assert!(Arc::ptr_eq(&retrieved_store.unwrap(), &store));
+
+        // Case 2: Different URL format should not match
+        let different_format = Url::parse("file://foo").unwrap();
+        let retrieved_store = registry.get_store(&different_format);
+        assert!(retrieved_store.is_none());
+
+        // Case 3: Subpath should not match
+        let subpath = Url::parse("file:///foo/bar").unwrap();
+        let retrieved_store = registry.get_store(&subpath);
+        assert!(retrieved_store.is_none());
+
+        // Case 4: Different scheme should not match
+        let different_scheme = Url::parse("s3://foo").unwrap();
+        let retrieved_store = registry.get_store(&different_scheme);
+        assert!(retrieved_store.is_none());
+    }
 }
