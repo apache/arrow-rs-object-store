@@ -346,4 +346,163 @@ mod tests {
         let retrieved_store = registry.get_store(&different_scheme);
         assert!(retrieved_store.is_none());
     }
+
+    #[test]
+    fn test_default_prefix_fn() {
+        // Test simple URLs without hosts
+        let url = Url::parse("memory://").unwrap();
+        let prefix = PrefixObjectStoreRegistry::default_prefix_fn(&url).unwrap();
+        assert_eq!(prefix.as_str(), "memory://");
+
+        // Test s3 URLs
+        let url = Url::parse("s3://bucket").unwrap();
+        let prefix = PrefixObjectStoreRegistry::default_prefix_fn(&url).unwrap();
+        assert_eq!(prefix.as_str(), "s3://bucket");
+
+        // Test s3 URLs with path
+        let url = Url::parse("s3://bucket/path/to/file").unwrap();
+        let prefix = PrefixObjectStoreRegistry::default_prefix_fn(&url).unwrap();
+        assert_eq!(prefix.as_str(), "s3://bucket");
+
+        // Test http URLs with port
+        let url = Url::parse("http://example.com:8080/path").unwrap();
+        let prefix = PrefixObjectStoreRegistry::default_prefix_fn(&url).unwrap();
+        assert_eq!(prefix.as_str(), "http://example.com:8080/");
+
+        // Test http URLs user, pass, and port
+        let url = Url::parse("http://user:pass@example.com:8080/path").unwrap();
+        let prefix = PrefixObjectStoreRegistry::default_prefix_fn(&url).unwrap();
+        assert_eq!(prefix.as_str(), "http://example.com:8080/");
+
+        // Test file URLs
+        let url = Url::parse("file:///path/to/file").unwrap();
+        let prefix = PrefixObjectStoreRegistry::default_prefix_fn(&url).unwrap();
+        assert_eq!(prefix.as_str(), "file:///");
+    }
+
+    #[test]
+    fn test_prefix_registry_register_store() {
+        let registry = PrefixObjectStoreRegistry::new();
+        let url = Url::parse("memory://foo").unwrap();
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        // Test initial registration
+        let old_store = registry.register_store(&url, Arc::clone(&store));
+        assert!(old_store.is_none());
+
+        // Test retrieval
+        let child_url = Url::parse("memory://foo/bar").unwrap();
+        let retrieved_store = registry.get_store(&child_url).unwrap();
+        assert!(Arc::ptr_eq(&retrieved_store, &store));
+
+        // Test parent miss
+        let parent_url = Url::parse("memory://").unwrap();
+        assert!(registry.get_store(&parent_url).is_none());
+    }
+
+    #[test]
+    fn test_prefix_registry_get_store() {
+        let registry = PrefixObjectStoreRegistry::new();
+
+        // Register a store with a prefix
+        let prefix_url = Url::parse("s3://mybucket").unwrap();
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        registry.register_store(&prefix_url, Arc::clone(&store));
+
+        // Test with exact match
+        let exact_url = Url::parse("s3://mybucket").unwrap();
+        let retrieved_store = registry.get_store(&exact_url).unwrap();
+        assert!(Arc::ptr_eq(&retrieved_store, &store));
+
+        // Test with path - should still match because of prefix
+        let path_url = Url::parse("s3://mybucket/path/to/object").unwrap();
+        let retrieved_store = registry.get_store(&path_url).unwrap();
+        assert!(Arc::ptr_eq(&retrieved_store, &store));
+
+        // Test with different bucket - should not match
+        let different_url = Url::parse("s3://otherbucket/path").unwrap();
+        assert!(registry.get_store(&different_url).is_none());
+
+        // Test with different scheme - should not match
+        let different_scheme = Url::parse("file:///path").unwrap();
+        assert!(registry.get_store(&different_scheme).is_none());
+    }
+
+    #[test]
+    fn test_prefix_registry_get_prefix() {
+        let registry = PrefixObjectStoreRegistry::new();
+        let url = Url::parse("memory://foo").unwrap();
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        // Register store
+        registry.register_store(&url, Arc::clone(&store));
+
+        // Test get_prefix retrieves the correct URL
+        let retrieved_url = registry.get_prefix(Arc::clone(&store)).unwrap();
+        assert_eq!(retrieved_url, url);
+
+        // Test with unregistered store
+        let unregistered_store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        assert!(registry.get_prefix(unregistered_store).is_none());
+    }
+
+    #[test]
+    fn test_prefix_registry_get_store_prefixes() {
+        let registry = PrefixObjectStoreRegistry::new();
+
+        // Register multiple stores
+        let url1 = Url::parse("s3://bucket1").unwrap();
+        let url2 = Url::parse("s3://bucket2").unwrap();
+        let url3 = Url::parse("inmemory://test").unwrap();
+
+        registry.register_store(&url1, Arc::new(InMemory::new()));
+        registry.register_store(&url2, Arc::new(InMemory::new()));
+        registry.register_store(&url3, Arc::new(InMemory::new()));
+
+        // Get all prefixes
+        let prefixes = registry.get_store_prefixes();
+
+        // Verify number of prefixes
+        assert_eq!(prefixes.len(), 3);
+
+        // Verify all registered URLs are in the result
+        assert!(prefixes.contains(&url1));
+        assert!(prefixes.contains(&url2));
+        assert!(prefixes.contains(&url3));
+    }
+
+    #[test]
+    fn test_prefix_registry_with_custom_prefix_fn() {
+        // Create a custom prefix function that adds a path segment
+        let custom_prefix_fn: PrefixFn = Box::new(|url| {
+            let mut prefix = PrefixObjectStoreRegistry::default_prefix_fn(url)?;
+            prefix.set_path("/custom");
+            Ok(prefix)
+        });
+
+        let registry = PrefixObjectStoreRegistry::with_prefix_fn(custom_prefix_fn);
+
+        // Register a store with this prefix
+        let url = Url::parse("s3://bucket/custom").unwrap();
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        registry.register_store(&url, Arc::clone(&store));
+
+        // Test lookup with a URL that should map to the custom prefix
+        let lookup_url = Url::parse("s3://bucket/path/to/object").unwrap();
+
+        // When using our custom_prefix_fn, the URL for lookup_url maps to s3://bucket/custom
+        // which is our registered URL, so it should return the store
+        let retrieved_store = registry.get_store(&lookup_url);
+        assert!(retrieved_store.is_some());
+        assert!(Arc::ptr_eq(&retrieved_store.unwrap(), &store));
+
+        // Another URL that should map to the same store
+        let custom_path_url = Url::parse("s3://bucket/custom/file.txt").unwrap();
+        let retrieved_store = registry.get_store(&custom_path_url);
+
+        // This URL will map to s3://bucket/custom via our custom prefix function,
+        // which matches our registered URL, so it should return the store
+        assert!(retrieved_store.is_some());
+        assert!(Arc::ptr_eq(&retrieved_store.unwrap(), &store));
+    }
 }
