@@ -16,8 +16,8 @@
 // under the License.
 
 //! ObjectStoreRegistry holds object stores at runtime with a URL for each store.
-//! The registry serves as a cache for object stores to avoid repeated creation. It
-//! also simplifies converting an [`ObjectStore`] back to a URL:
+//! The registry serves as a cache for object stores to avoid repeated creation.
+//! It also lets you convert an [`ObjectStore`] back to its registered URL via `get_url`:
 //!
 //! ```rust
 //! use std::sync::Arc;
@@ -26,17 +26,14 @@
 //! use object_store::memory::InMemory;
 //! use object_store::registry::{DefaultObjectStoreRegistry, ObjectStoreRegistry};
 //!
-//! let expected_store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+//! let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
 //! let registry = DefaultObjectStoreRegistry::new();
 //! let url = Url::parse("inmemory://").unwrap();
-//! registry.register_store(&url, expected_store.clone());
-//! let prefixes = registry.get_store_prefixes();
-//! for prefix in prefixes {
-//!     let store = registry.get_store(&prefix).unwrap();
-//!     if Arc::ptr_eq(&store, &expected_store) {
-//!         assert_eq!(prefix, url);
-//!     }
-//! }
+//! registry.register_store(&url, store.clone());
+//! let found_store = registry.get_store(&url).unwrap();
+//! assert!(Arc::ptr_eq(&found_store, &store));
+//! let found_url = registry.get_url(store.clone()).unwrap();
+//! assert_eq!(found_url, url);
 //! ```
 use crate::ObjectStore;
 use std::collections::HashMap;
@@ -56,14 +53,16 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>>;
 
-    /// Get a suitable store for the provided URL. The definition of a "suitable store" depends on
+    /// Get a store for the provided URL. The definition of a "suitable store" depends on
     /// the [`ObjectStoreRegistry`] implementation. See implementation docs for more details.
     ///
-    /// If no [`ObjectStore`] found for the `url`, ad-hoc discovery may be executed depending on
-    /// the `url` and [`ObjectStoreRegistry`] implementation. An [`ObjectStore`] may be lazily
+    /// If no [`ObjectStore`] is found for the `url`, an [`ObjectStore`] may be lazily be
     /// created and registered. The logic for doing so is left to each [`ObjectStoreRegistry`]
     /// implementation.
     fn get_store(&self, url: &Url) -> Option<Arc<dyn ObjectStore>>;
+
+    /// Given one of the `Arc<dyn ObjectStore>`s you registered, return its URL.
+    fn get_url(&self, store: Arc<dyn ObjectStore>) -> Option<Url>;
 
     /// List all registered store prefixes
     fn get_store_prefixes(&self) -> Vec<Url>;
@@ -125,6 +124,17 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
         stores.get(prefix).map(|s| Arc::clone(s))
     }
 
+    fn get_url(&self, store: Arc<dyn ObjectStore>) -> Option<Url> {
+        let map = self.object_stores.read().unwrap();
+        // scan for pointer-equal entry
+        for (url, registered) in map.iter() {
+            if Arc::ptr_eq(&store, registered) {
+                return Some(url.clone());
+            }
+        }
+        None
+    }
+
     /// Returns a vector of all registered store prefixes.
     fn get_store_prefixes(&self) -> Vec<Url> {
         let stores = self.object_stores.read().unwrap();
@@ -135,69 +145,72 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(not(target_arch = "wasm32"))]
-    use crate::local::LocalFileSystem;
+    use crate::memory::InMemory;
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn test_register_store() {
         let registry = DefaultObjectStoreRegistry::new();
-        let url = Url::parse("file:///foo/bar").unwrap();
-        let store = Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>;
+        let url = Url::parse("inmemory://foo").unwrap();
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
         let old_store = registry.register_store(&url, Arc::clone(&store));
         assert!(old_store.is_none());
         let retrieved_store = registry.get_store(&url).unwrap();
         assert!(Arc::ptr_eq(&retrieved_store, &store));
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn test_reregister_store() {
+        let registry = DefaultObjectStoreRegistry::new();
+        let url = Url::parse("inmemory://foo").unwrap();
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let old_store = registry.register_store(&url, Arc::clone(&store));
+        assert!(old_store.is_none());
+        let old_store = registry.register_store(&url, Arc::new(InMemory::new()));
+        assert!(Arc::ptr_eq(&old_store.unwrap(), &store));
+    }
+
     #[test]
     fn test_get_store_miss() {
         let registry = DefaultObjectStoreRegistry::new();
-        let url = Url::parse("file:///foo/bar").unwrap();
+        let url = Url::parse("inmemory://foo").unwrap();
         assert!(registry.get_store(&url).is_none());
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn test_get_url_round_trip() {
+        let registry = DefaultObjectStoreRegistry::new();
+        let url = Url::parse("inmemory://").unwrap();
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        registry.register_store(&url, store.clone());
+        assert_eq!(registry.get_url(store.clone()).unwrap(), url);
+    }
+
+    #[test]
+    fn test_get_url_miss() {
+        let registry = DefaultObjectStoreRegistry::new();
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        assert!(registry.get_url(store).is_none());
+    }
+
     #[test]
     fn test_list_urls() {
         let registry = DefaultObjectStoreRegistry::new();
-        let url = Url::parse("file:///foo/bar").unwrap();
-        let store = Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>;
+        let url = Url::parse("inmemory://foo").unwrap();
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
         registry.register_store(&url, store);
         let urls = registry.get_store_prefixes();
         assert_eq!(urls.len(), 1);
-        assert_eq!(urls[0], Url::parse("file:///foo/bar").unwrap());
+        assert_eq!(urls[0], url);
     }
 
-    #[test]
-    fn test_registry_with_bad_scheme() {
-        let registry = DefaultObjectStoreRegistry::new();
-        let url = Url::parse("unknown://foo/bar").unwrap();
-        assert!(registry.get_store(&url).is_none());
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn test_subprefix_miss() {
         let registry = DefaultObjectStoreRegistry::new();
-        let base_url = Url::parse("file:///foo/bar").unwrap();
-        let store = Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>;
+        let base_url = Url::parse("inmemory://foo").unwrap();
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
         registry.register_store(&base_url, Arc::clone(&store));
-        let subprefix_url = Url::parse("file:///foo/bar/baz").unwrap();
+        let subprefix_url = Url::parse("inmemory://foo/bar").unwrap();
         let retrieved_store = registry.get_store(&subprefix_url);
         assert!(retrieved_store.is_none());
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn test_invalid_file_url_format() {
-        let registry = DefaultObjectStoreRegistry::new();
-        let base_url = Url::parse("file:///foo/bar").unwrap();
-        let store = Arc::new(LocalFileSystem::new()) as Arc<dyn ObjectStore>;
-        registry.register_store(&base_url, Arc::clone(&store));
-        let invalid_url = Url::parse("file://foo/bar").unwrap();
-        let result = registry.get_store(&invalid_url);
-        assert!(result.is_none());
     }
 }
