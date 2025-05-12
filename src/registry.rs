@@ -147,9 +147,34 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     }
 }
 
-struct PrefixObjectStoreRegistry {
+/// A function that takes a URL and returns a prefix for that URL
+pub type PrefixFn = Box<dyn Fn(&Url) -> Result<Url, url::ParseError> + Send + Sync>;
+
+/// A [`ObjectStoreRegistry`] that uses a prefix function to determine the prefix for a URL when
+/// retrieving a store. Stores are registered with a prefix. When a user calls `get_store`, the
+/// prefix function is applied to the supplied URL to determine the prefix for the URL. The
+/// registered store with the matching prefix is then returned.
+///
+/// ```rust
+/// use std::sync::Arc;
+/// use url::Url;
+/// use object_store::ObjectStore;
+/// use object_store::memory::InMemory;
+/// use object_store::registry::{PrefixObjectStoreRegistry, ObjectStoreRegistry};
+///
+/// let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+/// let registry = PrefixObjectStoreRegistry::new();
+/// let parent_url = Url::parse("memory://").unwrap();
+/// let child_url = Url::parse("memory://child").unwrap();
+/// registry.register_store(&parent_url, Arc::clone(&store));
+/// let found_store = registry.get_store(&child_url).unwrap();
+/// assert!(Arc::ptr_eq(&found_store, &store));
+/// let found_url = registry.get_prefix(Arc::clone(&store)).unwrap();
+/// assert_eq!(found_url, parent_url);
+/// ```
+pub struct PrefixObjectStoreRegistry {
     inner: DefaultObjectStoreRegistry,
-    prefix_fn: Box<dyn Fn(&Url) -> Result<Url, url::ParseError> + Send + Sync>,
+    prefix_fn: PrefixFn,
 }
 
 impl std::fmt::Debug for PrefixObjectStoreRegistry {
@@ -167,20 +192,26 @@ impl Default for PrefixObjectStoreRegistry {
 }
 
 impl PrefixObjectStoreRegistry {
-    fn new() -> Self {
+    /// Create a new [`PrefixObjectStoreRegistry`] with the default prefix function
+    pub fn new() -> Self {
         Self::with_prefix_fn(Box::new(Self::default_prefix_fn))
     }
 
-    fn with_prefix_fn(
-        prefix_fn: Box<dyn Fn(&Url) -> Result<Url, url::ParseError> + Send + Sync>,
-    ) -> Self {
+    /// Create a new [`PrefixObjectStoreRegistry`] with the provided prefix function
+    pub fn with_prefix_fn(prefix_fn: PrefixFn) -> Self {
         Self {
             inner: DefaultObjectStoreRegistry::new(),
             prefix_fn,
         }
     }
 
-    fn default_prefix_fn(url: &Url) -> Result<Url, url::ParseError> {
+    /// The default prefix function. Returns a URL with in the format
+    /// `scheme://host:port`. For example:
+    ///
+    /// - `memory://` -> `memory://`
+    /// - `memory://child` -> `memory://child`
+    /// - `memory://child/grandchild` -> `memory://child`
+    pub fn default_prefix_fn(url: &Url) -> Result<Url, url::ParseError> {
         let prefix = format!(
             "{}://{}",
             url.scheme(),
