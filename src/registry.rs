@@ -18,25 +18,8 @@
 //! ObjectStoreRegistry holds object stores at runtime with a URL for each store.
 //! The registry serves as a cache for object stores to avoid repeated creation.
 //! It also lets you convert an [`ObjectStore`] back to its registered URL via
-//! `get_prefix`:
-//!
-//! ```rust
-//! use std::sync::Arc;
-//! use url::Url;
-//! use object_store::ObjectStore;
-//! use object_store::memory::InMemory;
-//! use object_store::registry::{DefaultObjectStoreRegistry, ObjectStoreRegistry};
-//!
-//! let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-//! let registry = DefaultObjectStoreRegistry::new();
-//! let url = Url::parse("inmemory://").unwrap();
-//! registry.register_store(&url, Arc::clone(&store));
-//! let found_store = registry.get_store(&url).unwrap();
-//! assert!(Arc::ptr_eq(&found_store, &store));
-//! let found_url = registry.get_prefix(Arc::clone(&store)).unwrap();
-//! assert_eq!(found_url, url);
-//! ```
-use crate::ObjectStore;
+//! `get_prefix`.
+use crate::{parse_url, ObjectStore};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use url::Url;
@@ -246,15 +229,147 @@ impl ObjectStoreRegistry for PrefixObjectStoreRegistry {
     }
 }
 
+type ParserFn = Box<dyn Fn(&Url) -> Result<Box<dyn ObjectStore>, super::Error> + Send + Sync>;
+
+/// An [`ObjectStoreRegistry`] implementation that uses prefix matching and dynamic
+/// parsing to construct ObjectStores on demand.
+///
+/// This registry builds on top of [`PrefixObjectStoreRegistry`] but will automatically
+/// create and register new object stores using the [`crate::parse::parse_url_opts`]
+/// function when a URL doesn't match any registered prefix.
+///
+/// # Examples
+///
+/// ```rust
+/// # #[cfg(feature = "http")]
+/// use std::sync::Arc;
+/// use url::Url;
+/// use object_store::ObjectStore;
+/// use object_store::registry::{ParserObjectStoreRegistry, ObjectStoreRegistry};
+///
+/// let registry = ParserObjectStoreRegistry::new();
+/// let url = "http://localhost:8080".parse::<Url>().unwrap();
+/// let store = registry.get_store(&url).unwrap();
+/// let prefix = registry.get_prefix(store).unwrap();
+/// assert_eq!(prefix.as_str(), "http://localhost:8080/");
+/// ```
+///
+/// And using HTTP with custom opts:
+///
+/// ```rust
+/// # #[cfg(feature = "http")]
+/// use std::sync::Arc;
+/// use url::Url;
+/// use object_store::{parse_url_opts, ObjectStore};
+/// use object_store::registry::{ParserObjectStoreRegistry, ObjectStoreRegistry};
+///
+/// let registry = ParserObjectStoreRegistry::default().with_parser_fn(Box::new(
+///     |url| match parse_url_opts(
+///         url,
+///         vec![("user_agent", "test_url"), ("allow_http", "true")],
+///     ) {
+///         Ok((store, _)) => Ok(store),
+///         Err(e) => Err(e),
+///     },
+/// ));
+/// let url = "http://foo:bar@host:123/path".parse::<Url>().unwrap();
+/// // Custom `user_agent` and `allow_http` options are passed to the HttpStore
+/// let store = registry.get_store(&url).unwrap();
+/// ```
+pub struct ParserObjectStoreRegistry {
+    /// Inner registry for prefix based lookup
+    inner: PrefixObjectStoreRegistry,
+    /// Options to be passed to parse_url_opts
+    parser_fn: ParserFn,
+}
+
+impl std::fmt::Debug for ParserObjectStoreRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParserObjectStoreRegistry")
+            .field("inner", &self.inner)
+            .finish()
+    }
+}
+
+impl Default for ParserObjectStoreRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ParserObjectStoreRegistry {
+    /// Create a new [`ParserObjectStoreRegistry`] with the default prefix function
+    pub fn new() -> Self {
+        Self {
+            inner: PrefixObjectStoreRegistry::new(),
+            parser_fn: Self::default_parser_fn(),
+        }
+    }
+
+    /// Create a new [`ParserObjectStoreRegistry`] with the provided prefix function
+    pub fn with_prefix_fn(mut self, prefix_fn: PrefixFn) -> Self {
+        self.inner = self.inner.with_prefix_fn(prefix_fn);
+        self
+    }
+
+    /// Register options to be used with a specific URL prefix when creating stores dynamically
+    pub fn with_parser_fn(
+        mut self,
+        parser_fn: Box<dyn Fn(&Url) -> Result<Box<dyn ObjectStore>, super::Error> + Send + Sync>,
+    ) -> Self {
+        self.parser_fn = parser_fn;
+        self
+    }
+
+    fn default_parser_fn() -> ParserFn {
+        Box::new(|url| parse_url(url).map(|(store, _)| store))
+    }
+}
+
+impl ObjectStoreRegistry for ParserObjectStoreRegistry {
+    fn register_store(
+        &self,
+        prefix: &Url,
+        store: Arc<dyn ObjectStore>,
+    ) -> Option<Arc<dyn ObjectStore>> {
+        self.inner.register_store(prefix, store)
+    }
+
+    fn get_store(&self, url: &Url) -> Option<Arc<dyn ObjectStore>> {
+        let prefix = (self.inner.prefix_fn)(url).unwrap();
+
+        if let Some(store) = self.inner.get_store(&prefix) {
+            return Some(store);
+        }
+
+        match (self.parser_fn)(url) {
+            Ok(store) => {
+                let store = Arc::new(store);
+                self.register_store(&prefix, store.clone());
+                Some(store)
+            }
+            Err(_) => None,
+        }
+    }
+
+    fn get_prefix(&self, store: Arc<dyn ObjectStore>) -> Option<Url> {
+        self.inner.get_prefix(store)
+    }
+
+    fn get_store_prefixes(&self) -> Vec<Url> {
+        self.inner.get_store_prefixes()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::InMemory;
+    use crate::{memory::InMemory, path::Path};
 
     #[test]
     fn test_register_store() {
         let registry = DefaultObjectStoreRegistry::new();
-        let url = Url::parse("inmemory://foo").unwrap();
+        let url = Url::parse("memory://foo").unwrap();
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
         let old_store = registry.register_store(&url, Arc::clone(&store));
         assert!(old_store.is_none());
@@ -265,7 +380,7 @@ mod tests {
     #[test]
     fn test_reregister_store() {
         let registry = DefaultObjectStoreRegistry::new();
-        let url = Url::parse("inmemory://foo").unwrap();
+        let url = Url::parse("memory://foo").unwrap();
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
         let old_store = registry.register_store(&url, Arc::clone(&store));
         assert!(old_store.is_none());
@@ -276,14 +391,14 @@ mod tests {
     #[test]
     fn test_get_store_miss() {
         let registry = DefaultObjectStoreRegistry::new();
-        let url = Url::parse("inmemory://foo").unwrap();
+        let url = Url::parse("memory://foo").unwrap();
         assert!(registry.get_store(&url).is_none());
     }
 
     #[test]
     fn test_get_prefix_round_trip() {
         let registry = DefaultObjectStoreRegistry::new();
-        let url = Url::parse("inmemory://").unwrap();
+        let url = Url::parse("memory://").unwrap();
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
         registry.register_store(&url, Arc::clone(&store));
         assert_eq!(registry.get_prefix(Arc::clone(&store)).unwrap(), url);
@@ -299,7 +414,7 @@ mod tests {
     #[test]
     fn test_list_urls() {
         let registry = DefaultObjectStoreRegistry::new();
-        let url = Url::parse("inmemory://foo").unwrap();
+        let url = Url::parse("memory://foo").unwrap();
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
         registry.register_store(&url, store);
         let urls = registry.get_store_prefixes();
@@ -310,10 +425,10 @@ mod tests {
     #[test]
     fn test_subprefix_miss() {
         let registry = DefaultObjectStoreRegistry::new();
-        let base_url = Url::parse("inmemory://foo").unwrap();
+        let base_url = Url::parse("memory://foo").unwrap();
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
         registry.register_store(&base_url, Arc::clone(&store));
-        let subprefix_url = Url::parse("inmemory://foo/bar").unwrap();
+        let subprefix_url = Url::parse("memory://foo/bar").unwrap();
         let retrieved_store = registry.get_store(&subprefix_url);
         assert!(retrieved_store.is_none());
     }
@@ -453,7 +568,7 @@ mod tests {
         // Register multiple stores
         let url1 = Url::parse("s3://bucket1").unwrap();
         let url2 = Url::parse("s3://bucket2").unwrap();
-        let url3 = Url::parse("inmemory://test").unwrap();
+        let url3 = Url::parse("memory://test").unwrap();
 
         registry.register_store(&url1, Arc::new(InMemory::new()));
         registry.register_store(&url2, Arc::new(InMemory::new()));
@@ -504,5 +619,54 @@ mod tests {
         // which matches our registered URL, so it should return the store
         assert!(retrieved_store.is_some());
         assert!(Arc::ptr_eq(&retrieved_store.unwrap(), &store));
+    }
+
+    #[test]
+    fn test_parser_object_store_registry() {
+        let registry = ParserObjectStoreRegistry::default();
+        let url = Url::parse("memory://").unwrap();
+        let store = registry.get_store(&url);
+        assert!(store.is_some());
+    }
+
+    #[test]
+    fn test_parser_bad_scheme() {
+        let registry = ParserObjectStoreRegistry::default();
+        let url = Url::parse("bad://").unwrap();
+        let store = registry.get_store(&url);
+        assert!(store.is_none());
+    }
+
+    #[cfg(all(feature = "http", feature = "cloud", not(target_arch = "wasm32")))]
+    #[tokio::test]
+    async fn test_parser_object_store_registry_with_opts() {
+        use crate::client::mock_server::MockServer;
+        use crate::http::HttpStore;
+        use crate::parse::parse_url_opts;
+        use http::{header::USER_AGENT, Response};
+
+        let server = MockServer::new().await;
+
+        server.push_fn(|r| {
+            assert_eq!(r.uri().path(), "/foo/bar");
+            assert_eq!(r.headers().get(USER_AGENT).unwrap(), "test_url");
+            Response::new(String::new())
+        });
+
+        let registry =
+            ParserObjectStoreRegistry::default().with_parser_fn(Box::new(
+                |url| match parse_url_opts(
+                    url,
+                    vec![("user_agent", "test_url"), ("allow_http", "true")],
+                ) {
+                    Ok((store, _)) => Ok(store),
+                    Err(e) => Err(e),
+                },
+            ));
+        let url = Url::parse(format!("{}/foo/bar", server.url()).as_str()).unwrap();
+        let store = registry.get_store(&url).unwrap();
+        let prefix = registry.get_prefix(store.clone()).unwrap();
+        store.get(&Path::from("/foo/bar")).await.unwrap();
+        server.shutdown().await;
     }
 }
