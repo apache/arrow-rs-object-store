@@ -22,6 +22,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use url::Url;
 
+type GetStoreResult = Result<Option<(Arc<dyn ObjectStore>, Url)>, Error>;
+
 /// [`ObjectStoreRegistry`] maps a URL to an [`ObjectStore`] instance. The meaning of
 /// a URL mapping depends on the [`ObjectStoreRegistry`] implementation. See implementation
 /// docs for more details.
@@ -55,7 +57,7 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     /// ## Errors
     ///
     /// Returns an error if an implementation can't parse a URL or create a store.
-    fn get_store(&self, url: &Url) -> Result<Option<(Arc<dyn ObjectStore>, Url)>, Error>;
+    fn get_store(&self, url: &Url) -> GetStoreResult;
 
     /// List all registered store URLs. These are the URL mappings for all registered stores.
     ///
