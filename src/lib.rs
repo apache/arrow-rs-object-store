@@ -1102,6 +1102,10 @@ impl GetResultPayload {
     ///
     /// If not called from a tokio context, this will perform IO on the current thread with
     /// no additional complexity or overheads
+    #[cfg_attr(
+        not(all(feature = "fs", not(target_arch = "wasm32"))),
+        allow(unused_variables)
+    )]
     pub fn into_stream(self, range: Range<u64>) -> BoxStream<'static, Result<Bytes>> {
         match self {
             #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
