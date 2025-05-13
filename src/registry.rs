@@ -344,7 +344,7 @@ impl ObjectStoreRegistry for ParserObjectStoreRegistry {
         match (self.parser_fn)(url) {
             Ok(store) => {
                 let store = Arc::new(store);
-                self.register_store(&prefix, store.clone());
+                self.register_store(&prefix, Arc::<Box<dyn ObjectStore>>::clone(&store));
                 Some(store)
             }
             Err(_) => None,
