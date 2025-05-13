@@ -106,6 +106,9 @@ impl DefaultObjectStoreRegistry {
             // since [`crate::parse::parse_url`] expects these to never have
             // a "host" component.
             "memory" => Url::parse(&format!("{}://", url.scheme())),
+            // Note this will handle file://path/to/file as well
+            // as file:///path/to/file even though file://path/to/file
+            // is not technically a valid URL.
             "file" => Url::parse(&format!("{}:///", url.scheme())),
             _ => Url::parse(&format!(
                 "{}://{}",
@@ -221,5 +224,44 @@ mod tests {
         let (retrieved_store, mapped_url) = registry.get_store(&subprefix_url).unwrap().unwrap();
         assert_eq!(mapped_url.as_str(), "memory://");
         assert!(Arc::ptr_eq(&retrieved_store, &store));
+    }
+
+    #[test]
+    fn test_map_url_to_key() {
+        // Test all documented examples
+        let test_cases = [
+            // s3 examples
+            ("s3://bucket", "s3://bucket"),
+            ("s3://bucket/path", "s3://bucket"),
+            ("s3://bucket/path?param=value", "s3://bucket"),
+            // memory examples
+            ("memory://", "memory://"),
+            ("memory://path", "memory://"),
+            // file examples
+            ("file:///", "file:///"),
+            ("file:///path", "file:///"),
+            // http examples
+            ("http://host:1234", "http://host:1234"),
+            ("http://host:1234/path", "http://host:1234"),
+            (
+                "http://user:pass@host:1234/path/to/file",
+                "http://host:1234",
+            ),
+        ];
+
+        for (input, expected) in test_cases {
+            let input_url = Url::parse(input).unwrap();
+            let expected_url = Url::parse(expected).unwrap();
+            let result = DefaultObjectStoreRegistry::map_url_to_key(&input_url);
+
+            assert_eq!(
+                result.as_str(),
+                expected_url.as_str(),
+                "Expected '{}' to map to '{}', but got '{}'",
+                input,
+                expected,
+                result
+            );
+        }
     }
 }
