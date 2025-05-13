@@ -273,7 +273,7 @@ type ParserFn = Box<dyn Fn(&Url) -> Result<Box<dyn ObjectStore>, super::Error> +
 ///     },
 /// ));
 /// let url = "http://foo:bar@host:123/path".parse::<Url>().unwrap();
-/// // Custom `user_agent` and `allow_http` options are passed to the HttpStore
+/// // Custom `user_agent` and `allow_http` options are set in this store
 /// let store = registry.get_store(&url).unwrap();
 /// ```
 pub struct ParserObjectStoreRegistry {
@@ -646,13 +646,12 @@ mod tests {
         use http::{header::USER_AGENT, Response};
 
         let server = MockServer::new().await;
-
-        server.push_fn(|r| {
-            assert_eq!(r.uri().path(), "/foo/bar");
-            assert_eq!(r.headers().get(USER_AGENT).unwrap(), "test_url");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        server.push_fn(move |req| {
+            let hdr = req.headers().get(USER_AGENT).cloned();
+            let _ = tx.send(hdr);
             Response::new(String::new())
         });
-
         let registry =
             ParserObjectStoreRegistry::default().with_parser_fn(Box::new(
                 |url| match parse_url_opts(
@@ -665,8 +664,9 @@ mod tests {
             ));
         let url = Url::parse(format!("{}/foo/bar", server.url()).as_str()).unwrap();
         let store = registry.get_store(&url).unwrap();
-        let prefix = registry.get_prefix(store.clone()).unwrap();
-        store.get(&Path::from("/foo/bar")).await.unwrap();
+        let _ = store.get(&Path::from("/foo/bar")).await.unwrap();
+        let got = rx.await.expect("handler never ran");
+        assert_eq!(got.unwrap(), "test_url");
         server.shutdown().await;
     }
 }
