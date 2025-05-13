@@ -168,7 +168,7 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
         url: &Url,
         store: Arc<dyn ObjectStore>,
     ) -> Option<(Arc<dyn ObjectStore>, Url)> {
-        let key = DefaultObjectStoreRegistry::map_url_to_key(url);
+        let key = Self::map_url_to_key(url);
         let mut stores = self.object_stores.write().unwrap();
         stores
             .insert(key.clone(), store)
@@ -179,7 +179,7 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     ///
     /// If no store was registered with the provided URL, `None` is returned.
     fn get_store(&self, url: &Url) -> Result<Option<(Arc<dyn ObjectStore>, Url)>, crate::Error> {
-        let key = DefaultObjectStoreRegistry::map_url_to_key(url);
+        let key = Self::map_url_to_key(url);
         eprintln!("key: {key}");
         let mut stores = self.object_stores.write().unwrap();
         if let Some(store) = stores.get(&key) {
