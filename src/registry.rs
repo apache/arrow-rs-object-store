@@ -138,7 +138,7 @@ pub type PrefixFn = Box<dyn Fn(&Url) -> Result<Url, url::ParseError> + Send + Sy
 /// prefix function is applied to the supplied URL to determine the prefix for the URL. The
 /// registered store with the matching prefix is then returned.
 ///
-/// ```rust
+/// ```
 /// use std::sync::Arc;
 /// use url::Url;
 /// use object_store::ObjectStore;
@@ -240,8 +240,8 @@ type ParserFn = Box<dyn Fn(&Url) -> Result<Box<dyn ObjectStore>, super::Error> +
 ///
 /// # Examples
 ///
-/// ```rust
-/// # #[cfg(feature = "http")]
+/// ```
+/// # #[cfg(all(feature = "http", feature = "cloud"))] {
 /// use std::sync::Arc;
 /// use url::Url;
 /// use object_store::ObjectStore;
@@ -252,12 +252,13 @@ type ParserFn = Box<dyn Fn(&Url) -> Result<Box<dyn ObjectStore>, super::Error> +
 /// let store = registry.get_store(&url).unwrap();
 /// let prefix = registry.get_prefix(store).unwrap();
 /// assert_eq!(prefix.as_str(), "http://localhost:8080/");
+/// # }
 /// ```
 ///
 /// And using HTTP with custom opts:
 ///
-/// ```rust
-/// # #[cfg(feature = "http")]
+/// ```
+/// # #[cfg(all(feature = "http", feature = "cloud"))] {
 /// use std::sync::Arc;
 /// use url::Url;
 /// use object_store::{parse_url_opts, ObjectStore};
@@ -275,6 +276,7 @@ type ParserFn = Box<dyn Fn(&Url) -> Result<Box<dyn ObjectStore>, super::Error> +
 /// let url = "http://foo:bar@host:123/path".parse::<Url>().unwrap();
 /// // Custom `user_agent` and `allow_http` options are set in this store
 /// let store = registry.get_store(&url).unwrap();
+/// # }
 /// ```
 pub struct ParserObjectStoreRegistry {
     /// Inner registry for prefix based lookup
@@ -364,7 +366,7 @@ impl ObjectStoreRegistry for ParserObjectStoreRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{memory::InMemory, path::Path};
+    use crate::memory::InMemory;
 
     #[test]
     fn test_register_store() {
@@ -643,6 +645,7 @@ mod tests {
         use crate::client::mock_server::MockServer;
         use crate::http::HttpStore;
         use crate::parse::parse_url_opts;
+        use crate::path::Path;
         use http::{header::USER_AGENT, Response};
 
         let server = MockServer::new().await;
