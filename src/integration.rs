@@ -1119,7 +1119,7 @@ pub async fn multipart_race_condition(storage: &dyn ObjectStore, last_writer_win
 
     /// Create a string like `"1:"`  followed by `part` padded to 5,300,000 places
     ///
-    /// equivalent of format!("{prefix}:{part:05300000}"), which is no longer suppoted
+    /// equivalent of format!("{prefix}:{part:05300000}"), which is no longer supported
     ///
     /// See: <https://github.com/apache/arrow-rs-object-store/issues/343>
     fn make_payload(prefix: u8, part: u8) -> Vec<u8> {
