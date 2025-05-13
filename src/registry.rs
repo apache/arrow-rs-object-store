@@ -315,10 +315,7 @@ impl ParserObjectStoreRegistry {
     }
 
     /// Register options to be used with a specific URL prefix when creating stores dynamically
-    pub fn with_parser_fn(
-        mut self,
-        parser_fn: Box<dyn Fn(&Url) -> Result<Box<dyn ObjectStore>, super::Error> + Send + Sync>,
-    ) -> Self {
+    pub fn with_parser_fn(mut self, parser_fn: ParserFn) -> Self {
         self.parser_fn = parser_fn;
         self
     }
@@ -347,7 +344,7 @@ impl ObjectStoreRegistry for ParserObjectStoreRegistry {
         match (self.parser_fn)(url) {
             Ok(store) => {
                 let store = Arc::new(store);
-                self.register_store(&prefix, store.clone());
+                self.register_store(&prefix, Arc::clone(&store));
                 Some(store)
             }
             Err(_) => None,
@@ -643,7 +640,7 @@ mod tests {
     #[tokio::test]
     async fn test_parser_object_store_registry_with_opts() {
         use crate::client::mock_server::MockServer;
-        use crate::http::HttpStore;
+
         use crate::parse::parse_url_opts;
         use crate::path::Path;
         use http::{header::USER_AGENT, Response};
