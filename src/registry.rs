@@ -17,8 +17,6 @@
 
 //! ObjectStoreRegistry holds object stores at runtime with a URL for each store.
 //! The registry serves as a cache for object stores to avoid repeated creation.
-//! It also lets you convert an [`ObjectStore`] back to its registered URL via
-//! `get_prefix`.
 use crate::{parse_url, ObjectStore};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -44,9 +42,6 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     /// created and registered. The logic for doing so is left to each [`ObjectStoreRegistry`]
     /// implementation.
     fn get_store(&self, url: &Url) -> Option<Arc<dyn ObjectStore>>;
-
-    /// Given one of the `Arc<dyn ObjectStore>`s you registered, return its URL.
-    fn get_prefix(&self, store: Arc<dyn ObjectStore>) -> Option<Url>;
 
     /// List all registered store prefixes
     fn get_store_prefixes(&self) -> Vec<Url>;
@@ -109,20 +104,6 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
         stores.get(url).map(Arc::clone)
     }
 
-    /// Given one of the `Arc<dyn ObjectStore>`s you registered, return its URL.
-    ///
-    /// If no store was registered with the provided `Arc<dyn ObjectStore>`, `None` is returned.
-    fn get_prefix(&self, store: Arc<dyn ObjectStore>) -> Option<Url> {
-        let map = self.object_stores.read().unwrap();
-        // scan for pointer-equal entry
-        for (url, registered) in map.iter() {
-            if Arc::ptr_eq(&store, registered) {
-                return Some(url.clone());
-            }
-        }
-        None
-    }
-
     /// Returns a vector of all registered store prefixes.
     fn get_store_prefixes(&self) -> Vec<Url> {
         let stores = self.object_stores.read().unwrap();
@@ -152,8 +133,6 @@ pub type PrefixFn = Box<dyn Fn(&Url) -> Result<Url, url::ParseError> + Send + Sy
 /// registry.register_store(&parent_url, Arc::clone(&store));
 /// let found_store = registry.get_store(&child_url).unwrap();
 /// assert!(Arc::ptr_eq(&found_store, &store));
-/// let found_url = registry.get_prefix(Arc::clone(&store)).unwrap();
-/// assert_eq!(found_url, parent_url);
 /// ```
 pub struct PrefixObjectStoreRegistry {
     inner: DefaultObjectStoreRegistry,
@@ -220,10 +199,6 @@ impl ObjectStoreRegistry for PrefixObjectStoreRegistry {
             .and_then(|prefix| self.inner.get_store(&prefix))
     }
 
-    fn get_prefix(&self, store: Arc<dyn ObjectStore>) -> Option<Url> {
-        self.inner.get_prefix(store)
-    }
-
     fn get_store_prefixes(&self) -> Vec<Url> {
         self.inner.get_store_prefixes()
     }
@@ -250,8 +225,6 @@ type ParserFn = Box<dyn Fn(&Url) -> Result<Box<dyn ObjectStore>, super::Error> +
 /// let registry = ParserObjectStoreRegistry::new();
 /// let url = "http://localhost:8080".parse::<Url>().unwrap();
 /// let store = registry.get_store(&url).unwrap();
-/// let prefix = registry.get_prefix(store).unwrap();
-/// assert_eq!(prefix.as_str(), "http://localhost:8080/");
 /// # }
 /// ```
 ///
@@ -351,10 +324,6 @@ impl ObjectStoreRegistry for ParserObjectStoreRegistry {
         }
     }
 
-    fn get_prefix(&self, store: Arc<dyn ObjectStore>) -> Option<Url> {
-        self.inner.get_prefix(store)
-    }
-
     fn get_store_prefixes(&self) -> Vec<Url> {
         self.inner.get_store_prefixes()
     }
@@ -392,22 +361,6 @@ mod tests {
         let registry = DefaultObjectStoreRegistry::new();
         let url = Url::parse("memory://foo").unwrap();
         assert!(registry.get_store(&url).is_none());
-    }
-
-    #[test]
-    fn test_get_prefix_round_trip() {
-        let registry = DefaultObjectStoreRegistry::new();
-        let url = Url::parse("memory://").unwrap();
-        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-        registry.register_store(&url, Arc::clone(&store));
-        assert_eq!(registry.get_prefix(Arc::clone(&store)).unwrap(), url);
-    }
-
-    #[test]
-    fn test_get_prefix_miss() {
-        let registry = DefaultObjectStoreRegistry::new();
-        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-        assert!(registry.get_prefix(store).is_none());
     }
 
     #[test]
@@ -540,24 +493,6 @@ mod tests {
         // Test with different scheme - should not match
         let different_scheme = Url::parse("file:///path").unwrap();
         assert!(registry.get_store(&different_scheme).is_none());
-    }
-
-    #[test]
-    fn test_prefix_registry_get_prefix() {
-        let registry = PrefixObjectStoreRegistry::new();
-        let url = Url::parse("memory://foo").unwrap();
-        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-
-        // Register store
-        registry.register_store(&url, Arc::clone(&store));
-
-        // Test get_prefix retrieves the correct URL
-        let retrieved_url = registry.get_prefix(Arc::clone(&store)).unwrap();
-        assert_eq!(retrieved_url, url);
-
-        // Test with unregistered store
-        let unregistered_store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-        assert!(registry.get_prefix(unregistered_store).is_none());
     }
 
     #[test]
