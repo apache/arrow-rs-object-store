@@ -82,8 +82,13 @@ impl ObjectStoreUrl {
         };
 
         let (scheme, store_url, path) = match (url.scheme(), url.host_str()) {
-            ("file", _) | ("memory", _) => (
+            ("file", _) => (
                 ObjectStoreScheme::Local,
+                url[url::Position::BeforeScheme..url::Position::AfterHost].to_string(),
+                &url[url::Position::BeforeHost..url::Position::AfterPath],
+            ),
+            ("memory", _) => (
+                ObjectStoreScheme::Memory,
                 url[url::Position::BeforeScheme..url::Position::AfterHost].to_string(),
                 &url[url::Position::BeforeHost..url::Position::AfterPath],
             ),
@@ -166,7 +171,7 @@ impl ObjectStoreUrl {
         Ok(Self {
             scheme,
             store: store_url,
-            path: path.into(),
+            path: Path::from_url_path(path)?,
         })
     }
 
@@ -246,39 +251,8 @@ impl ObjectStoreScheme {
     /// assert_eq!(path.as_ref(), "path/to/my/file");
     /// ```
     pub fn parse(url: &Url) -> Result<(Self, Path), Error> {
-        let strip_bucket = || Some(url.path().strip_prefix('/')?.split_once('/')?.1);
-
-        let (scheme, path) = match (url.scheme(), url.host_str()) {
-            ("file", None) => (Self::Local, url.path()),
-            ("memory", None) => (Self::Memory, url.path()),
-            ("s3" | "s3a", Some(_)) => (Self::AmazonS3, url.path()),
-            ("gs", Some(_)) => (Self::GoogleCloudStorage, url.path()),
-            ("az" | "adl" | "azure" | "abfs" | "abfss", Some(_)) => {
-                (Self::MicrosoftAzure, url.path())
-            }
-            ("http", Some(_)) => (Self::Http, url.path()),
-            ("https", Some(host)) => {
-                if host.ends_with("dfs.core.windows.net")
-                    || host.ends_with("blob.core.windows.net")
-                    || host.ends_with("dfs.fabric.microsoft.com")
-                    || host.ends_with("blob.fabric.microsoft.com")
-                {
-                    (Self::MicrosoftAzure, url.path())
-                } else if host.ends_with("amazonaws.com") {
-                    match host.starts_with("s3") {
-                        true => (Self::AmazonS3, strip_bucket().unwrap_or_default()),
-                        false => (Self::AmazonS3, url.path()),
-                    }
-                } else if host.ends_with("r2.cloudflarestorage.com") {
-                    (Self::AmazonS3, strip_bucket().unwrap_or_default())
-                } else {
-                    (Self::Http, url.path())
-                }
-            }
-            _ => return Err(Error::Unrecognised { url: url.clone() }),
-        };
-
-        Ok((scheme, Path::from_url_path(path)?))
+        let os_url = ObjectStoreUrl::parse(url)?;
+        Ok((os_url.scheme(), os_url.path().clone()))
     }
 }
 
