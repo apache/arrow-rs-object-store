@@ -82,12 +82,12 @@ impl ObjectStoreUrl {
         };
 
         let (scheme, store_url, path) = match (url.scheme(), url.host_str()) {
-            ("file", _) => (
+            ("file", None) => (
                 ObjectStoreScheme::Local,
                 url[url::Position::BeforeScheme..url::Position::AfterHost].to_string(),
                 &url[url::Position::BeforeHost..url::Position::AfterPath],
             ),
-            ("memory", _) => (
+            ("memory", None) => (
                 ObjectStoreScheme::Memory,
                 url[url::Position::BeforeScheme..url::Position::AfterHost].to_string(),
                 &url[url::Position::BeforeHost..url::Position::AfterPath],
@@ -250,6 +250,7 @@ impl ObjectStoreScheme {
     /// assert_eq!(scheme, ObjectStoreScheme::Http);
     /// assert_eq!(path.as_ref(), "path/to/my/file");
     /// ```
+    #[deprecated(note = "Use `ObjectStoreUrl::parse` instead")]
     pub fn parse(url: &Url) -> Result<(Self, Path), Error> {
         let os_url = ObjectStoreUrl::parse(url)?;
         Ok((os_url.scheme(), os_url.path().clone()))
