@@ -80,7 +80,7 @@ pub struct AwsCredential {
 impl std::fmt::Debug for AwsCredential {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AwsCredential")
-            .field("key_id", &"******")
+            .field("key_id", &self.key_id)
             .field("secret_key", &"******")
             .field("token", &self.token.as_ref().map(|_| "******"))
             .finish()
@@ -1286,11 +1286,10 @@ mod tests {
 
         let debug_output = format!("{:?}", cred);
 
-        assert!(debug_output.contains("key_id: \"******\""));
+        assert!(debug_output.contains("key_id: \"AKIAXXX\""));
         assert!(debug_output.contains("secret_key: \"******\""));
         assert!(debug_output.contains("token: Some(\"******\")"));
 
-        assert!(!debug_output.contains("AKIAXXX"));
         assert!(!debug_output.contains("super_secret"));
         assert!(!debug_output.contains("temp_token"));
     }
