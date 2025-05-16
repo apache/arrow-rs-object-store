@@ -33,7 +33,11 @@ use web_time::{Duration, Instant};
 
 /// Retry request error
 #[derive(Debug, thiserror::Error)]
-pub struct RetryError {
+pub struct RetryError(Box<RetryErrorImpl>);
+
+/// Box error to avoid large error variant
+#[derive(Debug)]
+struct RetryErrorImpl {
     method: Method,
     uri: Option<Uri>,
     retries: usize,
@@ -45,20 +49,20 @@ pub struct RetryError {
 
 impl std::fmt::Display for RetryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Error performing {} ", self.method)?;
-        match &self.uri {
+        write!(f, "Error performing {} ", self.0.method)?;
+        match &self.0.uri {
             Some(uri) => write!(f, "{uri} ")?,
             None => write!(f, "REDACTED ")?,
         }
-        write!(f, "in {:?}", self.elapsed)?;
-        if self.retries != 0 {
+        write!(f, "in {:?}", self.0.elapsed)?;
+        if self.0.retries != 0 {
             write!(
                 f,
                 ", after {} retries, max_retries: {}, retry_timeout: {:?} ",
-                self.retries, self.max_retries, self.retry_timeout
+                self.0.retries, self.0.max_retries, self.0.retry_timeout
             )?;
         }
-        write!(f, " - {}", self.inner)
+        write!(f, " - {}", self.0.inner)
     }
 }
 
@@ -74,7 +78,7 @@ struct RetryContext {
 
 impl RetryContext {
     fn err(self, error: RequestError) -> RetryError {
-        RetryError {
+        RetryError(Box::new(RetryErrorImpl {
             uri: self.uri,
             method: self.method,
             retries: self.retries,
@@ -82,7 +86,7 @@ impl RetryContext {
             elapsed: self.start.elapsed(),
             retry_timeout: self.retry_timeout,
             inner: error,
-        }
+        }))
     }
 
     fn exhausted(&self) -> bool {
@@ -113,12 +117,12 @@ pub enum RequestError {
 impl RetryError {
     /// Returns the underlying [`RequestError`]
     pub fn inner(&self) -> &RequestError {
-        &self.inner
+        &self.0.inner
     }
 
     /// Returns the status code associated with this error if any
     pub fn status(&self) -> Option<StatusCode> {
-        match &self.inner {
+        match self.inner() {
             RequestError::Status { status, .. } | RequestError::Response { status, .. } => {
                 Some(*status)
             }
@@ -128,7 +132,7 @@ impl RetryError {
 
     /// Returns the error body if any
     pub fn body(&self) -> Option<&str> {
-        match &self.inner {
+        match self.inner() {
             RequestError::Status { body, .. } => body.as_deref(),
             RequestError::Response { body, .. } => Some(body),
             RequestError::BareRedirect | RequestError::Http(_) => None,
@@ -178,7 +182,7 @@ impl From<RetryError> for std::io::Error {
             Some(StatusCode::UNAUTHORIZED) | Some(StatusCode::FORBIDDEN) => {
                 ErrorKind::PermissionDenied
             }
-            _ => match &err.inner {
+            _ => match err.inner() {
                 RequestError::Http(h) => match h.kind() {
                     HttpErrorKind::Timeout => ErrorKind::TimedOut,
                     HttpErrorKind::Connect => ErrorKind::NotConnected,
@@ -621,7 +625,7 @@ mod tests {
         );
 
         let e = do_request().await.unwrap_err();
-        assert!(matches!(e.inner, RequestError::BareRedirect));
+        assert!(matches!(e.inner(), RequestError::BareRedirect));
         assert_eq!(e.inner().to_string(), "Received redirect without LOCATION, this normally indicates an incorrectly configured region");
 
         // Gives up after the retrying the specified number of times
