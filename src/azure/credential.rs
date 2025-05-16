@@ -113,6 +113,7 @@ pub struct AzureAccessKey(Vec<u8>);
 
 impl AzureAccessKey {
     /// Create a new [`AzureAccessKey`], checking it for validity
+    #[expect(clippy::result_large_err)]
     pub fn try_new(key: &str) -> Result<Self> {
         let key = BASE64_STANDARD
             .decode(key)
@@ -188,6 +189,7 @@ impl AzureSigner {
         }
     }
 
+    #[expect(clippy::result_large_err)]
     pub(crate) fn sign(&self, method: &Method, url: &mut Url) -> Result<()> {
         let (str_to_sign, query_pairs) = match &self.delegation_key {
             Some(delegation_key) => string_to_sign_user_delegation_sas(
