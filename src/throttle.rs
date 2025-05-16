@@ -22,8 +22,8 @@ use std::{convert::TryInto, sync::Arc};
 
 use crate::multipart::{MultipartStore, PartId};
 use crate::{
-    path::Path, GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
+    path::Path, GetResult, GetResultPayload, ListOptions, ListResult, MultipartId, MultipartUpload,
+    ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
 };
 use crate::{GetOptions, UploadPart};
 use async_trait::async_trait;
@@ -250,6 +250,23 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         .boxed()
     }
 
+    fn list_opts(
+        &self,
+        prefix: Option<&Path>,
+        options: ListOptions,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        let stream = self.inner.list_opts(prefix, options);
+        let config = Arc::clone(&self.config);
+        futures::stream::once(async move {
+            let config = *config.lock();
+            let wait_list_per_entry = config.wait_list_per_entry;
+            sleep(config.wait_list_per_call).await;
+            throttle_stream(stream, move |_| wait_list_per_entry)
+        })
+        .flatten()
+        .boxed()
+    }
+
     fn list_with_offset(
         &self,
         prefix: Option<&Path>,
@@ -433,6 +450,7 @@ mod tests {
         put_get_delete_list(&store).await;
         list_uses_directories_correctly(&store).await;
         list_with_delimiter(&store).await;
+        list_with_composite_conditions(&store).await;
         rename_and_copy(&store).await;
         copy_if_not_exists(&store).await;
         stream_get(&store).await;

@@ -66,6 +66,14 @@ impl ObjectStore for MyStore {
         todo!()
     }
 
+    fn list_opts(
+        &self,
+        _: Option<&Path>,
+        _: ListOptions,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        todo!()
+    }
+
     async fn list_with_delimiter(&self, _: Option<&Path>) -> Result<ListResult> {
         todo!()
     }

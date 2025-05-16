@@ -964,6 +964,7 @@ impl ListClient for Arc<AzureClient> {
         delimiter: bool,
         token: Option<&str>,
         offset: Option<&str>,
+        extensions: http::Extensions,
     ) -> Result<(ListResult, Option<String>)> {
         assert!(offset.is_none()); // Not yet supported
 
@@ -995,6 +996,7 @@ impl ListClient for Arc<AzureClient> {
             .get(url.as_str())
             .query(&query)
             .with_azure_authorization(&credential, &self.config.account)
+            .extensions(extensions)
             .retryable(&self.config.retry_config)
             .sensitive(sensitive)
             .send()

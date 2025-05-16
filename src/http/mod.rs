@@ -42,11 +42,12 @@ use url::Url;
 use crate::client::get::GetClientExt;
 use crate::client::header::get_etag;
 use crate::client::{http_connector, HttpConnector};
-use crate::http::client::Client;
+use crate::http::client::{Client, MultiStatusResponse};
 use crate::path::Path;
 use crate::{
-    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, RetryConfig,
+    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListOptions, ListResult,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload,
+    PutResult, Result, RetryConfig,
 };
 
 mod client;
@@ -157,36 +158,57 @@ impl ObjectStore for HttpStore {
         .boxed()
     }
 
+    fn list_opts(
+        &self,
+        prefix: Option<&Path>,
+        options: ListOptions,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        let client = Arc::<Client>::clone(&self.client);
+        let offset = options.offset.clone();
+        let prefix = prefix.cloned();
+        let base_url = self.client.base_url().clone();
+        if options.delimiter {
+            futures::stream::once(async move {
+                let status = client.list(prefix.as_ref(), "1").await?;
+                let response: Vec<_> = status
+                    .response
+                    .into_iter()
+                    .filter(|r| {
+                        offset
+                            .as_ref()
+                            .map(|o| match r.path(client.base_url()) {
+                                Ok(path) => &path > o,
+                                Err(_) => false,
+                            })
+                            .unwrap_or(true)
+                    })
+                    .collect();
+                parse_list_with_delimiter_result(response, prefix.as_ref(), &base_url)
+            })
+            .boxed()
+        } else {
+            let mut stream = self.list(prefix.as_ref());
+            futures::stream::once(async move {
+                let mut buffer = Vec::with_capacity(1000);
+                while let Some(obj) = stream.next().await.transpose()? {
+                    match &offset {
+                        None => buffer.push(obj),
+                        Some(offset) if &obj.location > offset => buffer.push(obj),
+                        _ => continue,
+                    }
+                }
+                Ok(ListResult {
+                    common_prefixes: vec![],
+                    objects: buffer,
+                })
+            })
+            .boxed()
+        }
+    }
+
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
         let status = self.client.list(prefix, "1").await?;
-        let prefix_len = prefix.map(|p| p.as_ref().len()).unwrap_or(0);
-
-        let mut objects: Vec<ObjectMeta> = Vec::with_capacity(status.response.len());
-        let mut common_prefixes = Vec::with_capacity(status.response.len());
-        for response in status.response {
-            response.check_ok()?;
-            match response.is_dir() {
-                false => {
-                    let meta = response.object_meta(self.client.base_url())?;
-                    // Filter out exact prefix matches
-                    if meta.location.as_ref().len() > prefix_len {
-                        objects.push(meta);
-                    }
-                }
-                true => {
-                    let path = response.path(self.client.base_url())?;
-                    // Exclude the current object
-                    if path.as_ref().len() > prefix_len {
-                        common_prefixes.push(path);
-                    }
-                }
-            }
-        }
-
-        Ok(ListResult {
-            common_prefixes,
-            objects,
-        })
+        parse_list_with_delimiter_result(status.response, prefix, self.client.base_url())
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
@@ -196,6 +218,41 @@ impl ObjectStore for HttpStore {
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
         self.client.copy(from, to, false).await
     }
+}
+
+fn parse_list_with_delimiter_result(
+    responses: Vec<MultiStatusResponse>,
+    prefix: Option<&Path>,
+    base_url: &Url,
+) -> Result<ListResult> {
+    let prefix_len = prefix.map(|p| p.as_ref().len()).unwrap_or(0);
+
+    let mut objects: Vec<ObjectMeta> = Vec::with_capacity(responses.len());
+    let mut common_prefixes = Vec::with_capacity(responses.len());
+    for response in responses {
+        response.check_ok()?;
+        match response.is_dir() {
+            false => {
+                let meta = response.object_meta(base_url)?;
+                // Filter out exact prefix matches
+                if meta.location.as_ref().len() > prefix_len {
+                    objects.push(meta);
+                }
+            }
+            true => {
+                let path = response.path(base_url)?;
+                // Exclude the current object
+                if path.as_ref().len() > prefix_len {
+                    common_prefixes.push(path);
+                }
+            }
+        }
+    }
+
+    Ok(ListResult {
+        common_prefixes,
+        objects,
+    })
 }
 
 /// Configure a connection to a generic HTTP server
@@ -284,6 +341,7 @@ mod tests {
         put_get_delete_list(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
+        list_with_composite_conditions(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
     }

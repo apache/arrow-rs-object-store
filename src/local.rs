@@ -19,10 +19,10 @@
 use std::fs::{metadata, symlink_metadata, File, Metadata, OpenOptions};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::{collections::BTreeSet, io};
-use std::{collections::VecDeque, path::PathBuf};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -37,8 +37,9 @@ use crate::{
     maybe_spawn_blocking,
     path::{absolute_path_to_url, Path},
     util::InvalidGetRange,
-    Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
+    Attributes, GetOptions, GetResult, GetResultPayload, ListOptions, ListResult, MultipartUpload,
+    ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
+    UploadPart,
 };
 
 /// A specialized `Error` for filesystem object store-related errors
@@ -483,7 +484,18 @@ impl ObjectStore for LocalFileSystem {
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.list_with_maybe_offset(prefix, None)
+        self.list_opts(prefix, ListOptions::default())
+            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
+            .try_flatten()
+            .boxed()
+    }
+
+    fn list_opts(
+        &self,
+        prefix: Option<&Path>,
+        options: ListOptions,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        self.list_with_opts(prefix, options)
     }
 
     fn list_with_offset(
@@ -491,7 +503,16 @@ impl ObjectStore for LocalFileSystem {
         prefix: Option<&Path>,
         offset: &Path,
     ) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.list_with_maybe_offset(prefix, Some(offset))
+        self.list_opts(
+            prefix,
+            ListOptions {
+                offset: Some(offset.clone()),
+                ..ListOptions::default()
+            },
+        )
+        .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
+        .try_flatten()
+        .boxed()
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
@@ -623,13 +644,16 @@ impl ObjectStore for LocalFileSystem {
 }
 
 impl LocalFileSystem {
-    fn list_with_maybe_offset(
+    fn list_with_opts(
         &self,
         prefix: Option<&Path>,
-        maybe_offset: Option<&Path>,
-    ) -> BoxStream<'static, Result<ObjectMeta>> {
-        let config = Arc::clone(&self.config);
+        options: ListOptions,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        let ListOptions {
+            offset, delimiter, ..
+        } = options;
 
+        let config = Arc::clone(&self.config);
         let root_path = match prefix {
             Some(prefix) => match config.prefix_to_filesystem(prefix) {
                 Ok(path) => path,
@@ -638,73 +662,114 @@ impl LocalFileSystem {
             None => config.root.to_file_path().unwrap(),
         };
 
-        let walkdir = WalkDir::new(root_path)
+        let mut walkdir = WalkDir::new(root_path)
             // Don't include the root directory itself
             .min_depth(1)
             .follow_links(true);
-
-        let maybe_offset = maybe_offset.cloned();
-
-        let s = walkdir.into_iter().flat_map(move |result_dir_entry| {
-            // Apply offset filter before proceeding, to reduce statx file system calls
-            // This matters for NFS mounts
-            if let (Some(offset), Ok(entry)) = (maybe_offset.as_ref(), result_dir_entry.as_ref()) {
-                let location = config.filesystem_to_path(entry.path());
-                match location {
-                    Ok(path) if path <= *offset => return None,
-                    Err(e) => return Some(Err(e)),
-                    _ => {}
-                }
-            }
-
-            let entry = match convert_walkdir_result(result_dir_entry).transpose()? {
-                Ok(entry) => entry,
-                Err(e) => return Some(Err(e)),
-            };
-
-            if !entry.path().is_file() {
-                return None;
-            }
-
-            match config.filesystem_to_path(entry.path()) {
-                Ok(path) => match is_valid_file_path(&path) {
-                    true => convert_entry(entry, path).transpose(),
-                    false => None,
-                },
-                Err(e) => Some(Err(e)),
-            }
-        });
-
-        // If no tokio context, return iterator directly as no
-        // need to perform chunked spawn_blocking reads
-        if tokio::runtime::Handle::try_current().is_err() {
-            return futures::stream::iter(s).boxed();
+        if delimiter {
+            walkdir = walkdir.max_depth(1);
         }
 
-        // Otherwise list in batches of CHUNK_SIZE
-        const CHUNK_SIZE: usize = 1024;
+        let offset = offset.clone();
+        let stream = walkdir.into_iter().flat_map(move |entry_res| {
+            if let Ok(entry) = entry_res.as_ref() {
+                let location = config.filesystem_to_path(entry.path());
+                match location {
+                    Ok(path) => {
+                        // Apply offset filter before proceeding, to reduce statx file system calls
+                        // This matters for NFS mounts
+                        if let Some(offset) = offset.as_ref() {
+                            if path <= *offset {
+                                return None;
+                            }
+                        }
 
-        let buffer = VecDeque::with_capacity(CHUNK_SIZE);
-        futures::stream::try_unfold((s, buffer), |(mut s, mut buffer)| async move {
-            if buffer.is_empty() {
-                (s, buffer) = tokio::task::spawn_blocking(move || {
-                    for _ in 0..CHUNK_SIZE {
-                        match s.next() {
-                            Some(r) => buffer.push_back(r),
+                        // Exclude the 'directory' if delimiter is false
+                        if !delimiter && entry.path().is_dir() {
+                            return None;
+                        }
+
+                        // Exclude the invalid files.
+                        if entry.path().is_file() && !is_valid_file_path(&path) {
+                            return None;
+                        }
+                    }
+                    Err(e) => return Some(Err(e)),
+                }
+            }
+            convert_walkdir_result(entry_res).transpose()
+        });
+
+        let config = Arc::clone(&self.config);
+        let prefix = prefix.cloned().unwrap_or_default();
+        let buffer = Vec::with_capacity(1000);
+        futures::stream::try_unfold(
+            (stream, buffer, config, prefix, delimiter),
+            |(mut stream, mut buffer, config, prefix, delimiter)| async move {
+                (stream, buffer) = maybe_spawn_blocking(move || {
+                    while buffer.len() < 1000 {
+                        match stream.next() {
+                            Some(r) => buffer.push(r),
                             None => break,
                         }
                     }
-                    (s, buffer)
+                    Ok((stream, buffer))
                 })
                 .await?;
-            }
 
-            match buffer.pop_front() {
-                Some(Err(e)) => Err(e),
-                Some(Ok(meta)) => Ok(Some((meta, (s, buffer)))),
-                None => Ok(None),
-            }
-        })
+                if buffer.is_empty() {
+                    Ok(None)
+                } else if delimiter {
+                    let mut common_prefixes = BTreeSet::new();
+                    let mut objects = Vec::new();
+                    for entry_res in buffer.drain(..) {
+                        let entry = entry_res?;
+                        let is_directory = entry.file_type().is_dir();
+                        let entry_location = config.filesystem_to_path(entry.path())?;
+                        if is_directory {
+                            let mut parts = match entry_location.prefix_match(&prefix) {
+                                Some(parts) => parts,
+                                None => continue,
+                            };
+                            let common_prefix = match parts.next() {
+                                Some(p) => p,
+                                None => continue,
+                            };
+                            drop(parts);
+                            common_prefixes.insert(prefix.child(common_prefix));
+                        } else if let Some(metadata) = convert_entry(entry, entry_location)? {
+                            objects.push(metadata);
+                        }
+                    }
+
+                    Ok(Some((
+                        ListResult {
+                            common_prefixes: common_prefixes.into_iter().collect(),
+                            objects,
+                        },
+                        (stream, buffer, config, prefix, delimiter),
+                    )))
+                } else {
+                    let mut objects = Vec::new();
+                    for entry_res in buffer.drain(..) {
+                        // All entries are files since the directory is excluded previously.
+                        let entry = entry_res?;
+                        let entry_location = config.filesystem_to_path(entry.path())?;
+                        if let Some(metadata) = convert_entry(entry, entry_location)? {
+                            objects.push(metadata);
+                        }
+                    }
+
+                    Ok(Some((
+                        ListResult {
+                            common_prefixes: vec![],
+                            objects,
+                        },
+                        (stream, buffer, config, prefix, delimiter),
+                    )))
+                }
+            },
+        )
         .boxed()
     }
 }
@@ -1103,6 +1168,7 @@ mod tests {
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
+        list_with_composite_conditions(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
         copy_rename_nonexistent_object(&integration).await;
@@ -1119,6 +1185,7 @@ mod tests {
             put_get_delete_list(&integration).await;
             list_uses_directories_correctly(&integration).await;
             list_with_delimiter(&integration).await;
+            list_with_composite_conditions(&integration).await;
 
             // Can't use stream_get test as WriteMultipart uses a tokio JoinSet
             let p = Path::from("manual_upload");

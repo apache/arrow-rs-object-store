@@ -17,7 +17,7 @@
 
 use crate::client::pagination::stream_paginated;
 use crate::path::Path;
-use crate::Result;
+use crate::{ListOptions, Result};
 use crate::{ListResult, ObjectMeta};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
@@ -33,17 +33,17 @@ pub(crate) trait ListClient: Send + Sync + 'static {
         delimiter: bool,
         token: Option<&str>,
         offset: Option<&str>,
+        extensions: http::Extensions,
     ) -> Result<(ListResult, Option<String>)>;
 }
 
 /// Extension trait for [`ListClient`] that adds common listing functionality
 #[async_trait]
 pub(crate) trait ListClientExt {
-    fn list_paginated(
+    fn list_opts(
         &self,
         prefix: Option<&Path>,
-        delimiter: bool,
-        offset: Option<&Path>,
+        opts: ListOptions,
     ) -> BoxStream<'static, Result<ListResult>>;
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>>;
@@ -60,12 +60,17 @@ pub(crate) trait ListClientExt {
 
 #[async_trait]
 impl<T: ListClient + Clone> ListClientExt for T {
-    fn list_paginated(
+    fn list_opts(
         &self,
         prefix: Option<&Path>,
-        delimiter: bool,
-        offset: Option<&Path>,
+        opts: ListOptions,
     ) -> BoxStream<'static, Result<ListResult>> {
+        let ListOptions {
+            delimiter,
+            offset,
+            extensions,
+        } = opts;
+
         let offset = offset.map(|x| x.to_string());
         let prefix = prefix
             .filter(|x| !x.as_ref().is_empty())
@@ -73,27 +78,35 @@ impl<T: ListClient + Clone> ListClientExt for T {
 
         stream_paginated(
             self.clone(),
-            (prefix, offset),
-            move |client, (prefix, offset), token| async move {
+            (prefix, offset, extensions),
+            move |client, (prefix, offset, extensions), token| async move {
                 let (r, next_token) = client
                     .list_request(
                         prefix.as_deref(),
                         delimiter,
                         token.as_deref(),
                         offset.as_deref(),
+                        extensions.clone(),
                     )
                     .await?;
-                Ok((r, (prefix, offset), next_token))
+                Ok((r, (prefix, offset, extensions), next_token))
             },
         )
         .boxed()
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.list_paginated(prefix, false, None)
-            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
-            .try_flatten()
-            .boxed()
+        self.list_opts(
+            prefix,
+            ListOptions {
+                offset: None,
+                delimiter: false,
+                extensions: Default::default(),
+            },
+        )
+        .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
+        .try_flatten()
+        .boxed()
     }
 
     fn list_with_offset(
@@ -101,14 +114,28 @@ impl<T: ListClient + Clone> ListClientExt for T {
         prefix: Option<&Path>,
         offset: &Path,
     ) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.list_paginated(prefix, false, Some(offset))
-            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
-            .try_flatten()
-            .boxed()
+        self.list_opts(
+            prefix,
+            ListOptions {
+                offset: Some(offset.clone()),
+                delimiter: false,
+                extensions: Default::default(),
+            },
+        )
+        .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
+        .try_flatten()
+        .boxed()
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        let mut stream = self.list_paginated(prefix, true, None);
+        let mut stream = self.list_opts(
+            prefix,
+            ListOptions {
+                offset: None,
+                delimiter: true,
+                extensions: Default::default(),
+            },
+        );
 
         let mut common_prefixes = BTreeSet::new();
         let mut objects = Vec::new();
@@ -123,5 +150,35 @@ impl<T: ListClient + Clone> ListClientExt for T {
             common_prefixes: common_prefixes.into_iter().collect(),
             objects,
         })
+    }
+}
+
+pub(crate) fn filter_list_result(
+    stream: BoxStream<'static, Result<ListResult>>,
+    offset: Option<Path>,
+) -> BoxStream<'static, Result<ListResult>> {
+    match offset {
+        Some(offset) if !offset.to_string().is_empty() => stream
+            .map_ok(move |r| {
+                let objects: Vec<ObjectMeta> = r
+                    .objects
+                    .into_iter()
+                    .filter(|f| f.location > offset)
+                    .collect();
+                let common_prefixes: Vec<Path> = r
+                    .common_prefixes
+                    .into_iter()
+                    .filter(|p| p > &offset)
+                    .collect();
+                ListResult {
+                    common_prefixes,
+                    objects,
+                }
+            })
+            .try_filter(move |f| {
+                futures::future::ready(f.objects.len() + f.common_prefixes.len() > 0)
+            })
+            .boxed(),
+        _ => stream,
     }
 }

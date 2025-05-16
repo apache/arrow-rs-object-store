@@ -38,15 +38,15 @@ use url::Url;
 
 use crate::aws::client::{CompleteMultipartMode, PutPartPayload, RequestError, S3Client};
 use crate::client::get::GetClientExt;
-use crate::client::list::ListClientExt;
+use crate::client::list::{filter_list_result, ListClientExt};
 use crate::client::CredentialProvider;
 use crate::multipart::{MultipartStore, PartId};
 use crate::signer::Signer;
 use crate::util::STRICT_ENCODE_SET;
 use crate::{
-    Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
-    ObjectStore, Path, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
-    UploadPart,
+    Error, GetOptions, GetResult, ListOptions, ListResult, MultipartId, MultipartUpload,
+    ObjectMeta, ObjectStore, Path, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult,
+    Result, UploadPart,
 };
 
 static TAGS_HEADER: HeaderName = HeaderName::from_static("x-amz-tagging");
@@ -288,6 +288,26 @@ impl ObjectStore for AmazonS3 {
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         self.client.list(prefix)
+    }
+
+    fn list_opts(
+        &self,
+        prefix: Option<&Path>,
+        options: ListOptions,
+    ) -> BoxStream<'static, Result<ListResult>> {
+        if self.client.config.is_s3_express() {
+            // S3 Express does not support start-after
+            let stream = self.client.list_opts(
+                prefix,
+                ListOptions {
+                    offset: None,
+                    ..options
+                },
+            );
+            filter_list_result(stream, options.offset)
+        } else {
+            self.client.list_opts(prefix, options)
+        }
     }
 
     fn list_with_offset(
@@ -581,6 +601,7 @@ mod tests {
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
+        list_with_composite_conditions(&integration).await;
         rename_and_copy(&integration).await;
         stream_get(&integration).await;
         multipart(&integration, &integration).await;
