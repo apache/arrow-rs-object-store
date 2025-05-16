@@ -123,6 +123,7 @@ pub struct ServiceAccountKey(RsaKeyPair);
 
 impl ServiceAccountKey {
     /// Parses a pem-encoded RSA key
+    #[expect(clippy::result_large_err)]
     pub fn from_pem(encoded: &[u8]) -> Result<Self> {
         use rustls_pemfile::Item;
         use std::io::Cursor;
@@ -139,15 +140,18 @@ impl ServiceAccountKey {
     }
 
     /// Parses an unencrypted PKCS#8-encoded RSA private key.
+    #[expect(clippy::result_large_err)]
     pub fn from_pkcs8(key: &[u8]) -> Result<Self> {
         Ok(Self(RsaKeyPair::from_pkcs8(key)?))
     }
 
     /// Parses an unencrypted PKCS#8-encoded RSA private key.
+    #[expect(clippy::result_large_err)]
     pub fn from_der(key: &[u8]) -> Result<Self> {
         Ok(Self(RsaKeyPair::from_der(key)?))
     }
 
+    #[expect(clippy::result_large_err)]
     fn sign(&self, string_to_sign: &str) -> Result<String> {
         let mut signature = vec![0; self.0.public().modulus_len()];
         self.0
@@ -240,6 +244,7 @@ pub(crate) struct SelfSignedJwt {
 
 impl SelfSignedJwt {
     /// Create a new [`SelfSignedJwt`]
+    #[expect(clippy::result_large_err)]
     pub(crate) fn new(
         key_id: String,
         issuer: String,
@@ -306,6 +311,7 @@ impl TokenProvider for SelfSignedJwt {
     }
 }
 
+#[expect(clippy::result_large_err)]
 fn read_credentials_file<T>(service_account_path: impl AsRef<std::path::Path>) -> Result<T>
 where
     T: serde::de::DeserializeOwned,
@@ -341,11 +347,13 @@ pub(crate) struct ServiceAccountCredentials {
 
 impl ServiceAccountCredentials {
     /// Create a new [`ServiceAccountCredentials`] from a file.
+    #[expect(clippy::result_large_err)]
     pub(crate) fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         read_credentials_file(path)
     }
 
     /// Create a new [`ServiceAccountCredentials`] from a string.
+    #[expect(clippy::result_large_err)]
     pub(crate) fn from_key(key: &str) -> Result<Self> {
         serde_json::from_str(key).map_err(|source| Error::DecodeCredentials { source })
     }
@@ -385,6 +393,7 @@ fn seconds_since_epoch() -> u64 {
         .as_secs()
 }
 
+#[expect(clippy::result_large_err)]
 fn b64_encode_obj<T: serde::Serialize>(obj: &T) -> Result<String> {
     let string = serde_json::to_string(obj).map_err(|source| Error::Encode { source })?;
     Ok(BASE64_URL_SAFE_NO_PAD.encode(string))
@@ -566,6 +575,7 @@ impl ApplicationDefaultCredentials {
     // Create a new application default credential in the following situations:
     //  1. a file is passed in and the type matches.
     //  2. without argument if the well-known configuration file is present.
+    #[expect(clippy::result_large_err)]
     pub(crate) fn read(path: Option<&str>) -> Result<Option<Self>, Error> {
         if let Some(path) = path {
             return read_credentials_file::<Self>(path).map(Some);
