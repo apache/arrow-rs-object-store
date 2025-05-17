@@ -292,17 +292,7 @@ impl Client {
             .delete(url)
             .send_retry(&self.retry_config)
             .await
-            .map_err(|source| match source.status() {
-                Some(StatusCode::NOT_FOUND) => crate::Error::NotFound {
-                    source: Box::new(source),
-                    path: path.to_string(),
-                },
-                _ => Error::Request {
-                    source,
-                    path: path.to_string(),
-                }
-                .into(),
-            })?;
+            .map_err(|source| source.error(STORE, path.to_string()))?;
         Ok(())
     }
 
