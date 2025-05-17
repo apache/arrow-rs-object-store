@@ -43,6 +43,162 @@ impl From<Error> for super::Error {
     }
 }
 
+/// Path to an object in an ObjectStore
+#[non_exhaustive] // permit new variants
+#[derive(Debug, Eq, PartialEq, Clone)]
+pub struct ObjectStoreUrl {
+    scheme: ObjectStoreScheme,
+    store: Url,
+    path: Path,
+}
+
+impl ObjectStoreUrl {
+    /// Parse a URL into an ObjectStoreUrl
+    ///
+    /// Extracts the relevant ObjectStoreScheme, store URL (for identification),
+    /// and path within the store.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use url::Url;
+    /// # use object_store::{ObjectStoreScheme, ObjectStoreUrl};
+    /// let url: Url = "s3://bucket/path/to/file".parse().unwrap();
+    /// let os_url = ObjectStoreUrl::parse(&url).unwrap();
+    /// assert_eq!(os_url.scheme(), ObjectStoreScheme::AmazonS3);
+    /// assert_eq!(os_url.store().as_str(), "s3://bucket/");
+    /// assert_eq!(os_url.path().as_ref(), "path/to/file");
+    /// ```
+    pub fn parse(url: &Url) -> Result<Self, Error> {
+        let strip_bucket = || Some(url.path().strip_prefix('/')?.split_once('/')?.1);
+        let store_with_bucket = || {
+            let bucket = url
+                .path_segments()
+                .map(|mut segments| segments.next())
+                .flatten()
+                .ok_or(Error::Unrecognised { url: url.clone() })?;
+            Url::parse(&format!(
+                "{}/{}",
+                &url[url::Position::BeforeScheme..url::Position::AfterPort],
+                bucket,
+            ))
+            .map_err(|_| Error::Unrecognised { url: url.clone() })
+        };
+
+        let (scheme, store_url, path) = match (url.scheme(), url.host_str()) {
+            ("file", None) => (
+                ObjectStoreScheme::Local,
+                url[url::Position::BeforeScheme..url::Position::AfterHost].to_string(),
+                &url[url::Position::BeforePath..url::Position::AfterPath],
+            ),
+            ("memory", None) => (
+                ObjectStoreScheme::Memory,
+                url[url::Position::BeforeScheme..url::Position::AfterHost].to_string(),
+                &url[url::Position::BeforePath..url::Position::AfterPath],
+            ),
+            ("s3" | "s3a", Some(_)) => (
+                ObjectStoreScheme::AmazonS3,
+                url[url::Position::BeforeScheme..url::Position::AfterHost].to_string(),
+                url.path(),
+            ),
+            ("gs", Some(_)) => (
+                ObjectStoreScheme::GoogleCloudStorage,
+                url[url::Position::BeforeScheme..url::Position::AfterHost].to_string(),
+                url.path(),
+            ),
+            ("az" | "adl" | "azure" | "abfs" | "abfss", Some(_)) => (
+                ObjectStoreScheme::MicrosoftAzure,
+                url[url::Position::BeforeScheme..url::Position::AfterHost].to_string(),
+                url.path(),
+            ),
+            ("http", Some(_)) => (
+                ObjectStoreScheme::Http,
+                url[url::Position::BeforeScheme..url::Position::AfterPort].to_string(),
+                url.path(),
+            ),
+            ("https", Some(host)) => {
+                if host.ends_with("dfs.core.windows.net")
+                    || host.ends_with("blob.core.windows.net")
+                    || host.ends_with("dfs.fabric.microsoft.com")
+                    || host.ends_with("blob.fabric.microsoft.com")
+                {
+                    (
+                        ObjectStoreScheme::MicrosoftAzure,
+                        url[url::Position::BeforeScheme..url::Position::AfterHost].to_string(),
+                        url.path(),
+                    )
+                } else if host.ends_with("amazonaws.com") {
+                    match host.starts_with("s3") {
+                        true => {
+                            let scheme_host_port_bucket = store_with_bucket()?;
+                            eprintln!("scheme_host_port_bucket: {}", scheme_host_port_bucket);
+                            (
+                                ObjectStoreScheme::AmazonS3,
+                                scheme_host_port_bucket.as_str().to_string(),
+                                strip_bucket().unwrap_or_default(),
+                            )
+                        }
+                        false => (
+                            ObjectStoreScheme::AmazonS3,
+                            url[url::Position::BeforeScheme..url::Position::AfterHost].to_string(),
+                            url.path(),
+                        ),
+                    }
+                } else if host.ends_with("r2.cloudflarestorage.com") {
+                    let scheme_host_port_bucket = store_with_bucket()?;
+                    (
+                        ObjectStoreScheme::AmazonS3,
+                        scheme_host_port_bucket.as_str().to_string(),
+                        strip_bucket().unwrap_or_default(),
+                    )
+                } else {
+                    (
+                        ObjectStoreScheme::Http,
+                        url[url::Position::BeforeScheme..url::Position::AfterPort].to_string(),
+                        url.path(),
+                    )
+                }
+            }
+            _ => return Err(Error::Unrecognised { url: url.clone() }),
+        };
+
+        let mut store_url =
+            Url::parse(&store_url).map_err(|_| Error::Unrecognised { url: url.clone() })?;
+
+        // Ensure path ends with a '/'
+        if !store_url.path().ends_with('/') {
+            store_url = Url::parse(&format!("{}/", store_url))
+                .map_err(|_| Error::Unrecognised { url: url.clone() })?;
+        }
+
+        // Strip password, leave username
+        if store_url.password().is_some() {
+            store_url.set_password(None).unwrap();
+        }
+
+        Ok(Self {
+            scheme,
+            store: store_url,
+            path: Path::from_url_path(path)?,
+        })
+    }
+
+    /// Returns the scheme of this URL
+    pub fn scheme(&self) -> ObjectStoreScheme {
+        self.scheme.clone()
+    }
+
+    /// Returns the URL of the store root
+    pub fn store(&self) -> &Url {
+        &self.store
+    }
+
+    /// Returns the path to the object within the store
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
 /// Recognizes various URL formats, identifying the relevant [`ObjectStore`]
 ///
 /// See [`ObjectStoreScheme::parse`] for more details
@@ -102,40 +258,10 @@ impl ObjectStoreScheme {
     /// assert_eq!(scheme, ObjectStoreScheme::Http);
     /// assert_eq!(path.as_ref(), "path/to/my/file");
     /// ```
+    #[deprecated(note = "Use `ObjectStoreUrl::parse` instead")]
     pub fn parse(url: &Url) -> Result<(Self, Path), Error> {
-        let strip_bucket = || Some(url.path().strip_prefix('/')?.split_once('/')?.1);
-
-        let (scheme, path) = match (url.scheme(), url.host_str()) {
-            ("file", None) => (Self::Local, url.path()),
-            ("memory", None) => (Self::Memory, url.path()),
-            ("s3" | "s3a", Some(_)) => (Self::AmazonS3, url.path()),
-            ("gs", Some(_)) => (Self::GoogleCloudStorage, url.path()),
-            ("az" | "adl" | "azure" | "abfs" | "abfss", Some(_)) => {
-                (Self::MicrosoftAzure, url.path())
-            }
-            ("http", Some(_)) => (Self::Http, url.path()),
-            ("https", Some(host)) => {
-                if host.ends_with("dfs.core.windows.net")
-                    || host.ends_with("blob.core.windows.net")
-                    || host.ends_with("dfs.fabric.microsoft.com")
-                    || host.ends_with("blob.fabric.microsoft.com")
-                {
-                    (Self::MicrosoftAzure, url.path())
-                } else if host.ends_with("amazonaws.com") {
-                    match host.starts_with("s3") {
-                        true => (Self::AmazonS3, strip_bucket().unwrap_or_default()),
-                        false => (Self::AmazonS3, url.path()),
-                    }
-                } else if host.ends_with("r2.cloudflarestorage.com") {
-                    (Self::AmazonS3, strip_bucket().unwrap_or_default())
-                } else {
-                    (Self::Http, url.path())
-                }
-            }
-            _ => return Err(Error::Unrecognised { url: url.clone() }),
-        };
-
-        Ok((scheme, Path::from_url_path(path)?))
+        let os_url = ObjectStoreUrl::parse(url)?;
+        Ok((os_url.scheme(), os_url.path().clone()))
     }
 }
 
@@ -224,7 +350,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse() {
+    fn test_object_store_scheme_parse() {
         let cases = [
             ("file:/path", (ObjectStoreScheme::Local, "path")),
             ("file:///path", (ObjectStoreScheme::Local, "path")),
@@ -336,6 +462,275 @@ mod tests {
         for s in neg_cases {
             let url = Url::parse(s).unwrap();
             assert!(ObjectStoreScheme::parse(&url).is_err());
+        }
+    }
+
+    #[test]
+    fn test_object_store_url_parse() {
+        let cases = [
+            (
+                "file:/path",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::Local,
+                    store: Url::parse("file:/").unwrap(),
+                    path: Path::parse("path").unwrap(),
+                },
+            ),
+            (
+                "file:///path",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::Local,
+                    store: Url::parse("file:///").unwrap(),
+                    path: Path::parse("path").unwrap(),
+                },
+            ),
+            (
+                "memory:/path",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::Memory,
+                    store: Url::parse("memory:/").unwrap(),
+                    path: Path::parse("path").unwrap(),
+                },
+            ),
+            (
+                "memory:///",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::Memory,
+                    store: Url::parse("memory:///").unwrap(),
+                    path: Path::parse("").unwrap(),
+                },
+            ),
+            (
+                "s3://bucket",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::AmazonS3,
+                    store: Url::parse("s3://bucket/").unwrap(),
+                    path: Path::parse("").unwrap(),
+                },
+            ),
+            (
+                "s3://bucket/path",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::AmazonS3,
+                    store: Url::parse("s3://bucket/").unwrap(),
+                    path: Path::parse("path").unwrap(),
+                },
+            ),
+            (
+                "s3a://bucket",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::AmazonS3,
+                    store: Url::parse("s3a://bucket/").unwrap(),
+                    path: Path::parse("").unwrap(),
+                },
+            ),
+            (
+                "s3a://bucket/path",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::AmazonS3,
+                    store: Url::parse("s3a://bucket/").unwrap(),
+                    path: Path::parse("path").unwrap(),
+                },
+            ),
+            (
+                "https://s3.region.amazonaws.com/bucket",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::AmazonS3,
+                    store: Url::parse("https://s3.region.amazonaws.com/bucket/").unwrap(),
+                    path: Path::parse("").unwrap(),
+                },
+            ),
+            (
+                "https://s3.region.amazonaws.com/bucket/path",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::AmazonS3,
+                    store: Url::parse("https://s3.region.amazonaws.com/bucket/").unwrap(),
+                    path: Path::parse("path").unwrap(),
+                },
+            ),
+            (
+                "https://bucket.s3.region.amazonaws.com",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::AmazonS3,
+                    store: Url::parse("https://bucket.s3.region.amazonaws.com/").unwrap(),
+                    path: Path::parse("").unwrap(),
+                },
+            ),
+            (
+                "https://ACCOUNT_ID.r2.cloudflarestorage.com/bucket",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::AmazonS3,
+                    store: Url::parse("https://ACCOUNT_ID.r2.cloudflarestorage.com/bucket/")
+                        .unwrap(),
+                    path: Path::parse("").unwrap(),
+                },
+            ),
+            (
+                "https://ACCOUNT_ID.r2.cloudflarestorage.com/bucket/path",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::AmazonS3,
+                    store: Url::parse("https://ACCOUNT_ID.r2.cloudflarestorage.com/bucket/")
+                        .unwrap(),
+                    path: Path::parse("path").unwrap(),
+                },
+            ),
+            (
+                "abfs://container/path",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::MicrosoftAzure,
+                    store: Url::parse("abfs://container/").unwrap(),
+                    path: Path::parse("path").unwrap(),
+                },
+            ),
+            (
+                "abfs://file_system@account_name.dfs.core.windows.net/path",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::MicrosoftAzure,
+                    store: Url::parse("abfs://file_system@account_name.dfs.core.windows.net/")
+                        .unwrap(),
+                    path: Path::parse("path").unwrap(),
+                },
+            ),
+            (
+                "abfss://file_system@account_name.dfs.core.windows.net/path",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::MicrosoftAzure,
+                    store: Url::parse("abfss://file_system@account_name.dfs.core.windows.net/")
+                        .unwrap(),
+                    path: Path::parse("path").unwrap(),
+                },
+            ),
+            (
+                "https://account.dfs.core.windows.net",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::MicrosoftAzure,
+                    store: Url::parse("https://account.dfs.core.windows.net/").unwrap(),
+                    path: Path::parse("").unwrap(),
+                },
+            ),
+            (
+                "https://account.blob.core.windows.net",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::MicrosoftAzure,
+                    store: Url::parse("https://account.blob.core.windows.net/").unwrap(),
+                    path: Path::parse("").unwrap(),
+                },
+            ),
+            (
+                "gs://bucket/path",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::GoogleCloudStorage,
+                    store: Url::parse("gs://bucket/").unwrap(),
+                    path: Path::parse("path").unwrap(),
+                },
+            ),
+            (
+                "gs://test.example.com/path",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::GoogleCloudStorage,
+                    store: Url::parse("gs://test.example.com/").unwrap(),
+                    path: Path::parse("path").unwrap(),
+                },
+            ),
+            (
+                "http://mydomain/path",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::Http,
+                    store: Url::parse("http://mydomain/").unwrap(),
+                    path: Path::parse("path").unwrap(),
+                },
+            ),
+            (
+                "https://mydomain/path",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::Http,
+                    store: Url::parse("https://mydomain/").unwrap(),
+                    path: Path::parse("path").unwrap(),
+                },
+            ),
+            (
+                "s3://bucket/foo%20bar",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::AmazonS3,
+                    store: Url::parse("s3://bucket/").unwrap(),
+                    path: Path::parse("foo bar").unwrap(),
+                },
+            ),
+            (
+                "https://foo/bar%20baz",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::Http,
+                    store: Url::parse("https://foo/").unwrap(),
+                    path: Path::parse("bar baz").unwrap(),
+                },
+            ),
+            (
+                "file:///bar%252Efoo",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::Local,
+                    store: Url::parse("file:///").unwrap(),
+                    path: Path::parse("bar%2Efoo").unwrap(),
+                },
+            ),
+            (
+                "abfss://file_system@account.dfs.fabric.microsoft.com/",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::MicrosoftAzure,
+                    store: Url::parse("abfss://file_system@account.dfs.fabric.microsoft.com/")
+                        .unwrap(),
+                    path: Path::parse("").unwrap(),
+                },
+            ),
+            (
+                "abfss://file_system@account.dfs.fabric.microsoft.com/",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::MicrosoftAzure,
+                    store: Url::parse("abfss://file_system@account.dfs.fabric.microsoft.com/")
+                        .unwrap(),
+                    path: Path::parse("").unwrap(),
+                },
+            ),
+            (
+                "https://account.dfs.fabric.microsoft.com/",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::MicrosoftAzure,
+                    store: Url::parse("https://account.dfs.fabric.microsoft.com/").unwrap(),
+                    path: Path::parse("").unwrap(),
+                },
+            ),
+            (
+                "https://account.dfs.fabric.microsoft.com/container",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::MicrosoftAzure,
+                    store: Url::parse("https://account.dfs.fabric.microsoft.com/").unwrap(),
+                    path: Path::parse("container").unwrap(),
+                },
+            ),
+            (
+                "https://account.blob.fabric.microsoft.com/",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::MicrosoftAzure,
+                    store: Url::parse("https://account.blob.fabric.microsoft.com/").unwrap(),
+                    path: Path::parse("").unwrap(),
+                },
+            ),
+            (
+                "https://account.blob.fabric.microsoft.com/container",
+                ObjectStoreUrl {
+                    scheme: ObjectStoreScheme::MicrosoftAzure,
+                    store: Url::parse("https://account.blob.fabric.microsoft.com/").unwrap(),
+                    path: Path::parse("container").unwrap(),
+                },
+            ),
+        ];
+
+        for (s, expected) in cases {
+            let url = Url::parse(s).unwrap();
+            let url = ObjectStoreUrl::parse(&url).unwrap();
+            eprintln!("url: {}", url.store.as_str());
+            eprintln!("expected: {}", expected.store.as_str());
+
+            assert_eq!(url, expected);
         }
     }
 
