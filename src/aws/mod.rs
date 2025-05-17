@@ -78,8 +78,8 @@ const STORE: &str = "S3";
 /// [`CredentialProvider`] for [`AmazonS3`]
 pub type AwsCredentialProvider = Arc<dyn CredentialProvider<Credential = AwsCredential>>;
 use crate::client::parts::Parts;
-pub use credential::{AwsAuthorizer, AwsCredential};
 use crate::list::{PaginatedListOptions, PaginatedListResult, PaginatedListStore};
+pub use credential::{AwsAuthorizer, AwsCredential};
 
 /// Interface for [Amazon S3](https://aws.amazon.com/s3/).
 #[derive(Debug, Clone)]
@@ -496,7 +496,11 @@ impl MultipartStore for AmazonS3 {
 
 #[async_trait]
 impl PaginatedListStore for AmazonS3 {
-    async fn list_paginated(&self, prefix: Option<&str>, opts: PaginatedListOptions) -> Result<PaginatedListResult> {
+    async fn list_paginated(
+        &self,
+        prefix: Option<&str>,
+        opts: PaginatedListOptions,
+    ) -> Result<PaginatedListResult> {
         self.client.list_request(prefix, opts).await
     }
 }

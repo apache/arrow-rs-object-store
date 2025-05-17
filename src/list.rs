@@ -64,17 +64,17 @@ pub struct PaginatedListResult {
 ///
 /// Most use-cases should prefer [`ObjectStore::list`] as this is supported by more
 /// backends, including [`LocalFileSystem`], however, [`PaginatedListStore`] can be
-/// used where stateless pagination or non-path segment based listing is required 
+/// used where stateless pagination or non-path segment based listing is required
 ///
 /// [`ObjectStore::list`]: crate::ObjectStore::list
 /// [`LocalFileSystem`]: crate::local::LocalFileSystem
 #[async_trait]
 pub trait PaginatedListStore: Send + Sync + 'static {
     /// Perform a paginated list request
-    /// 
+    ///
     /// Note: Unlike [`ObjectStore::list`] a trailing delimiter is not
     /// automatically added to `prefix`  
-    /// 
+    ///
     /// [`ObjectStore::list`]: crate::ObjectStore::list
     async fn list_paginated(
         &self,
