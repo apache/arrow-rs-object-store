@@ -547,6 +547,7 @@ mod tags;
 
 pub use tags::TagSet;
 
+pub mod list;
 pub mod multipart;
 mod parse;
 mod payload;
