@@ -196,6 +196,7 @@ impl ObjectStore for AmazonS3 {
                     r => r,
                 }
             }
+            #[allow(deprecated)]
             (PutMode::Create, S3ConditionalPut::Dynamo(d)) => {
                 d.conditional_op(&self.client, location, None, move || request.do_put())
                     .await
@@ -227,6 +228,7 @@ impl ObjectStore for AmazonS3 {
                             r => r,
                         }
                     }
+                    #[allow(deprecated)]
                     S3ConditionalPut::Dynamo(d) => {
                         d.conditional_op(&self.client, location, Some(&etag), move || {
                             request.do_put()
@@ -366,6 +368,7 @@ impl ObjectStore for AmazonS3 {
 
                 return res;
             }
+            #[allow(deprecated)]
             Some(S3CopyIfNotExists::Dynamo(lock)) => {
                 return lock.copy_if_not_exists(&self.client, from, to).await
             }
@@ -623,6 +626,7 @@ mod tests {
         put_get_delete_list(&integration).await;
 
         match &integration.client.config.copy_if_not_exists {
+            #[allow(deprecated)]
             Some(S3CopyIfNotExists::Dynamo(d)) => dynamo::integration_test(&integration, d).await,
             _ => eprintln!("Skipping dynamo integration test - dynamo not configured"),
         };
