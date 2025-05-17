@@ -1018,7 +1018,7 @@ impl ListClient for Arc<AzureClient> {
         let mut response: ListResultInternal = quick_xml::de::from_reader(response.reader())
             .map_err(|source| Error::InvalidListResponse { source })?;
 
-        let token = response.next_marker.take();
+        let token = response.next_marker.take().filter(|x| !x.is_empty());
 
         Ok(PaginatedListResult {
             result: to_list_result(response, prefix)?,
