@@ -354,10 +354,10 @@ mod tests {
         use http::{header::USER_AGENT, Response};
 
         let server = MockServer::new().await;
-
-        server.push_fn(|r| {
-            assert_eq!(r.uri().path(), "/foo/bar");
-            assert_eq!(r.headers().get(USER_AGENT).unwrap(), "test_url");
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        server.push_fn(move |req| {
+            let hdr = req.headers().get(USER_AGENT).cloned();
+            let _ = tx.send(hdr);
             Response::new(String::new())
         });
 
@@ -366,7 +366,9 @@ mod tests {
         let url = test.parse().unwrap();
         let (store, path) = parse_url_opts(&url, opts).unwrap();
         assert_eq!(path.as_ref(), "foo/bar");
-        store.get(&path).await.unwrap();
+        let _ = store.get(&Path::from("/foo/bar")).await.unwrap();
+        let got = rx.await.expect("handler never ran");
+        assert_eq!(got.unwrap(), "test_url");
 
         server.shutdown().await;
     }
