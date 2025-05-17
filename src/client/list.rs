@@ -33,7 +33,6 @@ pub(crate) trait ListClient: Send + Sync + 'static {
         delimiter: bool,
         token: Option<&str>,
         offset: Option<&str>,
-        ignore_unparsable_paths: bool,
     ) -> Result<(ListResult, Option<String>)>;
 }
 
@@ -45,20 +44,18 @@ pub(crate) trait ListClientExt {
         prefix: Option<&Path>,
         delimiter: bool,
         offset: Option<&Path>,
-        ignore_unparsable_paths: bool,
     ) -> BoxStream<'static, Result<ListResult>>;
 
-    fn list(&self, prefix: Option<&Path>, ignore_unparsable_paths: bool) -> BoxStream<'static, Result<ObjectMeta>>;
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>>;
 
     #[allow(unused)]
     fn list_with_offset(
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-        ignore_unparsable_paths: bool,
     ) -> BoxStream<'static, Result<ObjectMeta>>;
 
-    async fn list_with_delimiter(&self, prefix: Option<&Path>, ignore_unparsable_paths: bool) -> Result<ListResult>;
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult>;
 }
 
 #[async_trait]
@@ -68,7 +65,6 @@ impl<T: ListClient + Clone> ListClientExt for T {
         prefix: Option<&Path>,
         delimiter: bool,
         offset: Option<&Path>,
-        ignore_unparsable_paths: bool,
     ) -> BoxStream<'static, Result<ListResult>> {
         let offset = offset.map(|x| x.to_string());
         let prefix = prefix
@@ -85,7 +81,6 @@ impl<T: ListClient + Clone> ListClientExt for T {
                         delimiter,
                         token.as_deref(),
                         offset.as_deref(),
-                        ignore_unparsable_paths,
                     )
                     .await?;
                 Ok((r, (prefix, offset), next_token))
@@ -94,8 +89,8 @@ impl<T: ListClient + Clone> ListClientExt for T {
         .boxed()
     }
 
-    fn list(&self, prefix: Option<&Path>, ignore_unparsable_paths: bool) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.list_paginated(prefix, false, None, ignore_unparsable_paths)
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+        self.list_paginated(prefix, false, None)
             .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
             .try_flatten()
             .boxed()
@@ -105,16 +100,15 @@ impl<T: ListClient + Clone> ListClientExt for T {
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-        ignore_unparsable_paths: bool,
     ) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.list_paginated(prefix, false, Some(offset), ignore_unparsable_paths)
+        self.list_paginated(prefix, false, Some(offset))
             .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
             .try_flatten()
             .boxed()
     }
 
-    async fn list_with_delimiter(&self, prefix: Option<&Path>, ignore_unparsable_paths: bool) -> Result<ListResult> {
-        let mut stream = self.list_paginated(prefix, true, None, ignore_unparsable_paths);
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
+        let mut stream = self.list_paginated(prefix, true, None);
 
         let mut common_prefixes = BTreeSet::new();
         let mut objects = Vec::new();

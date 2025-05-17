@@ -180,6 +180,8 @@ pub struct MicrosoftAzureBuilder {
     fabric_cluster_identifier: Option<String>,
     /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
+    /// When listing objects, ignore paths that throw and error when parsing
+    ignore_unparsable_paths: ConfigValue<bool>,
 }
 
 /// Configuration keys for [`MicrosoftAzureBuilder`]
@@ -380,6 +382,18 @@ pub enum AzureConfigKey {
     /// - `fabric_cluster_identifier`
     FabricClusterIdentifier,
 
+    /// When listing objects, ignore paths that do not conform to the Path class assumptions
+    /// 
+    /// e.g. Azure allows to have paths like `foo/bar//baz` which would throw an error
+    /// when trying to parse them into a Path.
+    /// 
+    /// When set to true, these paths will be ignored.
+    ///
+    /// Supported keys:
+    /// - `azure_ignore_unparsable_paths`
+    /// - `ignore_unparsable_paths`
+    IgnoreUnparsablePaths,
+
     /// Client options
     Client(ClientConfigKey),
 }
@@ -410,6 +424,7 @@ impl AsRef<str> for AzureConfigKey {
             Self::FabricWorkloadHost => "azure_fabric_workload_host",
             Self::FabricSessionToken => "azure_fabric_session_token",
             Self::FabricClusterIdentifier => "azure_fabric_cluster_identifier",
+            Self::IgnoreUnparsablePaths => "azure_ignore_unparsable_paths",
             Self::Client(key) => key.as_ref(),
         }
     }
@@ -465,6 +480,9 @@ impl FromStr for AzureConfigKey {
             "azure_fabric_session_token" | "fabric_session_token" => Ok(Self::FabricSessionToken),
             "azure_fabric_cluster_identifier" | "fabric_cluster_identifier" => {
                 Ok(Self::FabricClusterIdentifier)
+            }
+            "azure_ignore_unparsable_paths" | "ignore_unparsable_paths" => {
+                Ok(Self::IgnoreUnparsablePaths)
             }
             // Backwards compatibility
             "azure_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
@@ -594,6 +612,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::FabricClusterIdentifier => {
                 self.fabric_cluster_identifier = Some(value.into())
             }
+            AzureConfigKey::IgnoreUnparsablePaths => self.ignore_unparsable_paths.parse(value),
         };
         self
     }
@@ -635,6 +654,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::FabricWorkloadHost => self.fabric_workload_host.clone(),
             AzureConfigKey::FabricSessionToken => self.fabric_session_token.clone(),
             AzureConfigKey::FabricClusterIdentifier => self.fabric_cluster_identifier.clone(),
+            AzureConfigKey::IgnoreUnparsablePaths => Some(self.ignore_unparsable_paths.to_string()),
         }
     }
 
@@ -897,6 +917,13 @@ impl MicrosoftAzureBuilder {
         self
     }
 
+    /// If set to `true` list operations will ignore paths that do not conform to the Path class assumptions
+    /// e.g. foo/bar//baz.txt
+    pub fn with_ignore_unparsable_paths(mut self, ignore_unparsable_paths: bool) -> Self {
+        self.ignore_unparsable_paths = ignore_unparsable_paths.into();
+        self
+    }
+
     /// Configure a connection to container with given name on Microsoft Azure Blob store.
     pub fn build(mut self) -> Result<MicrosoftAzure> {
         if let Some(url) = self.url.take() {
@@ -1040,6 +1067,7 @@ impl MicrosoftAzureBuilder {
             client_options: self.client_options,
             service: storage_url,
             credentials: auth,
+            ignore_unparsable_paths: self.ignore_unparsable_paths.get()?,
         };
 
         let http_client = http.connect(&config.client_options)?;
