@@ -24,8 +24,6 @@
 //!
 //! They are intended solely for testing purposes.
 
-use core::str;
-
 use crate::multipart::MultipartStore;
 use crate::path::Path;
 use crate::{
@@ -1119,48 +1117,64 @@ pub async fn multipart_race_condition(storage: &dyn ObjectStore, last_writer_win
     let mut multipart_upload_1 = storage.put_multipart(&path).await.unwrap();
     let mut multipart_upload_2 = storage.put_multipart(&path).await.unwrap();
 
+    /// Create a string like `"1:"`  followed by `part` padded to 5,300,000 places
+    ///
+    /// equivalent of format!("{prefix}:{part:05300000}"), which is no longer supported
+    ///
+    /// See: <https://github.com/apache/arrow-rs-object-store/issues/343>
+    fn make_payload(prefix: u8, part: u8) -> Vec<u8> {
+        // prefix = 1 byte
+        // ':' = 1 byte
+        let mut payload = vec![b'0'; 5_300_002];
+        payload[0] = prefix;
+        payload[1] = b':';
+        payload[2] = part;
+        payload
+    }
+
+    // Upload parts interleaved
     multipart_upload_1
-        .put_part(Bytes::from(format!("1:{:05300000},", 0)).into())
+        .put_part(Bytes::from(make_payload(b'1', 0)).into())
         .await
         .unwrap();
     multipart_upload_2
-        .put_part(Bytes::from(format!("2:{:05300000},", 0)).into())
+        .put_part(Bytes::from(make_payload(b'2', 0)).into())
         .await
         .unwrap();
 
     multipart_upload_2
-        .put_part(Bytes::from(format!("2:{:05300000},", 1)).into())
+        .put_part(Bytes::from(make_payload(b'2', 1)).into())
         .await
         .unwrap();
     multipart_upload_1
-        .put_part(Bytes::from(format!("1:{:05300000},", 1)).into())
+        .put_part(Bytes::from(make_payload(b'1', 1)).into())
         .await
         .unwrap();
 
     multipart_upload_1
-        .put_part(Bytes::from(format!("1:{:05300000},", 2)).into())
+        .put_part(Bytes::from(make_payload(b'1', 2)).into())
         .await
         .unwrap();
     multipart_upload_2
-        .put_part(Bytes::from(format!("2:{:05300000},", 2)).into())
+        .put_part(Bytes::from(make_payload(b'2', 2)).into())
         .await
         .unwrap();
 
     multipart_upload_2
-        .put_part(Bytes::from(format!("2:{:05300000},", 3)).into())
+        .put_part(Bytes::from(make_payload(b'2', 3)).into())
         .await
         .unwrap();
     multipart_upload_1
-        .put_part(Bytes::from(format!("1:{:05300000},", 3)).into())
+        .put_part(Bytes::from(make_payload(b'1', 3)).into())
         .await
         .unwrap();
 
     multipart_upload_1
-        .put_part(Bytes::from(format!("1:{:05300000},", 4)).into())
+        .put_part(Bytes::from(make_payload(b'1', 4)).into())
         .await
         .unwrap();
     multipart_upload_2
-        .put_part(Bytes::from(format!("2:{:05300000},", 4)).into())
+        .put_part(Bytes::from(make_payload(b'2', 4)).into())
         .await
         .unwrap();
 
@@ -1175,26 +1189,15 @@ pub async fn multipart_race_condition(storage: &dyn ObjectStore, last_writer_win
     }
 
     let get_result = storage.get(&path).await.unwrap();
-    let bytes = get_result.bytes().await.unwrap();
-    let string_contents = str::from_utf8(&bytes).unwrap();
+    let result_bytes = get_result.bytes().await.unwrap();
 
-    if last_writer_wins {
-        assert!(string_contents.starts_with(
-            format!(
-                "2:{:05300000},2:{:05300000},2:{:05300000},2:{:05300000},2:{:05300000},",
-                0, 1, 2, 3, 4
-            )
-            .as_str()
-        ));
-    } else {
-        assert!(string_contents.starts_with(
-            format!(
-                "1:{:05300000},1:{:05300000},1:{:05300000},1:{:05300000},1:{:05300000},",
-                0, 1, 2, 3, 4
-            )
-            .as_str()
-        ));
+    let expected_writer_prefix = if last_writer_wins { b'2' } else { b'1' };
+    let mut expected_writer_contents = vec![];
+    for part in 0..5 {
+        expected_writer_contents.append(&mut make_payload(expected_writer_prefix, part));
     }
+
+    assert!(result_bytes.starts_with(&expected_writer_contents));
 }
 
 /// Tests performing out of order multipart uploads
