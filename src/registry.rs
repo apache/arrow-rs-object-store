@@ -20,31 +20,9 @@
 use crate::path::{InvalidPart, Path, PathPart};
 use crate::{parse_url_opts, ObjectStore};
 use parking_lot::RwLock;
-use std::borrow::Borrow;
-use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, Bound};
+use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
-
-/// Error type for [`ObjectStoreRegistry`]
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-enum Error {
-    #[error("ObjectStore not found")]
-    NotFound,
-
-    #[error("Error parsing URL path segment")]
-    InvalidPart(#[from] InvalidPart),
-}
-
-impl From<Error> for crate::Error {
-    fn from(value: Error) -> Self {
-        Self::Generic {
-            store: "ObjectStoreRegistry",
-            source: Box::new(value),
-        }
-    }
-}
 
 /// [`ObjectStoreRegistry`] maps a URL to an [`ObjectStore`] instance
 pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
@@ -53,18 +31,16 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     /// If a store with the same URL existed before, it is replaced and returned
     fn register(&self, url: Url, store: Arc<dyn ObjectStore>) -> Option<Arc<dyn ObjectStore>>;
 
-    /// Unregister a store for the provided store URL
-    fn unregister(&self, url: &Url) -> Option<Arc<dyn ObjectStore>>;
-
     /// Resolve an object URL
     ///
     /// If [`ObjectStoreRegistry::register`] has been called with a URL with the same
     /// scheme and host as the object URL, and a path that is a prefix of the object URL's
-    /// it should be returned with along with the trailing path. In the event of multiple
-    /// possibilities the longest path match should be returned.
+    /// it should be returned with along with the trailing path. Paths should be matched
+    /// on a path segment basis, and in the event of multiple possibilities the longest
+    /// path match should be returned.
     ///
-    /// If a store hasn't been registered, [`ObjectStoreRegistry`] may lazily create
-    /// one if the URL is understood, or return an [`Error::NotFound`]
+    /// If a store hasn't been registered, an [`ObjectStoreRegistry`] may lazily create
+    /// one if the URL is understood
     ///
     /// For example
     ///
@@ -108,49 +84,56 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     fn resolve(&self, url: &Url) -> crate::Result<(Arc<dyn ObjectStore>, Path)>;
 }
 
+/// Error type for [`DefaultObjectStoreRegistry`]
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+enum Error {
+    #[error("ObjectStore not found")]
+    NotFound,
+
+    #[error("Error parsing URL path segment")]
+    InvalidPart(#[from] InvalidPart),
+}
+
+impl From<Error> for crate::Error {
+    fn from(value: Error) -> Self {
+        Self::Generic {
+            store: "ObjectStoreRegistry",
+            source: Box::new(value),
+        }
+    }
+}
+
 /// An [`ObjectStoreRegistry`] that uses [`parse_url`] to create stores based on the environment
 #[derive(Debug, Default)]
 pub struct DefaultObjectStoreRegistry {
-    map: RwLock<BTreeMap<StrUrl, RegistryEntry>>,
+    map: RwLock<HashMap<String, PathEntry>>,
 }
 
-/// Wrapper around [`Url`] implementing `Borrow<str>`
-#[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
-struct StrUrl(Url);
-
-impl Borrow<str> for StrUrl {
-    fn borrow(&self) -> &str {
-        self.0.as_str()
-    }
+#[derive(Debug, Default)]
+struct PathEntry {
+    store: Option<Arc<dyn ObjectStore>>,
+    children: HashMap<String, Self>,
 }
 
-#[derive(Debug)]
-struct RegistryEntry {
-    store: Arc<dyn ObjectStore>,
-    /// The number of non-empty path segments in the store's URL
-    path_segments: usize,
-}
-
-impl RegistryEntry {
-    fn new(url: &Url, store: Arc<dyn ObjectStore>) -> Self {
-        let path_segments = match url.path() {
-            "/" => 0,
-            path => path.as_bytes().iter().filter(|&&c| c == b'/').count(),
-        };
-        Self {
-            path_segments,
-            store,
+impl PathEntry {
+    /// Lookup a store based on URL path
+    ///
+    /// Returns the store and its path segment depth
+    fn lookup(&self, to_resolve: &Url) -> Option<(&Arc<dyn ObjectStore>, usize)> {
+        let mut current = self;
+        let mut ret = self.store.as_ref().map(|store| (store, 0));
+        let mut depth = 0;
+        for segment in path_segments(to_resolve.path()) {
+            if let Some(e) = current.children.get(segment) {
+                current = e;
+                depth += 1;
+                if let Some(store) = &current.store {
+                    ret = Some((store, depth))
+                }
+            }
         }
-    }
-
-    fn resolve(&self, url: &Url) -> Result<(Arc<dyn ObjectStore>, Path), Error> {
-        let segments = match url.path_segments() {
-            Some(segments) => segments.skip(self.path_segments),
-            None => return Ok((Arc::clone(&self.store), Path::default())),
-        };
-
-        let path = segments.map(PathPart::parse).collect::<Result<_, _>>()?;
-        Ok((Arc::clone(&self.store), path))
+        ret
     }
 }
 
@@ -163,56 +146,61 @@ impl DefaultObjectStoreRegistry {
 
 impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     fn register(&self, url: Url, store: Arc<dyn ObjectStore>) -> Option<Arc<dyn ObjectStore>> {
-        let entry = RegistryEntry::new(&url, store);
-        Some(self.map.write().insert(StrUrl(url), entry)?.store)
-    }
+        let mut map = self.map.write();
+        let key = &url[url::Position::BeforeHost..url::Position::AfterPort];
+        let mut entry = map.entry(key.to_string()).or_default();
 
-    fn unregister(&self, store: &Url) -> Option<Arc<dyn ObjectStore>> {
-        Some(self.map.write().remove(store.as_str())?.store)
+        for segments in path_segments(url.path()) {
+            entry = entry.children.entry(segments.to_string()).or_default();
+        }
+        entry.store.replace(store)
     }
 
     fn resolve(&self, to_resolve: &Url) -> crate::Result<(Arc<dyn ObjectStore>, Path)> {
+        let key = &to_resolve[url::Position::BeforeHost..url::Position::AfterPort];
         {
             let map = self.map.read();
-            let start = &to_resolve[..url::Position::BeforePath];
 
-            let candidates = map
-                .range::<str, _>((Bound::Included(start), Bound::Unbounded))
-                .take_while(|&(base, _)| &base.0[..url::Position::BeforePath] == start);
-
-            let mut longest_len = 0;
-            let mut longest = None;
-            for (base, entry) in candidates {
-                let len = base.0.as_str().len();
-                if len > longest_len && to_resolve.as_str().starts_with(base.0.as_str()) {
-                    longest = Some(entry);
-                    longest_len = len;
-                }
-            }
-
-            if let Some(entry) = longest {
-                return Ok(entry.resolve(to_resolve)?);
+            if let Some((store, depth)) = map.get(key).and_then(|entry| entry.lookup(to_resolve)) {
+                let path = path_suffix(to_resolve, depth)?;
+                return Ok((Arc::clone(store), path));
             }
         }
 
         if let Ok((store, path)) = parse_url_opts(to_resolve, std::env::vars()) {
-            let mut store_url = to_resolve.clone();
-            {
-                let mut segments = store_url.path_segments_mut().unwrap();
-                for _ in path.parts() {
-                    segments.pop();
-                }
-            }
-            let candidate = RegistryEntry::new(&store_url, store.into());
+            let depth = num_segments(to_resolve.path()) - num_segments(path.as_ref());
 
-            return Ok(match self.map.write().entry(StrUrl(store_url)) {
-                Entry::Vacant(vacant) => vacant.insert(candidate).resolve(to_resolve)?,
-                Entry::Occupied(o) => o.get().resolve(to_resolve)?,
-            });
+            let mut map = self.map.write();
+            let mut entry = map.entry(key.to_string()).or_default();
+            for segment in path_segments(to_resolve.path()).take(depth) {
+                entry = entry.children.entry(segment.to_string()).or_default();
+            }
+            let store = Arc::from(store);
+            entry.store = Some(Arc::clone(&store));
+
+            let path = path_suffix(to_resolve, depth)?;
+            return Ok((store, path));
         }
 
         Err(Error::NotFound.into())
     }
+}
+
+/// Returns the non-empty segments of a path
+fn path_segments(s: &str) -> impl Iterator<Item = &str> {
+    s.split('/').filter(|x| !x.is_empty())
+}
+
+/// Returns the number of non-empty path segments in a path
+fn num_segments(s: &str) -> usize {
+    path_segments(s).count()
+}
+
+/// Returns the path of `url` skipping the first `depth` segments
+fn path_suffix(url: &Url, depth: usize) -> Result<Path, Error> {
+    let segments = path_segments(url.path()).skip(depth);
+    let path = segments.map(PathPart::parse).collect::<Result<_, _>>()?;
+    Ok(path)
 }
 
 #[cfg(test)]
@@ -222,34 +210,65 @@ mod tests {
     use crate::prefix::PrefixStore;
 
     #[test]
+    fn test_num_segments() {
+        assert_eq!(num_segments(""), 0);
+        assert_eq!(num_segments("/"), 0);
+        assert_eq!(num_segments("/banana"), 1);
+        assert_eq!(num_segments("banana"), 1);
+        assert_eq!(num_segments("/banana/crumble"), 2);
+        assert_eq!(num_segments("banana/crumble"), 2);
+    }
+
+    #[test]
     fn test_default_registry() {
         let registry = DefaultObjectStoreRegistry::new();
 
         // Should automatically register in memory store
-        let object = Url::parse("memory:///banana").unwrap();
-        let (resolved, path) = registry.resolve(&object).unwrap();
+        let banana_url = Url::parse("memory:///banana").unwrap();
+        let (resolved, path) = registry.resolve(&banana_url).unwrap();
         assert_eq!(path.as_ref(), "banana");
 
         // Should replace store
-        let base = Url::parse("memory:///").unwrap();
-        let replaced = registry.register(base, Arc::new(InMemory::new())).unwrap();
+        let url = Url::parse("memory:///").unwrap();
+        let root = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let replaced = registry.register(url, Arc::clone(&root)).unwrap();
         assert!(Arc::ptr_eq(&resolved, &replaced));
 
         // Should not replace store
-        let base = Url::parse("memory:///banana").unwrap();
         let banana = Arc::new(PrefixStore::new(InMemory::new(), "banana")) as Arc<dyn ObjectStore>;
-        assert!(registry.register(base, Arc::clone(&banana)).is_none());
+        assert!(registry
+            .register(banana_url.clone(), Arc::clone(&banana))
+            .is_none());
 
-        let (resolved, path) = registry.resolve(&object).unwrap();
+        // Should resolve to banana store
+        let (resolved, path) = registry.resolve(&banana_url).unwrap();
         assert_eq!(path.as_ref(), "");
         assert!(Arc::ptr_eq(&resolved, &banana));
 
-        let base = Url::parse("memory:///apples").unwrap();
+        // If we register another store it still resolves banana
+        let apples_url = Url::parse("memory:///apples").unwrap();
         let apples = Arc::new(PrefixStore::new(InMemory::new(), "apples")) as Arc<dyn ObjectStore>;
-        assert!(registry.register(base, Arc::clone(&apples)).is_none());
+        assert!(registry.register(apples_url, Arc::clone(&apples)).is_none());
 
-        let (resolved, path) = registry.resolve(&object).unwrap();
+        // Should still resolve to banana store
+        let (resolved, path) = registry.resolve(&banana_url).unwrap();
         assert_eq!(path.as_ref(), "");
         assert!(Arc::ptr_eq(&resolved, &banana));
+
+        // Should be path segment based
+        let banana_muffins_url = Url::parse("memory:///banana_muffins").unwrap();
+        let (resolved, path) = registry.resolve(&banana_muffins_url).unwrap();
+        assert_eq!(path.as_ref(), "banana_muffins");
+        assert!(Arc::ptr_eq(&resolved, &root));
+
+        let nested_url = Url::parse("memory:///apples/bananas").unwrap();
+        let nested =
+            Arc::new(PrefixStore::new(InMemory::new(), "apples/bananas")) as Arc<dyn ObjectStore>;
+        assert!(registry.register(nested_url, Arc::clone(&nested)).is_none());
+
+        let to_resolve = Url::parse("memory:///apples/bananas/muffins/cupcakes").unwrap();
+        let (resolved, path) = registry.resolve(&to_resolve).unwrap();
+        assert_eq!(path.as_ref(), "muffins/cupcakes");
+        assert!(Arc::ptr_eq(&resolved, &nested));
     }
 }
