@@ -72,8 +72,9 @@ pub struct PaginatedListResult {
 pub trait PaginatedListStore: Send + Sync + 'static {
     /// Perform a paginated list request
     ///
-    /// Note: Unlike [`ObjectStore::list`] a trailing delimiter is not
-    /// automatically added to `prefix`  
+    /// Note: the order of returned objects is not guaranteed and
+    /// unlike [`ObjectStore::list`] a trailing delimiter is not
+    /// automatically added to `prefix`
     ///
     /// [`ObjectStore::list`]: crate::ObjectStore::list
     async fn list_paginated(
