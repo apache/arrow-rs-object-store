@@ -38,7 +38,7 @@ use std::time::Duration;
 use url::Url;
 
 use crate::client::get::GetClientExt;
-use crate::client::list::ListClientExt;
+use crate::client::list::{ListClient, ListClientExt};
 use crate::client::CredentialProvider;
 pub use credential::{authority_hosts, AzureAccessKey, AzureAuthorizer};
 
@@ -50,6 +50,7 @@ mod credential;
 pub type AzureCredentialProvider = Arc<dyn CredentialProvider<Credential = AzureCredential>>;
 use crate::azure::client::AzureClient;
 use crate::client::parts::Parts;
+use crate::list::{PaginatedListOptions, PaginatedListResult, PaginatedListStore};
 pub use builder::{AzureConfigKey, MicrosoftAzureBuilder};
 pub use credential::AzureCredential;
 
@@ -292,6 +293,17 @@ impl MultipartStore for MicrosoftAzure {
     }
 }
 
+#[async_trait]
+impl PaginatedListStore for MicrosoftAzure {
+    async fn list_paginated(
+        &self,
+        prefix: Option<&str>,
+        opts: PaginatedListOptions,
+    ) -> Result<PaginatedListResult> {
+        self.client.list_request(prefix, opts).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,6 +328,7 @@ mod tests {
         multipart_race_condition(&integration, false).await;
         multipart_out_of_order(&integration).await;
         signing(&integration).await;
+        list_paginated(&integration, &integration).await;
 
         let validate = !integration.client.config().disable_tagging;
         tagging(

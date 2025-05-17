@@ -27,12 +27,13 @@ use crate::client::s3::{
 use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpResponse};
 use crate::gcp::credential::CredentialExt;
 use crate::gcp::{GcpCredential, GcpCredentialProvider, GcpSigningCredentialProvider, STORE};
+use crate::list::{PaginatedListOptions, PaginatedListResult};
 use crate::multipart::PartId;
-use crate::path::{Path, DELIMITER};
+use crate::path::Path;
 use crate::util::hex_encode;
 use crate::{
-    Attribute, Attributes, ClientOptions, GetOptions, ListResult, MultipartId, PutMode,
-    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, RetryConfig,
+    Attribute, Attributes, ClientOptions, GetOptions, MultipartId, PutMode, PutMultipartOpts,
+    PutOptions, PutPayload, PutResult, Result, RetryConfig,
 };
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
@@ -652,24 +653,22 @@ impl ListClient for Arc<GoogleCloudStorageClient> {
     async fn list_request(
         &self,
         prefix: Option<&str>,
-        delimiter: bool,
-        page_token: Option<&str>,
-        offset: Option<&str>,
-    ) -> Result<(ListResult, Option<String>)> {
+        opts: PaginatedListOptions,
+    ) -> Result<PaginatedListResult> {
         let credential = self.get_credential().await?;
         let url = format!("{}/{}", self.config.base_url, self.bucket_name_encoded);
 
         let mut query = Vec::with_capacity(5);
         query.push(("list-type", "2"));
-        if delimiter {
-            query.push(("delimiter", DELIMITER))
+        if let Some(delimiter) = &opts.delimiter {
+            query.push(("delimiter", delimiter.as_ref()))
         }
 
-        if let Some(prefix) = &prefix {
+        if let Some(prefix) = prefix {
             query.push(("prefix", prefix))
         }
 
-        if let Some(page_token) = page_token {
+        if let Some(page_token) = &opts.page_token {
             query.push(("continuation-token", page_token))
         }
 
@@ -677,13 +676,20 @@ impl ListClient for Arc<GoogleCloudStorageClient> {
             query.push(("max-keys", max_results))
         }
 
-        if let Some(offset) = offset {
-            query.push(("start-after", offset))
+        if let Some(offset) = &opts.offset {
+            query.push(("start-after", offset.as_ref()))
+        }
+
+        let max_keys_str;
+        if let Some(max_keys) = &opts.max_keys {
+            max_keys_str = max_keys.to_string();
+            query.push(("max-keys", max_keys_str.as_ref()))
         }
 
         let response = self
             .client
             .request(Method::GET, url)
+            .extensions(opts.extensions)
             .query(&query)
             .with_bearer_auth(credential.as_deref())
             .send_retry(&self.config.retry_config)
@@ -698,6 +704,9 @@ impl ListClient for Arc<GoogleCloudStorageClient> {
             .map_err(|source| Error::InvalidListResponse { source })?;
 
         let token = response.next_continuation_token.take();
-        Ok((response.try_into()?, token))
+        Ok(PaginatedListResult {
+            result: response.try_into()?,
+            page_token: token,
+        })
     }
 }

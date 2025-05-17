@@ -24,8 +24,8 @@ use crate::client::header::{get_put_result, HeaderConfig};
 use crate::client::list::ListClient;
 use crate::client::retry::RetryExt;
 use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpRequest, HttpResponse};
+use crate::list::{PaginatedListOptions, PaginatedListResult};
 use crate::multipart::PartId;
-use crate::path::DELIMITER;
 use crate::util::{deserialize_rfc1123, GetRange};
 use crate::{
     Attribute, Attributes, ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode,
@@ -961,11 +961,13 @@ impl ListClient for Arc<AzureClient> {
     async fn list_request(
         &self,
         prefix: Option<&str>,
-        delimiter: bool,
-        token: Option<&str>,
-        offset: Option<&str>,
-    ) -> Result<(ListResult, Option<String>)> {
-        assert!(offset.is_none()); // Not yet supported
+        opts: PaginatedListOptions,
+    ) -> Result<PaginatedListResult> {
+        if opts.offset.is_some() {
+            return Err(crate::Error::NotSupported {
+                source: "Azure does not support listing with offsets".into(),
+            });
+        }
 
         let credential = self.get_credential().await?;
         let url = self.config.path_url(&Path::default());
@@ -978,21 +980,29 @@ impl ListClient for Arc<AzureClient> {
             query.push(("prefix", prefix))
         }
 
-        if delimiter {
-            query.push(("delimiter", DELIMITER))
+        if let Some(delimiter) = &opts.delimiter {
+            query.push(("delimiter", delimiter.as_ref()))
         }
 
-        if let Some(token) = token {
-            query.push(("marker", token))
+        if let Some(token) = &opts.page_token {
+            query.push(("marker", token.as_ref()))
+        }
+
+        let max_keys_str;
+        if let Some(max_keys) = &opts.max_keys {
+            max_keys_str = max_keys.to_string();
+            query.push(("maxresults", max_keys_str.as_ref()))
         }
 
         let sensitive = credential
             .as_deref()
             .map(|c| c.sensitive_request())
             .unwrap_or_default();
+
         let response = self
             .client
             .get(url.as_str())
+            .extensions(opts.extensions)
             .query(&query)
             .with_azure_authorization(&credential, &self.config.account)
             .retryable(&self.config.retry_config)
@@ -1008,9 +1018,12 @@ impl ListClient for Arc<AzureClient> {
         let mut response: ListResultInternal = quick_xml::de::from_reader(response.reader())
             .map_err(|source| Error::InvalidListResponse { source })?;
 
-        let token = response.next_marker.take();
+        let token = response.next_marker.take().filter(|x| !x.is_empty());
 
-        Ok((to_list_result(response, prefix)?, token))
+        Ok(PaginatedListResult {
+            result: to_list_result(response, prefix)?,
+            page_token: token,
+        })
     }
 }
 

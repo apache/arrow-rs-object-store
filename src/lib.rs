@@ -547,6 +547,7 @@ mod tags;
 
 pub use tags::TagSet;
 
+pub mod list;
 pub mod multipart;
 mod parse;
 mod payload;
@@ -609,6 +610,8 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ///
     /// Client should prefer [`ObjectStore::put`] for small payloads, as streaming uploads
     /// typically require multiple separate requests. See [`MultipartUpload`] for more information
+    ///
+    /// For more advanced multipart uploads see [`MultipartStore`](multipart::MultipartStore)
     async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
         self.put_multipart_opts(location, PutMultipartOpts::default())
             .await
@@ -618,6 +621,8 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ///
     /// Client should prefer [`ObjectStore::put`] for small payloads, as streaming uploads
     /// typically require multiple separate requests. See [`MultipartUpload`] for more information
+    ///
+    /// For more advanced multipart uploads see [`MultipartStore`](multipart::MultipartStore)
     async fn put_multipart_opts(
         &self,
         location: &Path,
@@ -728,6 +733,8 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// `foo/bar_baz/x`. List is recursive, i.e. `foo/bar/more/x` will be included.
     ///
     /// Note: the order of returned [`ObjectMeta`] is not guaranteed
+    ///
+    /// For more advanced listing see [`PaginatedListStore`](list::PaginatedListStore)
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>>;
 
     /// List all the objects with the given prefix and a location greater than `offset`
@@ -736,6 +743,8 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// the number of network requests required
     ///
     /// Note: the order of returned [`ObjectMeta`] is not guaranteed
+    ///
+    /// For more advanced listing see [`PaginatedListStore`](list::PaginatedListStore)
     fn list_with_offset(
         &self,
         prefix: Option<&Path>,

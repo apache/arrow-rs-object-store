@@ -16,12 +16,14 @@
 // under the License.
 
 use crate::client::pagination::stream_paginated;
-use crate::path::Path;
+use crate::list::{PaginatedListOptions, PaginatedListResult};
+use crate::path::{Path, DELIMITER};
 use crate::Result;
 use crate::{ListResult, ObjectMeta};
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 
 /// A client that can perform paginated list requests
@@ -30,10 +32,8 @@ pub(crate) trait ListClient: Send + Sync + 'static {
     async fn list_request(
         &self,
         prefix: Option<&str>,
-        delimiter: bool,
-        token: Option<&str>,
-        offset: Option<&str>,
-    ) -> Result<(ListResult, Option<String>)>;
+        options: PaginatedListOptions,
+    ) -> Result<PaginatedListResult>;
 }
 
 /// Extension trait for [`ListClient`] that adds common listing functionality
@@ -69,21 +69,23 @@ impl<T: ListClient + Clone> ListClientExt for T {
         let offset = offset.map(|x| x.to_string());
         let prefix = prefix
             .filter(|x| !x.as_ref().is_empty())
-            .map(|p| format!("{}{}", p.as_ref(), crate::path::DELIMITER));
-
+            .map(|p| format!("{}{}", p.as_ref(), DELIMITER));
         stream_paginated(
             self.clone(),
             (prefix, offset),
-            move |client, (prefix, offset), token| async move {
-                let (r, next_token) = client
+            move |client, (prefix, offset), page_token| async move {
+                let r = client
                     .list_request(
                         prefix.as_deref(),
-                        delimiter,
-                        token.as_deref(),
-                        offset.as_deref(),
+                        PaginatedListOptions {
+                            offset: offset.clone(),
+                            delimiter: delimiter.then_some(Cow::Borrowed(DELIMITER)),
+                            page_token,
+                            ..Default::default()
+                        },
                     )
                     .await?;
-                Ok((r, (prefix, offset), next_token))
+                Ok((r.result, (prefix, offset), r.page_token))
             },
         )
         .boxed()

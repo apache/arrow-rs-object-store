@@ -33,11 +33,11 @@ use crate::client::s3::{
     InitiateMultipartUploadResult, ListResponse, PartMetadata,
 };
 use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpResponse};
+use crate::list::{PaginatedListOptions, PaginatedListResult};
 use crate::multipart::PartId;
-use crate::path::DELIMITER;
 use crate::{
-    Attribute, Attributes, ClientOptions, GetOptions, ListResult, MultipartId, Path,
-    PutMultipartOpts, PutPayload, PutResult, Result, RetryConfig, TagSet,
+    Attribute, Attributes, ClientOptions, GetOptions, MultipartId, Path, PutMultipartOpts,
+    PutPayload, PutResult, Result, RetryConfig, TagSet,
 };
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
@@ -877,21 +877,19 @@ impl ListClient for Arc<S3Client> {
     async fn list_request(
         &self,
         prefix: Option<&str>,
-        delimiter: bool,
-        token: Option<&str>,
-        offset: Option<&str>,
-    ) -> Result<(ListResult, Option<String>)> {
+        opts: PaginatedListOptions,
+    ) -> Result<PaginatedListResult> {
         let credential = self.config.get_session_credential().await?;
         let url = self.config.bucket_endpoint.clone();
 
         let mut query = Vec::with_capacity(4);
 
-        if let Some(token) = token {
-            query.push(("continuation-token", token))
+        if let Some(token) = &opts.page_token {
+            query.push(("continuation-token", token.as_ref()))
         }
 
-        if delimiter {
-            query.push(("delimiter", DELIMITER))
+        if let Some(d) = &opts.delimiter {
+            query.push(("delimiter", d.as_ref()))
         }
 
         query.push(("list-type", "2"));
@@ -900,13 +898,20 @@ impl ListClient for Arc<S3Client> {
             query.push(("prefix", prefix))
         }
 
-        if let Some(offset) = offset {
-            query.push(("start-after", offset))
+        if let Some(offset) = &opts.offset {
+            query.push(("start-after", offset.as_ref()))
+        }
+
+        let max_keys_str;
+        if let Some(max_keys) = &opts.max_keys {
+            max_keys_str = max_keys.to_string();
+            query.push(("max-keys", max_keys_str.as_ref()))
         }
 
         let response = self
             .client
             .request(Method::GET, &url)
+            .extensions(opts.extensions)
             .query(&query)
             .with_aws_sigv4(credential.authorizer(), None)
             .send_retry(&self.config.retry_config)
@@ -922,7 +927,10 @@ impl ListClient for Arc<S3Client> {
 
         let token = response.next_continuation_token.take();
 
-        Ok((response.try_into()?, token))
+        Ok(PaginatedListResult {
+            result: response.try_into()?,
+            page_token: token,
+        })
     }
 }
 
