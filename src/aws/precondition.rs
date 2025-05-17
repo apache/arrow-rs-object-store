@@ -69,6 +69,7 @@ pub enum S3CopyIfNotExists {
     /// See [`DynamoCommit`] for more information
     ///
     /// This will use the same region, credentials and endpoint as configured for S3
+    #[deprecated(note = "Use S3CopyIfNotExists::Multipart")]
     Dynamo(DynamoCommit),
 }
 
@@ -80,6 +81,7 @@ impl std::fmt::Display for S3CopyIfNotExists {
                 write!(f, "header-with-status: {k}: {v}: {}", code.as_u16())
             }
             Self::Multipart => f.write_str("multipart"),
+            #[allow(deprecated)]
             Self::Dynamo(lock) => write!(f, "dynamo: {}", lock.table_name()),
         }
     }
@@ -108,6 +110,7 @@ impl S3CopyIfNotExists {
                     code,
                 ))
             }
+            #[allow(deprecated)]
             "dynamo" => Some(Self::Dynamo(DynamoCommit::from_str(value)?)),
             _ => None,
         }
@@ -147,6 +150,7 @@ pub enum S3ConditionalPut {
     /// See [`DynamoCommit`] for more information
     ///
     /// This will use the same region, credentials and endpoint as configured for S3
+    #[deprecated(note = "Use S3ConditionalPut::ETagMatch")]
     Dynamo(DynamoCommit),
 
     /// Disable `conditional put`
@@ -157,6 +161,7 @@ impl std::fmt::Display for S3ConditionalPut {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ETagMatch => write!(f, "etag"),
+            #[allow(deprecated)]
             Self::Dynamo(lock) => write!(f, "dynamo: {}", lock.table_name()),
             Self::Disabled => write!(f, "disabled"),
         }
@@ -169,6 +174,7 @@ impl S3ConditionalPut {
             "etag" => Some(Self::ETagMatch),
             "disabled" => Some(Self::Disabled),
             trimmed => match trimmed.split_once(':')? {
+                #[allow(deprecated)]
                 ("dynamo", s) => Some(Self::Dynamo(DynamoCommit::from_str(s)?)),
                 _ => None,
             },
@@ -214,6 +220,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn parse_s3_copy_if_not_exists_dynamo() {
         let input = "dynamo: table:100";
         let expected = Some(S3CopyIfNotExists::Dynamo(
@@ -223,6 +230,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn parse_s3_condition_put_dynamo() {
         let input = "dynamo: table:1300";
         let expected = Some(S3ConditionalPut::Dynamo(
