@@ -287,6 +287,15 @@ mod tests {
                 (ObjectStoreScheme::AmazonS3, "foo bar"),
             ),
             (
+                "s3://bucket/foo bar",
+                (ObjectStoreScheme::AmazonS3, "foo bar"),
+            ),
+            ("s3://bucket/😀", (ObjectStoreScheme::AmazonS3, "😀")),
+            (
+                "s3://bucket/%F0%9F%98%80",
+                (ObjectStoreScheme::AmazonS3, "😀"),
+            ),
+            (
                 "https://foo/bar%20baz",
                 (ObjectStoreScheme::Http, "bar baz"),
             ),
