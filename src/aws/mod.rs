@@ -511,7 +511,9 @@ mod tests {
     async fn write_multipart_file_with_signature() {
         maybe_skip_integration!();
 
+        let bucket = "test-bucket-for-checksum";
         let store = AmazonS3Builder::from_env()
+            .with_bucket_name(bucket)
             .with_checksum_algorithm(Checksum::SHA256)
             .build()
             .unwrap();
