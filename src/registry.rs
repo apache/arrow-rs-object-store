@@ -104,7 +104,7 @@ impl From<Error> for crate::Error {
     }
 }
 
-/// An [`ObjectStoreRegistry`] that uses [`parse_url`] to create stores based on the environment
+/// An [`ObjectStoreRegistry`] that uses [`parse_url_opts`] to create stores based on the environment
 #[derive(Debug, Default)]
 pub struct DefaultObjectStoreRegistry {
     map: RwLock<HashMap<String, PathEntry>>,
