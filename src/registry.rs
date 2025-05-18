@@ -34,8 +34,8 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     /// Resolve an object URL
     ///
     /// If [`ObjectStoreRegistry::register`] has been called with a URL with the same
-    /// scheme and host as the object URL, and a path that is a prefix of the object URL's
-    /// it should be returned with along with the trailing path. Paths should be matched
+    /// scheme, and authority as the object URL, and a path that is a prefix of the object
+    /// URL's, it should be returned along with the trailing path. Paths should be matched
     /// on a path segment basis, and in the event of multiple possibilities the longest
     /// path match should be returned.
     ///
@@ -107,12 +107,34 @@ impl From<Error> for crate::Error {
 /// An [`ObjectStoreRegistry`] that uses [`parse_url_opts`] to create stores based on the environment
 #[derive(Debug, Default)]
 pub struct DefaultObjectStoreRegistry {
+    /// Mapping from [`url_key`] to [`PathEntry`]
     map: RwLock<HashMap<String, PathEntry>>,
 }
 
+/// [`PathEntry`] construct a tree of path segments starting from the root
+///
+/// For example the following paths
+///
+/// * `/` => store1
+/// * `/foo/bar` => store2
+///
+/// Would be represented by
+///
+/// ```yaml
+/// store: Some(store1)
+/// children:
+///   foo:
+///     store: None
+///     children:
+///       bar:
+///         store: Some(store2)
+/// ```
+///
 #[derive(Debug, Default)]
 struct PathEntry {
+    /// Store, if defined at this path
     store: Option<Arc<dyn ObjectStore>>,
+    /// Child [`PathEntry`], keyed by the next path segment in their path
     children: HashMap<String, Self>,
 }
 
@@ -124,6 +146,7 @@ impl PathEntry {
         let mut current = self;
         let mut ret = self.store.as_ref().map(|store| (store, 0));
         let mut depth = 0;
+        // Traverse the PathEntry tree to find the longest match
         for segment in path_segments(to_resolve.path()) {
             if let Some(e) = current.children.get(segment) {
                 current = e;
@@ -147,7 +170,7 @@ impl DefaultObjectStoreRegistry {
 impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     fn register(&self, url: Url, store: Arc<dyn ObjectStore>) -> Option<Arc<dyn ObjectStore>> {
         let mut map = self.map.write();
-        let key = &url[url::Position::BeforeHost..url::Position::AfterPort];
+        let key = url_key(&url);
         let mut entry = map.entry(key.to_string()).or_default();
 
         for segment in path_segments(url.path()) {
@@ -157,7 +180,7 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     }
 
     fn resolve(&self, to_resolve: &Url) -> crate::Result<(Arc<dyn ObjectStore>, Path)> {
-        let key = &to_resolve[url::Position::BeforeHost..url::Position::AfterPort];
+        let key = url_key(to_resolve);
         {
             let map = self.map.read();
 
@@ -186,6 +209,11 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
 
         Err(Error::NotFound.into())
     }
+}
+
+/// Extracts the scheme and authority of a URL (components before the Path)
+fn url_key(url: &Url) -> &str {
+    &url[..url::Position::AfterPort]
 }
 
 /// Returns the non-empty segments of a path
@@ -285,5 +313,16 @@ mod tests {
         let (resolved, path) = registry.resolve(&to_resolve).unwrap();
         assert_eq!(path.as_ref(), "4/5/6");
         assert!(Arc::ptr_eq(&resolved, &nested2));
+
+        let custom_scheme_url = Url::parse("custom:///").unwrap();
+        let custom_scheme = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        assert!(registry
+            .register(custom_scheme_url, Arc::clone(&custom_scheme))
+            .is_none());
+
+        let to_resolve = Url::parse("custom:///6/7").unwrap();
+        let (resolved, path) = registry.resolve(&to_resolve).unwrap();
+        assert_eq!(path.as_ref(), "6/7");
+        assert!(Arc::ptr_eq(&resolved, &custom_scheme));
     }
 }
