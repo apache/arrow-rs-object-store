@@ -270,5 +270,16 @@ mod tests {
         let (resolved, path) = registry.resolve(&to_resolve).unwrap();
         assert_eq!(path.as_ref(), "muffins/cupcakes");
         assert!(Arc::ptr_eq(&resolved, &nested));
+
+        let nested_url2 = Url::parse("memory:///1/2/3").unwrap();
+        let nested2 = Arc::new(PrefixStore::new(InMemory::new(), "1/2/3")) as Arc<dyn ObjectStore>;
+        assert!(registry
+            .register(nested_url2, Arc::clone(&nested2))
+            .is_none());
+
+        let to_resolve = Url::parse("memory:///1/2/3/4/5/6").unwrap();
+        let (resolved, path) = registry.resolve(&to_resolve).unwrap();
+        assert_eq!(path.as_ref(), "4/5/6");
+        assert!(Arc::ptr_eq(&resolved, &nested2));
     }
 }
