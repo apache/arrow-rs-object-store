@@ -148,12 +148,15 @@ impl PathEntry {
         let mut depth = 0;
         // Traverse the PathEntry tree to find the longest match
         for segment in path_segments(to_resolve.path()) {
-            if let Some(e) = current.children.get(segment) {
-                current = e;
-                depth += 1;
-                if let Some(store) = &current.store {
-                    ret = Some((store, depth))
+            match current.children.get(segment) {
+                Some(e) => {
+                    current = e;
+                    depth += 1;
+                    if let Some(store) = &current.store {
+                        ret = Some((store, depth))
+                    }
                 }
+                None => break,
             }
         }
         ret
@@ -291,6 +294,12 @@ mod tests {
         let banana_muffins_url = Url::parse("memory:///banana_muffins").unwrap();
         let (resolved, path) = registry.resolve(&banana_muffins_url).unwrap();
         assert_eq!(path.as_ref(), "banana_muffins");
+        assert!(Arc::ptr_eq(&resolved, &root));
+
+        // Should resolve to root even though path contains prefix of valid store
+        let to_resolve = Url::parse("memory:///foo/banana").unwrap();
+        let (resolved, path) = registry.resolve(&to_resolve).unwrap();
+        assert_eq!(path.as_ref(), "foo/banana");
         assert!(Arc::ptr_eq(&resolved, &root));
 
         let nested_url = Url::parse("memory:///apples/bananas").unwrap();
