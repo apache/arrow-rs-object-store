@@ -150,8 +150,8 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
         let key = &url[url::Position::BeforeHost..url::Position::AfterPort];
         let mut entry = map.entry(key.to_string()).or_default();
 
-        for segments in path_segments(url.path()) {
-            entry = entry.children.entry(segments.to_string()).or_default();
+        for segment in path_segments(url.path()) {
+            entry = entry.children.entry(segment.to_string()).or_default();
         }
         entry.store.replace(store)
     }
@@ -175,8 +175,10 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
             for segment in path_segments(to_resolve.path()).take(depth) {
                 entry = entry.children.entry(segment.to_string()).or_default();
             }
-            let store = Arc::from(store);
-            entry.store = Some(Arc::clone(&store));
+            let store = Arc::clone(match &entry.store {
+                None => entry.store.insert(Arc::from(store)),
+                Some(x) => x, // Racing creation - use existing
+            });
 
             let path = path_suffix(to_resolve, depth)?;
             return Ok((store, path));
@@ -187,6 +189,8 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
 }
 
 /// Returns the non-empty segments of a path
+///
+/// Note: We don't use [`Url::path_segments`] as we only want non-empty paths
 fn path_segments(s: &str) -> impl Iterator<Item = &str> {
     s.split('/').filter(|x| !x.is_empty())
 }
