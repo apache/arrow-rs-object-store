@@ -164,6 +164,22 @@ pub fn parse_url(url: &Url) -> Result<(Box<dyn ObjectStore>, Path), super::Error
 
 /// Create an [`ObjectStore`] based on the provided `url` and options
 ///
+/// This method can be used to create an instance of one of the provided
+/// `ObjectStore` implementations based on the URL scheme (see
+/// [`ObjectStoreScheme`] for more details).
+///
+/// For example
+/// * `file:///path/to/my/file` will return a [`LocalFileSystem`] instance
+/// * `s3://bucket/path` will return an [`AmazonS3`] instance if the `aws` feature is enabled.
+///
+/// Arguments:
+/// * `url`: The URL to parse
+/// * `options`: A list of key-value pairs to pass to the [`ObjectStore`] builder.
+///   Note different object stores accept different configuration options, so
+///   the options that are read depends on the `url` value. One common pattern
+///   is to pass configuration information via process variables using
+///   [`std::env::vars`].
+///
 /// Returns
 /// - An [`ObjectStore`] of the corresponding type
 /// - The [`Path`] into the [`ObjectStore`] of the addressed resource
