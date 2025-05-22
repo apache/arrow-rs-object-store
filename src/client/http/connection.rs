@@ -108,7 +108,6 @@ impl HttpError {
                 } else if e.is_timeout() {
                     kind = HttpErrorKind::Timeout;
                 }
-                break;
             }
             if let Some(e) = e.downcast_ref::<std::io::Error>() {
                 match e.kind() {
@@ -119,7 +118,6 @@ impl HttpError {
                     | std::io::ErrorKind::UnexpectedEof => kind = HttpErrorKind::Interrupted,
                     _ => {}
                 }
-                break;
             }
             source = e.source();
         }
