@@ -102,16 +102,12 @@ impl HttpError {
         // Reqwest error variants aren't great, attempt to refine them
         let mut source = e.source();
         while let Some(e) = source {
-            let mut is_hyper_error = false;
-            let mut is_io_error = false;
-
             if let Some(e) = e.downcast_ref::<hyper::Error>() {
                 if e.is_closed() || e.is_incomplete_message() || e.is_body_write_aborted() {
                     kind = HttpErrorKind::Request;
                 } else if e.is_timeout() {
                     kind = HttpErrorKind::Timeout;
                 }
-                is_hyper_error = true;
             }
             if let Some(e) = e.downcast_ref::<std::io::Error>() {
                 match e.kind() {
@@ -122,10 +118,6 @@ impl HttpError {
                     | std::io::ErrorKind::UnexpectedEof => kind = HttpErrorKind::Interrupted,
                     _ => {}
                 }
-                is_io_error = true;
-            }
-            if is_hyper_error || is_io_error {
-                break;
             }
             source = e.source();
         }
