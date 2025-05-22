@@ -678,7 +678,10 @@ impl MicrosoftAzureBuilder {
             "https" => match host.split_once('.') {
                 Some((a, "dfs.core.windows.net")) | Some((a, "blob.core.windows.net")) => {
                     self.account_name = Some(validate(a)?);
-                    if let Some(container) = parsed.path_segments().unwrap().next() {
+                    let container = parsed.path_segments().unwrap().next().expect(
+                        "iterator always contains at least one string (which may be empty)",
+                    );
+                    if !container.is_empty() {
                         self.container_name = Some(validate(container)?);
                     }
                 }
@@ -689,10 +692,11 @@ impl MicrosoftAzureBuilder {
                     // - https://onelake.dfs.fabric.microsoft.com/<workspace>/<item>.<itemtype>/<path>/<fileName>
                     //
                     // See <https://learn.microsoft.com/en-us/fabric/onelake/onelake-access-api>
-                    if let Some(workspace) = parsed.path_segments().unwrap().next() {
-                        if !workspace.is_empty() {
-                            self.container_name = Some(workspace.to_string())
-                        }
+                    let workspace = parsed.path_segments().unwrap().next().expect(
+                        "iterator always contains at least one string (which may be empty)",
+                    );
+                    if !workspace.is_empty() {
+                        self.container_name = Some(workspace.to_string())
                     }
                     self.use_fabric_endpoint = true.into();
                 }
@@ -1126,11 +1130,16 @@ mod tests {
         assert_eq!(builder.account_name, Some("account".to_string()));
         assert!(!builder.use_fabric_endpoint.get().unwrap());
 
-        let mut builder = MicrosoftAzureBuilder::new();
+        let mut builder =
+            MicrosoftAzureBuilder::new().with_container_name("explicit_container_name");
         builder
             .parse_url("https://account.blob.core.windows.net/")
             .unwrap();
         assert_eq!(builder.account_name, Some("account".to_string()));
+        assert_eq!(
+            builder.container_name,
+            Some("explicit_container_name".to_string())
+        );
         assert!(!builder.use_fabric_endpoint.get().unwrap());
 
         let mut builder = MicrosoftAzureBuilder::new();
