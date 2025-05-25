@@ -1096,7 +1096,7 @@ impl TryFrom<Blob> for BlobInternal {
     type Error = crate::path::Error;
 
     fn try_from(value: Blob) -> Result<Self, crate::path::Error> {
-        Ok(BlobInternal {
+        Ok(Self {
             path: Path::parse(&value.name)?,
             blob: value,
         })
