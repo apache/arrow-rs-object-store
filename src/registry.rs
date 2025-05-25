@@ -85,6 +85,9 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
 }
 
 /// Error type for [`DefaultObjectStoreRegistry`]
+///
+/// Crate private/opaque type to make the error handling code more ergonomic.
+/// Always converted into `crate::Error` when reported externally.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 enum Error {
