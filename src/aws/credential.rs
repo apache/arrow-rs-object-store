@@ -67,7 +67,7 @@ static UNSIGNED_PAYLOAD: &str = "UNSIGNED-PAYLOAD";
 static STREAMING_PAYLOAD: &str = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD";
 
 /// A set of AWS security credentials
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Eq, PartialEq)]
 pub struct AwsCredential {
     /// AWS_ACCESS_KEY_ID
     pub key_id: String,
@@ -75,6 +75,16 @@ pub struct AwsCredential {
     pub secret_key: String,
     /// AWS_SESSION_TOKEN
     pub token: Option<String>,
+}
+
+impl std::fmt::Debug for AwsCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AwsCredential")
+            .field("key_id", &self.key_id)
+            .field("secret_key", &"******")
+            .field("token", &self.token.as_ref().map(|_| "******"))
+            .finish()
+    }
 }
 
 impl AwsCredential {
@@ -1264,5 +1274,23 @@ mod tests {
         assert_eq!(cred.key_id, "TEST_KEY");
         assert_eq!(cred.secret_key, "TEST_SECRET");
         assert_eq!(cred.token.as_deref(), Some("TEST_SESSION_TOKEN"));
+    }
+
+    #[test]
+    fn test_output_masks_all_fields() {
+        let cred = AwsCredential {
+            key_id: "AKIAXXX".to_string(),
+            secret_key: "super_secret".to_string(),
+            token: Some("temp_token".to_string()),
+        };
+
+        let debug_output = format!("{:?}", cred);
+
+        assert!(debug_output.contains("key_id: \"AKIAXXX\""));
+        assert!(debug_output.contains("secret_key: \"******\""));
+        assert!(debug_output.contains("token: Some(\"******\")"));
+
+        assert!(!debug_output.contains("super_secret"));
+        assert!(!debug_output.contains("temp_token"));
     }
 }

@@ -24,8 +24,7 @@
 //!
 //! They are intended solely for testing purposes.
 
-use core::str;
-
+use crate::list::{PaginatedListOptions, PaginatedListStore};
 use crate::multipart::MultipartStore;
 use crate::path::Path;
 use crate::{
@@ -37,6 +36,7 @@ use futures::stream::FuturesUnordered;
 use futures::{StreamExt, TryStreamExt};
 use rand::distr::Alphanumeric;
 use rand::{rng, Rng};
+use std::collections::HashSet;
 
 pub(crate) async fn flatten_list_stream(
     storage: &DynObjectStore,
@@ -1119,48 +1119,64 @@ pub async fn multipart_race_condition(storage: &dyn ObjectStore, last_writer_win
     let mut multipart_upload_1 = storage.put_multipart(&path).await.unwrap();
     let mut multipart_upload_2 = storage.put_multipart(&path).await.unwrap();
 
+    /// Create a string like `"1:"`  followed by `part` padded to 5,300,000 places
+    ///
+    /// equivalent of format!("{prefix}:{part:05300000}"), which is no longer supported
+    ///
+    /// See: <https://github.com/apache/arrow-rs-object-store/issues/343>
+    fn make_payload(prefix: u8, part: u8) -> Vec<u8> {
+        // prefix = 1 byte
+        // ':' = 1 byte
+        let mut payload = vec![b'0'; 5_300_002];
+        payload[0] = prefix;
+        payload[1] = b':';
+        payload[2] = part;
+        payload
+    }
+
+    // Upload parts interleaved
     multipart_upload_1
-        .put_part(Bytes::from(format!("1:{:05300000},", 0)).into())
+        .put_part(Bytes::from(make_payload(b'1', 0)).into())
         .await
         .unwrap();
     multipart_upload_2
-        .put_part(Bytes::from(format!("2:{:05300000},", 0)).into())
+        .put_part(Bytes::from(make_payload(b'2', 0)).into())
         .await
         .unwrap();
 
     multipart_upload_2
-        .put_part(Bytes::from(format!("2:{:05300000},", 1)).into())
+        .put_part(Bytes::from(make_payload(b'2', 1)).into())
         .await
         .unwrap();
     multipart_upload_1
-        .put_part(Bytes::from(format!("1:{:05300000},", 1)).into())
+        .put_part(Bytes::from(make_payload(b'1', 1)).into())
         .await
         .unwrap();
 
     multipart_upload_1
-        .put_part(Bytes::from(format!("1:{:05300000},", 2)).into())
+        .put_part(Bytes::from(make_payload(b'1', 2)).into())
         .await
         .unwrap();
     multipart_upload_2
-        .put_part(Bytes::from(format!("2:{:05300000},", 2)).into())
+        .put_part(Bytes::from(make_payload(b'2', 2)).into())
         .await
         .unwrap();
 
     multipart_upload_2
-        .put_part(Bytes::from(format!("2:{:05300000},", 3)).into())
+        .put_part(Bytes::from(make_payload(b'2', 3)).into())
         .await
         .unwrap();
     multipart_upload_1
-        .put_part(Bytes::from(format!("1:{:05300000},", 3)).into())
+        .put_part(Bytes::from(make_payload(b'1', 3)).into())
         .await
         .unwrap();
 
     multipart_upload_1
-        .put_part(Bytes::from(format!("1:{:05300000},", 4)).into())
+        .put_part(Bytes::from(make_payload(b'1', 4)).into())
         .await
         .unwrap();
     multipart_upload_2
-        .put_part(Bytes::from(format!("2:{:05300000},", 4)).into())
+        .put_part(Bytes::from(make_payload(b'2', 4)).into())
         .await
         .unwrap();
 
@@ -1175,26 +1191,15 @@ pub async fn multipart_race_condition(storage: &dyn ObjectStore, last_writer_win
     }
 
     let get_result = storage.get(&path).await.unwrap();
-    let bytes = get_result.bytes().await.unwrap();
-    let string_contents = str::from_utf8(&bytes).unwrap();
+    let result_bytes = get_result.bytes().await.unwrap();
 
-    if last_writer_wins {
-        assert!(string_contents.starts_with(
-            format!(
-                "2:{:05300000},2:{:05300000},2:{:05300000},2:{:05300000},2:{:05300000},",
-                0, 1, 2, 3, 4
-            )
-            .as_str()
-        ));
-    } else {
-        assert!(string_contents.starts_with(
-            format!(
-                "1:{:05300000},1:{:05300000},1:{:05300000},1:{:05300000},1:{:05300000},",
-                0, 1, 2, 3, 4
-            )
-            .as_str()
-        ));
+    let expected_writer_prefix = if last_writer_wins { b'2' } else { b'1' };
+    let mut expected_writer_contents = vec![];
+    for part in 0..5 {
+        expected_writer_contents.append(&mut make_payload(expected_writer_prefix, part));
     }
+
+    assert!(result_bytes.starts_with(&expected_writer_contents));
 }
 
 /// Tests performing out of order multipart uploads
@@ -1226,4 +1231,93 @@ pub async fn multipart_out_of_order(storage: &dyn ObjectStore) {
     let result = storage.get(&path).await.unwrap();
     let bytes = result.bytes().await.unwrap();
     assert_eq!(bytes, full);
+}
+
+/// Tests [`PaginatedListStore`]
+pub async fn list_paginated(storage: &dyn ObjectStore, list: &dyn PaginatedListStore) {
+    delete_fixtures(storage).await;
+
+    let r = list.list_paginated(None, Default::default()).await.unwrap();
+    assert_eq!(r.page_token, None);
+    assert_eq!(r.result.objects, vec![]);
+    assert_eq!(r.result.common_prefixes, vec![]);
+
+    let p1 = Path::from("foo/bar");
+    let p2 = Path::from("foo/bax");
+    let p3 = Path::from("foo/baz/bar");
+    let p4 = Path::from("foo/baz/banana");
+    let p5 = Path::from("fob/banana");
+    let p6 = Path::from("fongle/banana");
+
+    let paths = HashSet::from_iter([&p1, &p2, &p3, &p4, &p5, &p6]);
+
+    for path in &paths {
+        storage.put(path, vec![1].into()).await.unwrap();
+    }
+
+    // Test basic listing
+
+    let mut listed = HashSet::new();
+    let mut opts = PaginatedListOptions {
+        max_keys: Some(5),
+        ..Default::default()
+    };
+    let ret = list.list_paginated(None, opts.clone()).await.unwrap();
+    assert_eq!(ret.result.objects.len(), 5);
+    listed.extend(ret.result.objects.iter().map(|x| &x.location));
+
+    opts.page_token = Some(ret.page_token.unwrap());
+    let ret = list.list_paginated(None, opts.clone()).await.unwrap();
+    assert_eq!(ret.result.objects.len(), 1);
+    listed.extend(ret.result.objects.iter().map(|x| &x.location));
+
+    assert_eq!(listed, paths);
+
+    // List with prefix
+    let prefix = Some("foo/");
+    opts.page_token = None;
+    let ret = list.list_paginated(prefix, opts.clone()).await.unwrap();
+    assert_eq!(ret.result.objects.len(), 4);
+    assert!(ret.page_token.is_none());
+
+    let actual = HashSet::from_iter(ret.result.objects.iter().map(|x| &x.location));
+    assert_eq!(actual, HashSet::<&Path>::from_iter([&p1, &p2, &p3, &p4]));
+
+    // List with partial prefix
+    let prefix = Some("fo");
+    opts.page_token = None;
+    let ret = list.list_paginated(prefix, opts.clone()).await.unwrap();
+    assert_eq!(ret.result.objects.len(), 5);
+    listed.extend(ret.result.objects.iter().map(|x| &x.location));
+
+    opts.page_token = Some(ret.page_token.unwrap());
+    let ret = list.list_paginated(prefix, opts.clone()).await.unwrap();
+    assert_eq!(ret.result.objects.len(), 1);
+    listed.extend(ret.result.objects.iter().map(|x| &x.location));
+
+    assert_eq!(listed, paths);
+
+    // List with prefix and delimiter
+    let prefix = Some("foo/");
+    opts.page_token = None;
+    opts.delimiter = Some("/".into());
+    let ret = list.list_paginated(prefix, opts.clone()).await.unwrap();
+    assert_eq!(ret.result.objects.len(), 2);
+    assert_eq!(ret.result.common_prefixes, vec![Path::from("foo/baz")]);
+    assert!(ret.page_token.is_none());
+
+    let actual = HashSet::from_iter(ret.result.objects.iter().map(|x| &x.location));
+    assert_eq!(actual, HashSet::<&Path>::from_iter([&p1, &p2]));
+
+    // List with partial prefix and delimiter
+    let prefix = Some("fo");
+    opts.page_token = None;
+    opts.delimiter = Some("/".into());
+    let ret = list.list_paginated(prefix, opts.clone()).await.unwrap();
+    assert_eq!(ret.result.objects.len(), 0);
+    assert_eq!(
+        HashSet::<Path>::from_iter(ret.result.common_prefixes),
+        HashSet::from_iter([Path::from("foo"), Path::from("fob"), Path::from("fongle")])
+    );
+    assert!(ret.page_token.is_none());
 }

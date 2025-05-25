@@ -51,6 +51,8 @@ use crate::{
 
 mod client;
 
+const STORE: &str = "HTTP";
+
 #[derive(Debug, thiserror::Error)]
 enum Error {
     #[error("Must specify a URL")]
@@ -71,7 +73,7 @@ enum Error {
 impl From<Error> for crate::Error {
     fn from(err: Error) -> Self {
         Self::Generic {
-            store: "HTTP",
+            store: STORE,
             source: Box::new(err),
         }
     }

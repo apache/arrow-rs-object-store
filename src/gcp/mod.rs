@@ -52,8 +52,9 @@ use http::Method;
 use url::Url;
 
 use crate::client::get::GetClientExt;
-use crate::client::list::ListClientExt;
+use crate::client::list::{ListClient, ListClientExt};
 use crate::client::parts::Parts;
+use crate::list::{PaginatedListOptions, PaginatedListResult, PaginatedListStore};
 use crate::multipart::MultipartStore;
 pub use builder::{GoogleCloudStorageBuilder, GoogleConfigKey};
 pub use credential::{GcpCredential, GcpSigningCredential, ServiceAccountKey};
@@ -268,6 +269,17 @@ impl Signer for GoogleCloudStorage {
     }
 }
 
+#[async_trait]
+impl PaginatedListStore for GoogleCloudStorage {
+    async fn list_paginated(
+        &self,
+        prefix: Option<&str>,
+        opts: PaginatedListOptions,
+    ) -> Result<PaginatedListResult> {
+        self.client.list_request(prefix, opts).await
+    }
+}
+
 #[cfg(test)]
 mod test {
 
@@ -299,6 +311,7 @@ mod test {
             multipart(&integration, &integration).await;
             multipart_race_condition(&integration, true).await;
             multipart_out_of_order(&integration).await;
+            list_paginated(&integration, &integration).await;
             // Fake GCS server doesn't currently honor preconditions
             get_opts(&integration).await;
             put_opts(&integration, true).await;

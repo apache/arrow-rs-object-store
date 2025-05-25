@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use super::STORE;
 use crate::client::get::GetClient;
 use crate::client::header::HeaderConfig;
 use crate::client::retry::{self, RetryConfig, RetryExt};
@@ -37,7 +38,10 @@ use url::Url;
 #[derive(Debug, thiserror::Error)]
 enum Error {
     #[error("Request error: {}", source)]
-    Request { source: retry::RetryError },
+    Request {
+        source: retry::RetryError,
+        path: String,
+    },
 
     #[error("Request error: {}", source)]
     Reqwest { source: HttpError },
@@ -75,9 +79,12 @@ enum Error {
 
 impl From<Error> for crate::Error {
     fn from(err: Error) -> Self {
-        Self::Generic {
-            store: "HTTP",
-            source: Box::new(err),
+        match err {
+            Error::Request { source, path } => source.error(STORE, path),
+            _ => Self::Generic {
+                store: STORE,
+                source: Box::new(err),
+            },
         }
     }
 }
@@ -128,7 +135,10 @@ impl Client {
             .request(method, String::from(url))
             .send_retry(&self.retry_config)
             .await
-            .map_err(|source| Error::Request { source })?;
+            .map_err(|source| Error::Request {
+                source,
+                path: path.to_string(),
+            })?;
 
         Ok(())
     }
@@ -144,7 +154,7 @@ impl Client {
 
             match self.make_directory(prefix).await {
                 Ok(_) => break,
-                Err(Error::Request { source })
+                Err(Error::Request { source, path: _ })
                     if matches!(source.status(), Some(StatusCode::CONFLICT)) =>
                 {
                     // Need to create parent
@@ -213,7 +223,13 @@ impl Client {
                         retry = true;
                         self.create_parent_directories(location).await?
                     }
-                    _ => return Err(Error::Request { source }.into()),
+                    _ => {
+                        return Err(Error::Request {
+                            source,
+                            path: location.to_string(),
+                        }
+                        .into())
+                    }
                 },
             }
         }
@@ -255,7 +271,13 @@ impl Client {
                     }
                 };
             }
-            Err(source) => return Err(Error::Request { source }.into()),
+            Err(source) => {
+                return Err(Error::Request {
+                    source,
+                    path: location.map(|x| x.to_string()).unwrap_or_default(),
+                }
+                .into())
+            }
         };
 
         let status = quick_xml::de::from_reader(response.reader())
@@ -270,13 +292,7 @@ impl Client {
             .delete(url)
             .send_retry(&self.retry_config)
             .await
-            .map_err(|source| match source.status() {
-                Some(StatusCode::NOT_FOUND) => crate::Error::NotFound {
-                    source: Box::new(source),
-                    path: path.to_string(),
-                },
-                _ => Error::Request { source }.into(),
-            })?;
+            .map_err(|source| source.error(STORE, path.to_string()))?;
         Ok(())
     }
 
@@ -313,7 +329,11 @@ impl Client {
                         self.create_parent_directories(to).await?;
                         continue;
                     }
-                    _ => Error::Request { source }.into(),
+                    _ => Error::Request {
+                        source,
+                        path: from.to_string(),
+                    }
+                    .into(),
                 }),
             };
         }
@@ -322,7 +342,7 @@ impl Client {
 
 #[async_trait]
 impl GetClient for Client {
-    const STORE: &'static str = "HTTP";
+    const STORE: &'static str = STORE;
 
     /// Override the [`HeaderConfig`] to be less strict to support a
     /// broader range of HTTP servers (#4831)
@@ -354,7 +374,11 @@ impl GetClient for Client {
                         path: path.to_string(),
                     }
                 }
-                _ => Error::Request { source }.into(),
+                _ => Error::Request {
+                    source,
+                    path: path.to_string(),
+                }
+                .into(),
             })?;
 
         // We expect a 206 Partial Content response if a range was requested
