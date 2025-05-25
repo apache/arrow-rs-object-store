@@ -1039,7 +1039,11 @@ struct ListResultInternal {
     pub blobs: Blobs,
 }
 
-fn to_list_result(value: ListResultInternal, prefix: Option<&str>, ignore_unparsable_paths: bool) -> Result<ListResult> {
+fn to_list_result(
+    value: ListResultInternal,
+    prefix: Option<&str>,
+    ignore_unparsable_paths: bool,
+) -> Result<ListResult> {
     let prefix = prefix.unwrap_or_default();
     let common_prefixes = value
         .blobs

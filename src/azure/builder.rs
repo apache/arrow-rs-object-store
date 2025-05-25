@@ -383,10 +383,10 @@ pub enum AzureConfigKey {
     FabricClusterIdentifier,
 
     /// When listing objects, ignore paths that do not conform to the Path class assumptions
-    /// 
+    ///
     /// e.g. Azure allows to have paths like `foo/bar//baz` which would throw an error
     /// when trying to parse them into a Path.
-    /// 
+    ///
     /// When set to true, these paths will be ignored.
     ///
     /// Supported keys:
