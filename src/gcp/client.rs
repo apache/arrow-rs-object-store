@@ -19,7 +19,7 @@ use crate::client::builder::HttpRequestBuilder;
 use crate::client::get::GetClient;
 use crate::client::header::{get_put_result, get_version, HeaderConfig};
 use crate::client::list::ListClient;
-use crate::client::retry::RetryExt;
+use crate::client::retry::{RetryContext, RetryExt};
 use crate::client::s3::{
     CompleteMultipartUpload, CompleteMultipartUploadResult, InitiateMultipartUploadResult,
     ListResponse,
@@ -617,8 +617,17 @@ impl GetClient for GoogleCloudStorageClient {
         user_defined_metadata_prefix: Some(USER_DEFINED_METADATA_HEADER_PREFIX),
     };
 
+    fn retry_config(&self) -> &RetryConfig {
+        &self.config.retry_config
+    }
+
     /// Perform a get request <https://cloud.google.com/storage/docs/xml-api/get-object-download>
-    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<HttpResponse> {
+    async fn get_request(
+        &self,
+        ctx: &mut RetryContext,
+        path: &Path,
+        options: GetOptions,
+    ) -> Result<HttpResponse> {
         let credential = self.get_credential().await?;
         let url = self.object_url(path);
 
@@ -636,7 +645,8 @@ impl GetClient for GoogleCloudStorageClient {
         let response = request
             .with_bearer_auth(credential.as_deref())
             .with_get_options(options)
-            .send_retry(&self.config.retry_config)
+            .retryable_request()
+            .send(ctx)
             .await
             .map_err(|source| {
                 let path = path.as_ref().into();

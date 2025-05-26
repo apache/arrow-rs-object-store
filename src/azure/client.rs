@@ -22,7 +22,7 @@ use crate::client::builder::HttpRequestBuilder;
 use crate::client::get::GetClient;
 use crate::client::header::{get_put_result, HeaderConfig};
 use crate::client::list::ListClient;
-use crate::client::retry::RetryExt;
+use crate::client::retry::{RetryContext, RetryExt};
 use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpRequest, HttpResponse};
 use crate::list::{PaginatedListOptions, PaginatedListResult};
 use crate::multipart::PartId;
@@ -896,10 +896,19 @@ impl GetClient for AzureClient {
         user_defined_metadata_prefix: Some(USER_DEFINED_METADATA_HEADER_PREFIX),
     };
 
+    fn retry_config(&self) -> &RetryConfig {
+        &self.config.retry_config
+    }
+
     /// Make an Azure GET request
     /// <https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob>
     /// <https://docs.microsoft.com/en-us/rest/api/storageservices/get-blob-properties>
-    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<HttpResponse> {
+    async fn get_request(
+        &self,
+        ctx: &mut RetryContext,
+        path: &Path,
+        options: GetOptions,
+    ) -> Result<HttpResponse> {
         // As of 2024-01-02, Azure does not support suffix requests,
         // so we should fail fast here rather than sending one
         if let Some(GetRange::Suffix(_)) = options.range.as_ref() {
@@ -929,12 +938,13 @@ impl GetClient for AzureClient {
             .as_deref()
             .map(|c| c.sensitive_request())
             .unwrap_or_default();
+
         let response = builder
             .with_get_options(options)
             .with_azure_authorization(&credential, &self.config.account)
-            .retryable(&self.config.retry_config)
+            .retryable_request()
             .sensitive(sensitive)
-            .send()
+            .send(ctx)
             .await
             .map_err(|source| {
                 let path = path.as_ref().into();

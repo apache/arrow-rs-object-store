@@ -67,30 +67,35 @@ impl std::fmt::Display for RetryError {
 }
 
 /// Context of the retry loop
-struct RetryContext {
-    method: Method,
-    uri: Option<Uri>,
+///
+/// Most use-cases should use [`RetryExt`] and [`RetryableRequestBuilder`], however,
+/// [`RetryContext`] allows preserving retry state across multiple [`RetryableRequest`]
+pub(crate) struct RetryContext {
+    backoff: Backoff,
     retries: usize,
     max_retries: usize,
-    start: Instant,
     retry_timeout: Duration,
+    start: Instant,
 }
 
 impl RetryContext {
-    fn err(self, error: RequestError) -> RetryError {
-        RetryError(Box::new(RetryErrorImpl {
-            uri: self.uri,
-            method: self.method,
-            retries: self.retries,
-            max_retries: self.max_retries,
-            elapsed: self.start.elapsed(),
-            retry_timeout: self.retry_timeout,
-            inner: error,
-        }))
+    pub(crate) fn new(config: &RetryConfig) -> Self {
+        Self {
+            max_retries: config.max_retries,
+            retry_timeout: config.retry_timeout,
+            backoff: Backoff::new(&config.backoff),
+            retries: 0,
+            start: Instant::now(),
+        }
     }
 
-    fn exhausted(&self) -> bool {
-        self.retries == self.max_retries || self.start.elapsed() > self.retry_timeout
+    pub(crate) fn exhausted(&self) -> bool {
+        self.retries >= self.max_retries || self.start.elapsed() > self.retry_timeout
+    }
+
+    pub(crate) fn backoff(&mut self) -> Duration {
+        self.retries += 1;
+        self.backoff.next()
     }
 }
 
@@ -248,13 +253,59 @@ fn body_contains_error(response_body: &str) -> bool {
     response_body.contains("InternalError") || response_body.contains("SlowDown")
 }
 
+/// Combines a [`RetryableRequest`] with a [`RetryContext`]
+pub(crate) struct RetryableRequestBuilder {
+    request: RetryableRequest,
+    context: RetryContext,
+}
+
+impl RetryableRequestBuilder {
+    /// Set whether this request is idempotent
+    ///
+    /// An idempotent request will be retried on timeout even if the request
+    /// method is not [safe](https://datatracker.ietf.org/doc/html/rfc7231#section-4.2.1)
+    pub(crate) fn idempotent(mut self, idempotent: bool) -> Self {
+        self.request.idempotent = Some(idempotent);
+        self
+    }
+
+    /// Set whether this request should be retried on a 409 Conflict response.
+    #[cfg(feature = "aws")]
+    pub(crate) fn retry_on_conflict(mut self, retry_on_conflict: bool) -> Self {
+        self.request.retry_on_conflict = retry_on_conflict;
+        self
+    }
+
+    /// Set whether this request contains sensitive data
+    ///
+    /// This will avoid printing out the URL in error messages
+    #[allow(unused)]
+    pub(crate) fn sensitive(mut self, sensitive: bool) -> Self {
+        self.request.sensitive = sensitive;
+        self
+    }
+
+    /// Provide a [`PutPayload`]
+    pub(crate) fn payload(mut self, payload: Option<PutPayload>) -> Self {
+        self.request.payload = payload;
+        self
+    }
+
+    #[allow(unused)]
+    pub(crate) fn retry_error_body(mut self, retry_error_body: bool) -> Self {
+        self.request.retry_error_body = retry_error_body;
+        self
+    }
+
+    pub(crate) async fn send(mut self) -> Result<HttpResponse> {
+        self.request.send(&mut self.context).await
+    }
+}
+
+/// A retryable request
 pub(crate) struct RetryableRequest {
     client: HttpClient,
-    request: HttpRequest,
-
-    max_retries: usize,
-    retry_timeout: Duration,
-    backoff: Backoff,
+    http: HttpRequest,
 
     sensitive: bool,
     idempotent: Option<bool>,
@@ -265,64 +316,26 @@ pub(crate) struct RetryableRequest {
 }
 
 impl RetryableRequest {
-    /// Set whether this request is idempotent
-    ///
-    /// An idempotent request will be retried on timeout even if the request
-    /// method is not [safe](https://datatracker.ietf.org/doc/html/rfc7231#section-4.2.1)
-    pub(crate) fn idempotent(self, idempotent: bool) -> Self {
-        Self {
-            idempotent: Some(idempotent),
-            ..self
-        }
-    }
-
-    /// Set whether this request should be retried on a 409 Conflict response.
-    #[cfg(feature = "aws")]
-    pub(crate) fn retry_on_conflict(self, retry_on_conflict: bool) -> Self {
-        Self {
-            retry_on_conflict,
-            ..self
-        }
-    }
-
-    /// Set whether this request contains sensitive data
-    ///
-    /// This will avoid printing out the URL in error messages
     #[allow(unused)]
     pub(crate) fn sensitive(self, sensitive: bool) -> Self {
         Self { sensitive, ..self }
     }
 
-    /// Provide a [`PutPayload`]
-    pub(crate) fn payload(self, payload: Option<PutPayload>) -> Self {
-        Self { payload, ..self }
+    fn err(&self, error: RequestError, ctx: &RetryContext) -> RetryError {
+        RetryError(Box::new(RetryErrorImpl {
+            uri: (!self.sensitive).then(|| self.http.uri().clone()),
+            method: self.http.method().clone(),
+            retries: ctx.retries,
+            max_retries: ctx.max_retries,
+            elapsed: ctx.start.elapsed(),
+            retry_timeout: ctx.retry_timeout,
+            inner: error,
+        }))
     }
 
-    #[allow(unused)]
-    pub(crate) fn retry_error_body(self, retry_error_body: bool) -> Self {
-        Self {
-            retry_error_body,
-            ..self
-        }
-    }
-
-    pub(crate) async fn send(self) -> Result<HttpResponse> {
-        let mut ctx = RetryContext {
-            retries: 0,
-            uri: (!self.sensitive).then(|| self.request.uri().clone()),
-            method: self.request.method().clone(),
-            max_retries: self.max_retries,
-            start: Instant::now(),
-            retry_timeout: self.retry_timeout,
-        };
-
-        let mut backoff = self.backoff;
-        let is_idempotent = self
-            .idempotent
-            .unwrap_or_else(|| self.request.method().is_safe());
-
+    pub(crate) async fn send(self, ctx: &mut RetryContext) -> Result<HttpResponse> {
         loop {
-            let mut request = self.request.clone();
+            let mut request = self.http.clone();
 
             if let Some(payload) = &self.payload {
                 *request.body_mut() = payload.clone().into();
@@ -343,7 +356,7 @@ impl RetryableRequest {
                         let (parts, body) = r.into_parts();
                         let body = match body.text().await {
                             Ok(body) => body,
-                            Err(e) => return Err(ctx.err(RequestError::Http(e))),
+                            Err(e) => return Err(self.err(RequestError::Http(e), ctx)),
                         };
 
                         if !body_contains_error(&body) {
@@ -352,11 +365,10 @@ impl RetryableRequest {
                         } else {
                             // Retry as if this was a 5xx response
                             if ctx.exhausted() {
-                                return Err(ctx.err(RequestError::Response { body, status }));
+                                return Err(self.err(RequestError::Response { body, status }, ctx));
                             }
 
-                            let sleep = backoff.next();
-                            ctx.retries += 1;
+                            let sleep = ctx.backoff();
                             info!(
                                 "Encountered a response status of {} but body contains Error, backing off for {} seconds, retry {} of {}",
                                 status,
@@ -367,15 +379,18 @@ impl RetryableRequest {
                             tokio::time::sleep(sleep).await;
                         }
                     } else if status == StatusCode::NOT_MODIFIED {
-                        return Err(ctx.err(RequestError::Status { status, body: None }));
+                        return Err(self.err(RequestError::Status { status, body: None }, ctx));
                     } else if status.is_redirection() {
                         let is_bare_redirect = !r.headers().contains_key(LOCATION);
                         return match is_bare_redirect {
-                            true => Err(ctx.err(RequestError::BareRedirect)),
-                            false => Err(ctx.err(RequestError::Status {
-                                body: None,
-                                status: r.status(),
-                            })),
+                            true => Err(self.err(RequestError::BareRedirect, ctx)),
+                            false => Err(self.err(
+                                RequestError::Status {
+                                    body: None,
+                                    status: r.status(),
+                                },
+                                ctx,
+                            )),
                         };
                     } else {
                         let status = r.status();
@@ -393,11 +408,10 @@ impl RetryableRequest {
                                 },
                                 false => RequestError::Status { status, body: None },
                             };
-                            return Err(ctx.err(source));
+                            return Err(self.err(source, ctx));
                         };
 
-                        let sleep = backoff.next();
-                        ctx.retries += 1;
+                        let sleep = ctx.backoff();
                         info!(
                             "Encountered server error, backing off for {} seconds, retry {} of {}",
                             sleep.as_secs_f32(),
@@ -408,7 +422,9 @@ impl RetryableRequest {
                     }
                 }
                 Err(e) => {
-                    // let e = sanitize_err(e);
+                    let is_idempotent = self
+                        .idempotent
+                        .unwrap_or_else(|| self.http.method().is_safe());
 
                     let do_retry = match e.kind() {
                         HttpErrorKind::Connect | HttpErrorKind::Request => true, // Request not sent, can retry
@@ -416,14 +432,10 @@ impl RetryableRequest {
                         HttpErrorKind::Unknown | HttpErrorKind::Decode => false,
                     };
 
-                    if ctx.retries == ctx.max_retries
-                        || ctx.start.elapsed() > ctx.retry_timeout
-                        || !do_retry
-                    {
-                        return Err(ctx.err(RequestError::Http(e)));
+                    if ctx.exhausted() || !do_retry {
+                        return Err(self.err(RequestError::Http(e), ctx));
                     }
-                    let sleep = backoff.next();
-                    ctx.retries += 1;
+                    let sleep = ctx.backoff();
                     info!(
                         "Encountered transport error backing off for {} seconds, retry {} of {}: {}",
                         sleep.as_secs_f32(),
@@ -439,8 +451,11 @@ impl RetryableRequest {
 }
 
 pub(crate) trait RetryExt {
+    /// Return a [`RetryableRequestBuilder`]
+    fn retryable(self, config: &RetryConfig) -> RetryableRequestBuilder;
+
     /// Return a [`RetryableRequest`]
-    fn retryable(self, config: &RetryConfig) -> RetryableRequest;
+    fn retryable_request(self) -> RetryableRequest;
 
     /// Dispatch a request with the given retry configuration
     ///
@@ -451,16 +466,20 @@ pub(crate) trait RetryExt {
 }
 
 impl RetryExt for HttpRequestBuilder {
-    fn retryable(self, config: &RetryConfig) -> RetryableRequest {
+    fn retryable(self, config: &RetryConfig) -> RetryableRequestBuilder {
+        RetryableRequestBuilder {
+            request: self.retryable_request(),
+            context: RetryContext::new(config),
+        }
+    }
+
+    fn retryable_request(self) -> RetryableRequest {
         let (client, request) = self.into_parts();
         let request = request.expect("request must be valid");
 
         RetryableRequest {
             client,
-            request,
-            max_retries: config.max_retries,
-            retry_timeout: config.retry_timeout,
-            backoff: Backoff::new(&config.backoff),
+            http: request,
             idempotent: None,
             payload: None,
             sensitive: false,

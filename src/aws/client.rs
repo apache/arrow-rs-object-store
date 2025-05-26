@@ -27,7 +27,7 @@ use crate::client::get::GetClient;
 use crate::client::header::{get_etag, HeaderConfig};
 use crate::client::header::{get_put_result, get_version};
 use crate::client::list::ListClient;
-use crate::client::retry::RetryExt;
+use crate::client::retry::{RetryContext, RetryExt};
 use crate::client::s3::{
     CompleteMultipartUpload, CompleteMultipartUploadResult, CopyPartResult,
     InitiateMultipartUploadResult, ListResponse, PartMetadata,
@@ -837,8 +837,17 @@ impl GetClient for S3Client {
         user_defined_metadata_prefix: Some(USER_DEFINED_METADATA_HEADER_PREFIX),
     };
 
+    fn retry_config(&self) -> &RetryConfig {
+        &self.config.retry_config
+    }
+
     /// Make an S3 GET request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html>
-    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<HttpResponse> {
+    async fn get_request(
+        &self,
+        ctx: &mut RetryContext,
+        path: &Path,
+        options: GetOptions,
+    ) -> Result<HttpResponse> {
         let credential = self.config.get_session_credential().await?;
         let url = self.config.path_url(path);
         let method = match options.head {
@@ -863,7 +872,8 @@ impl GetClient for S3Client {
         let response = builder
             .with_get_options(options)
             .with_aws_sigv4(credential.authorizer(), None)
-            .send_retry(&self.config.retry_config)
+            .retryable_request()
+            .send(ctx)
             .await
             .map_err(|e| e.error(STORE, path.to_string()))?;
 

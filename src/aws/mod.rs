@@ -512,6 +512,7 @@ impl PaginatedListStore for AmazonS3 {
 mod tests {
     use super::*;
     use crate::client::get::GetClient;
+    use crate::client::retry::RetryContext;
     use crate::client::SpawnedReqwestConnector;
     use crate::integration::*;
     use crate::tests::*;
@@ -761,11 +762,14 @@ mod tests {
         upload.complete().await.unwrap();
 
         for location in &locations {
+            let mut context = RetryContext::new(&store.client.config.retry_config);
+
             let res = store
                 .client
-                .get_request(location, GetOptions::default())
+                .get_request(&mut context, location, GetOptions::default())
                 .await
                 .unwrap();
+
             let headers = res.headers();
             assert_eq!(
                 headers
@@ -817,11 +821,14 @@ mod tests {
 
         // Test get with sse-c.
         for location in &locations {
+            let mut context = RetryContext::new(&store.client.config.retry_config);
+
             let res = store
                 .client
-                .get_request(location, GetOptions::default())
+                .get_request(&mut context, location, GetOptions::default())
                 .await
                 .unwrap();
+
             let headers = res.headers();
             assert_eq!(
                 headers

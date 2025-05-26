@@ -20,6 +20,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::future::Future;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
@@ -181,7 +182,7 @@ impl DynamoCommit {
 
     pub(crate) async fn copy_if_not_exists(
         &self,
-        client: &S3Client,
+        client: &Arc<S3Client>,
         from: &Path,
         to: &Path,
     ) -> Result<()> {
@@ -195,7 +196,7 @@ impl DynamoCommit {
     #[allow(clippy::future_not_send)] // Generics confound this lint
     pub(crate) async fn conditional_op<F, Fut, T>(
         &self,
-        client: &S3Client,
+        client: &Arc<S3Client>,
         to: &Path,
         etag: Option<&str>,
         op: F,
@@ -348,7 +349,7 @@ enum TryLockResult {
 }
 
 /// Validates that `path` has the given `etag` or doesn't exist if `None`
-async fn check_precondition(client: &S3Client, path: &Path, etag: Option<&str>) -> Result<()> {
+async fn check_precondition(client: &Arc<S3Client>, path: &Path, etag: Option<&str>) -> Result<()> {
     let options = GetOptions {
         head: true,
         ..Default::default()
@@ -543,7 +544,7 @@ mod tests {
     ///
     /// This is a function called by s3_test to avoid test concurrency issues
     pub(crate) async fn integration_test(integration: &AmazonS3, d: &DynamoCommit) {
-        let client = integration.client.as_ref();
+        let client = &integration.client;
 
         let src = Path::from("dynamo_path_src");
         integration.put(&src, "asd".into()).await.unwrap();

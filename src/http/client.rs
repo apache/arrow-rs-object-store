@@ -18,7 +18,7 @@
 use super::STORE;
 use crate::client::get::GetClient;
 use crate::client::header::HeaderConfig;
-use crate::client::retry::{self, RetryConfig, RetryExt};
+use crate::client::retry::{self, RetryConfig, RetryContext, RetryExt};
 use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpResponse};
 use crate::path::{Path, DELIMITER};
 use crate::util::deserialize_rfc1123;
@@ -353,7 +353,16 @@ impl GetClient for Client {
         user_defined_metadata_prefix: None,
     };
 
-    async fn get_request(&self, path: &Path, options: GetOptions) -> Result<HttpResponse> {
+    fn retry_config(&self) -> &RetryConfig {
+        &self.retry_config
+    }
+
+    async fn get_request(
+        &self,
+        ctx: &mut RetryContext,
+        path: &Path,
+        options: GetOptions,
+    ) -> Result<HttpResponse> {
         let url = self.path_url(path);
         let method = match options.head {
             true => Method::HEAD,
@@ -364,7 +373,8 @@ impl GetClient for Client {
 
         let res = builder
             .with_get_options(options)
-            .send_retry(&self.retry_config)
+            .retryable_request()
+            .send(ctx)
             .await
             .map_err(|source| match source.status() {
                 // Some stores return METHOD_NOT_ALLOWED for get on directories
