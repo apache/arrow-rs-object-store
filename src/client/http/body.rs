@@ -213,6 +213,14 @@ impl Body for HttpResponseBody {
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
         Pin::new(&mut self.0).poll_frame(cx)
     }
+
+    fn is_end_stream(&self) -> bool {
+        self.0.is_end_stream()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        self.0.size_hint()
+    }
 }
 
 impl From<Bytes> for HttpResponseBody {
