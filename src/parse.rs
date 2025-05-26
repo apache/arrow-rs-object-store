@@ -183,7 +183,7 @@ pub fn parse_url(url: &Url) -> Result<(Box<dyn ObjectStore>, Path), super::Error
 /// Returns
 /// - An [`ObjectStore`] of the corresponding type
 /// - The [`Path`] into the [`ObjectStore`] of the addressed resource
-/// 
+///
 /// [`AmazonS3`]: https://docs.rs/object_store/0.12.0/object_store/aws/struct.AmazonS3.html
 pub fn parse_url_opts<I, K, V>(
     url: &Url,
