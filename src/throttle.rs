@@ -22,8 +22,8 @@ use std::{convert::TryInto, sync::Arc};
 
 use crate::multipart::{MultipartStore, PartId};
 use crate::{
-    path::Path, GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
+    path::Path, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
 };
 use crate::{GetOptions, UploadPart};
 use async_trait::async_trait;
@@ -311,22 +311,12 @@ fn usize_to_u32_saturate(x: usize) -> u32 {
 }
 
 fn throttle_get(result: GetResult, wait_get_per_byte: Duration) -> GetResult {
-    #[allow(clippy::infallible_destructuring_match)]
-    let s = match result.payload {
-        GetResultPayload::Stream(s) => s,
-        #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
-        GetResultPayload::File(_, _) => unimplemented!(),
-    };
-
-    let stream = throttle_stream(s, move |bytes| {
+    let payload = throttle_stream(result.payload, move |bytes| {
         let bytes_len: u32 = usize_to_u32_saturate(bytes.len());
         wait_get_per_byte * bytes_len
     });
 
-    GetResult {
-        payload: GetResultPayload::Stream(stream),
-        ..result
-    }
+    GetResult { payload, ..result }
 }
 
 fn throttle_stream<T: Send + 'static, E: Send + 'static, F>(
@@ -404,7 +394,7 @@ impl MultipartUpload for ThrottledUpload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{integration::*, memory::InMemory, GetResultPayload};
+    use crate::{integration::*, memory::InMemory};
     use futures::TryStreamExt;
     use tokio::time::Duration;
     use tokio::time::Instant;
@@ -605,10 +595,7 @@ mod tests {
         let res = store.get(&path).await;
         if n_bytes.is_some() {
             // need to consume bytes to provoke sleep times
-            let s = match res.unwrap().payload {
-                GetResultPayload::Stream(s) => s,
-                GetResultPayload::File(_, _) => unimplemented!(),
-            };
+            let s = res.unwrap().payload;
 
             s.map_ok(|b| bytes::BytesMut::from(&b[..]))
                 .try_concat()

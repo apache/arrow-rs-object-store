@@ -29,9 +29,9 @@ use parking_lot::RwLock;
 use crate::multipart::{MultipartStore, PartId};
 use crate::util::InvalidGetRange;
 use crate::{
-    path::Path, Attributes, GetRange, GetResult, GetResultPayload, ListResult, MultipartId,
-    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutResult,
-    Result, UpdateVersion, UploadPart,
+    path::Path, Attributes, GetRange, GetResult, ListResult, MultipartId, MultipartUpload,
+    ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutResult, Result,
+    UpdateVersion, UploadPart,
 };
 use crate::{GetOptions, PutPayload};
 
@@ -262,7 +262,7 @@ impl ObjectStore for InMemory {
         let stream = futures::stream::once(futures::future::ready(Ok(data)));
 
         Ok(GetResult {
-            payload: GetResultPayload::Stream(stream.boxed()),
+            payload: stream.boxed(),
             attributes: entry.attributes,
             meta,
             range,

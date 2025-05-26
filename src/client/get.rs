@@ -20,7 +20,7 @@ use std::ops::Range;
 use crate::client::header::{header_meta, HeaderConfig};
 use crate::client::HttpResponse;
 use crate::path::Path;
-use crate::{Attribute, Attributes, GetOptions, GetRange, GetResult, GetResultPayload, Result};
+use crate::{Attribute, Attributes, GetOptions, GetRange, GetResult, Result};
 use async_trait::async_trait;
 use futures::{StreamExt, TryStreamExt};
 use http::header::{
@@ -240,7 +240,7 @@ fn get_result<T: GetClient>(
         }
     }
 
-    let stream = response
+    let payload = response
         .into_body()
         .bytes_stream()
         .map_err(|source| crate::Error::Generic {
@@ -253,7 +253,7 @@ fn get_result<T: GetClient>(
         range,
         meta,
         attributes,
-        payload: GetResultPayload::Stream(stream),
+        payload,
     })
 }
 
