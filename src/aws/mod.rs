@@ -38,7 +38,7 @@ use url::Url;
 
 use crate::aws::client::{CompleteMultipartMode, PutPartPayload, RequestError, S3Client};
 use crate::client::get::GetClientExt;
-use crate::client::list::ListClientExt;
+use crate::client::list::{ListClient, ListClientExt};
 use crate::client::CredentialProvider;
 use crate::multipart::{MultipartStore, PartId};
 use crate::signer::Signer;
@@ -78,6 +78,7 @@ const STORE: &str = "S3";
 /// [`CredentialProvider`] for [`AmazonS3`]
 pub type AwsCredentialProvider = Arc<dyn CredentialProvider<Credential = AwsCredential>>;
 use crate::client::parts::Parts;
+use crate::list::{PaginatedListOptions, PaginatedListResult, PaginatedListStore};
 pub use credential::{AwsAuthorizer, AwsCredential};
 
 /// Interface for [Amazon S3](https://aws.amazon.com/s3/).
@@ -496,6 +497,17 @@ impl MultipartStore for AmazonS3 {
     }
 }
 
+#[async_trait]
+impl PaginatedListStore for AmazonS3 {
+    async fn list_paginated(
+        &self,
+        prefix: Option<&str>,
+        opts: PaginatedListOptions,
+    ) -> Result<PaginatedListResult> {
+        self.client.list_request(prefix, opts).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -594,6 +606,7 @@ mod tests {
         signing(&integration).await;
         s3_encryption(&integration).await;
         put_get_attributes(&integration).await;
+        list_paginated(&integration, &integration).await;
 
         // Object tagging is not supported by S3 Express One Zone
         if config.session_provider.is_none() {
