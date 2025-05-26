@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::client::{HttpResponse, HttpResponseBody};
 use futures::future::BoxFuture;
 use futures::FutureExt;
 use hyper::body::Incoming;
@@ -33,7 +34,7 @@ use tokio::sync::oneshot;
 use tokio::task::{JoinHandle, JoinSet};
 
 pub(crate) type ResponseFn =
-    Box<dyn FnOnce(Request<Incoming>) -> BoxFuture<'static, Response<String>> + Send>;
+    Box<dyn FnOnce(Request<Incoming>) -> BoxFuture<'static, HttpResponse> + Send>;
 
 /// A mock server
 pub(crate) struct MockServer {
@@ -76,7 +77,7 @@ impl MockServer {
                                 async move {
                                     Ok::<_, Infallible>(match next {
                                         Some(r) => r(req).await,
-                                        None => Response::new("Hello World".to_string()),
+                                        None => HttpResponse::new("Hello World".to_string().into()),
                                     })
                                 }
                             }),
@@ -102,16 +103,18 @@ impl MockServer {
     }
 
     /// Add a response
-    pub(crate) fn push(&self, response: Response<String>) {
-        self.push_fn(|_| response)
+    pub(crate) fn push<B: Into<HttpResponseBody>>(&self, response: Response<B>) {
+        let resp = response.map(Into::into);
+        self.push_fn(|_| resp)
     }
 
     /// Add a response function
-    pub(crate) fn push_fn<F>(&self, f: F)
+    pub(crate) fn push_fn<F, B>(&self, f: F)
     where
-        F: FnOnce(Request<Incoming>) -> Response<String> + Send + 'static,
+        F: FnOnce(Request<Incoming>) -> Response<B> + Send + 'static,
+        B: Into<HttpResponseBody>,
     {
-        let f = Box::new(|req| async move { f(req) }.boxed());
+        let f = Box::new(|req| async move { f(req).map(Into::into) }.boxed());
         self.responses.lock().push_back(f)
     }
 
@@ -120,7 +123,8 @@ impl MockServer {
         F: FnOnce(Request<Incoming>) -> Fut + Send + 'static,
         Fut: Future<Output = Response<String>> + Send + 'static,
     {
-        self.responses.lock().push_back(Box::new(|r| f(r).boxed()))
+        let f = Box::new(|r| f(r).map(|b| b.map(Into::into)).boxed());
+        self.responses.lock().push_back(f)
     }
 
     /// Shutdown the mock server

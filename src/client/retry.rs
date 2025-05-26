@@ -543,7 +543,7 @@ mod tests {
         let r = do_request().await.unwrap();
         assert_eq!(r.status(), StatusCode::OK);
 
-        // Returns client errors immediately with status message
+        // Returns client errors immediately with a status message
         mock.push(
             Response::builder()
                 .status(StatusCode::BAD_REQUEST)
@@ -664,13 +664,13 @@ mod tests {
         );
 
         // Panic results in an incomplete message error in the client
-        mock.push_fn(|_| panic!());
+        mock.push_fn::<_, String>(|_| panic!());
         let r = do_request().await.unwrap();
         assert_eq!(r.status(), StatusCode::OK);
 
         // Gives up after retrying multiple panics
         for _ in 0..=retry.max_retries {
-            mock.push_fn(|_| panic!());
+            mock.push_fn::<_, String>(|_| panic!());
         }
         let e = do_request().await.unwrap_err().to_string();
         assert!(
@@ -729,7 +729,7 @@ mod tests {
         assert!(!err.contains("SENSITIVE"), "{err}");
 
         for _ in 0..=retry.max_retries {
-            mock.push_fn(|_| panic!());
+            mock.push_fn::<_, String>(|_| panic!());
         }
 
         let req = client

@@ -26,7 +26,7 @@ use crate::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
 use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_RANGE,
     CONTENT_TYPE,
@@ -252,8 +252,7 @@ impl<T: GetClient> GetContext<T> {
                 Ok(None)
             },
         )
-        .map_err(Self::err)
-        .boxed()
+            .boxed()
     }
 
     fn err<E: std::error::Error + Send + Sync + 'static>(e: E) -> crate::Error {
@@ -479,6 +478,222 @@ mod tests {
         assert_eq!(
             attributes.get(&Attribute::Metadata("foo".into())),
             Some(&"bar".into())
+        );
+    }
+}
+#[cfg(all(test, feature = "http"))]
+mod http_tests {
+    use crate::client::mock_server::MockServer;
+    use crate::client::{HttpError, HttpErrorKind, HttpResponseBody};
+    use crate::http::HttpBuilder;
+    use crate::path::Path;
+    use crate::{ClientOptions, ObjectStore, RetryConfig};
+    use bytes::Bytes;
+    use futures::FutureExt;
+    use http::header::{CONTENT_LENGTH, CONTENT_RANGE, ETAG, RANGE};
+    use http::{Response, StatusCode};
+    use hyper::body::Frame;
+    use std::pin::Pin;
+    use std::task::{ready, Context, Poll};
+    use std::time::Duration;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("ChunkedErr")]
+    struct ChunkedErr {}
+
+    /// A Body from a list of results
+    ///
+    /// Sleeps between each frame to avoid the HTTP Server coalescing the frames
+    struct Chunked {
+        chunks: std::vec::IntoIter<Result<Bytes, ()>>,
+        sleep: Option<Pin<Box<tokio::time::Sleep>>>,
+    }
+
+    impl Chunked {
+        fn new(v: Vec<Result<Bytes, ()>>) -> Self {
+            Self {
+                chunks: v.into_iter(),
+                sleep: None,
+            }
+        }
+    }
+
+    impl hyper::body::Body for Chunked {
+        type Data = Bytes;
+        type Error = HttpError;
+
+        fn poll_frame(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+            if let Some(sleep) = &mut self.sleep {
+                ready!(sleep.poll_unpin(cx));
+                self.sleep = None;
+            }
+
+            Poll::Ready(match self.chunks.next() {
+                None => None,
+                Some(Ok(b)) => {
+                    self.sleep = Some(Box::pin(tokio::time::sleep(Duration::from_millis(1))));
+                    Some(Ok(Frame::data(b)))
+                }
+                Some(Err(_)) => Some(Err(HttpError::new(HttpErrorKind::Unknown, ChunkedErr {}))),
+            })
+        }
+    }
+
+    impl From<Chunked> for HttpResponseBody {
+        fn from(value: Chunked) -> Self {
+            Self::new(value)
+        }
+    }
+
+    #[cfg(feature = "http")]
+    #[tokio::test]
+    async fn test_stream_retry() {
+        let mock = MockServer::new().await;
+        let retry = RetryConfig {
+            backoff: Default::default(),
+            max_retries: 3,
+            retry_timeout: Duration::from_secs(1000),
+        };
+
+        let options = ClientOptions::new().with_allow_http(true);
+        let store = HttpBuilder::new()
+            .with_client_options(options)
+            .with_retry(retry)
+            .with_url(mock.url())
+            .build()
+            .unwrap();
+
+        let path = Path::from("test");
+
+        // Test basic
+        let resp = Response::builder()
+            .header(CONTENT_LENGTH, 11)
+            .header(ETAG, "123")
+            .body("Hello World".to_string())
+            .unwrap();
+
+        mock.push(resp);
+
+        let b = store.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(b.as_ref(), b"Hello World");
+
+        // Should retry with range
+        mock.push(
+            Response::builder()
+                .header(CONTENT_LENGTH, 10)
+                .header(ETAG, "123")
+                .body(Chunked::new(vec![
+                    Ok(Bytes::from_static(b"banana")),
+                    Err(()),
+                ]))
+                .unwrap(),
+        );
+
+        mock.push_fn(|req| {
+            assert_eq!(
+                req.headers().get(RANGE).unwrap().to_str().unwrap(),
+                "bytes=6-9"
+            );
+
+            Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header(CONTENT_LENGTH, 3)
+                .header(ETAG, "123")
+                .header(CONTENT_RANGE, "bytes 6-9/10")
+                .body("123".to_string())
+                .unwrap()
+        });
+
+        let ret = store.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(ret.as_ref(), b"banana123");
+
+        // Should retry multiple times
+        mock.push(
+            Response::builder()
+                .header(CONTENT_LENGTH, 20)
+                .header(ETAG, "foo")
+                .body(Chunked::new(vec![
+                    Ok(Bytes::from_static(b"hello")),
+                    Err(()),
+                ]))
+                .unwrap(),
+        );
+
+        mock.push_fn(|req| {
+            assert_eq!(
+                req.headers().get(RANGE).unwrap().to_str().unwrap(),
+                "bytes=5-19"
+            );
+
+            Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header(CONTENT_LENGTH, 15)
+                .header(ETAG, "foo")
+                .header(CONTENT_RANGE, "bytes 5-19/20")
+                .body(Chunked::new(vec![Ok(Bytes::from_static(b"baz")), Err(())]))
+                .unwrap()
+        });
+
+        mock.push_fn::<_, String>(|req| {
+            assert_eq!(
+                req.headers().get(RANGE).unwrap().to_str().unwrap(),
+                "bytes=8-19"
+            );
+            Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .body("ignored".to_string())
+                .unwrap()
+        });
+
+        mock.push_fn(|req| {
+            assert_eq!(
+                req.headers().get(RANGE).unwrap().to_str().unwrap(),
+                "bytes=8-19"
+            );
+
+            Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header(CONTENT_LENGTH, 12)
+                .header(ETAG, "foo")
+                .header(CONTENT_RANGE, "bytes 8-19/20")
+                .body("123456789012".to_string())
+                .unwrap()
+        });
+
+        let ret = store.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(ret.as_ref(), b"hellobaz123456789012");
+
+        // Should abort if etag doesn't match
+        mock.push(
+            Response::builder()
+                .header(CONTENT_LENGTH, 12)
+                .header(ETAG, "foo")
+                .body(Chunked::new(vec![Ok(Bytes::from_static(b"test")), Err(())]))
+                .unwrap(),
+        );
+
+        mock.push_fn(|req| {
+            assert_eq!(
+                req.headers().get(RANGE).unwrap().to_str().unwrap(),
+                "bytes=4-11"
+            );
+
+            Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header(CONTENT_LENGTH, 7)
+                .header(ETAG, "baz")
+                .header(CONTENT_RANGE, "bytes 4-11/12")
+                .body("1234567".to_string())
+                .unwrap()
+        });
+
+        let err = store.get(&path).await.unwrap().bytes().await.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Generic HTTP error: HTTP error: request or response body error"
         );
     }
 }
