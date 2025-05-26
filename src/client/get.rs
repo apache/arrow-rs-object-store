@@ -481,7 +481,7 @@ mod tests {
         );
     }
 }
-#[cfg(all(test, feature = "http"))]
+#[cfg(all(test, feature = "http", not(target_arch = "wasm32")))]
 mod http_tests {
     use crate::client::mock_server::MockServer;
     use crate::client::{HttpError, HttpErrorKind, HttpResponseBody};
@@ -548,7 +548,6 @@ mod http_tests {
         }
     }
 
-    #[cfg(feature = "http")]
     #[tokio::test]
     async fn test_stream_retry() {
         let mock = MockServer::new().await;
