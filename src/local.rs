@@ -37,8 +37,8 @@ use crate::{
     maybe_spawn_blocking,
     path::{absolute_path_to_url, Path},
     util::InvalidGetRange,
-    Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
+    Attributes, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 
 /// A specialized `Error` for filesystem object store-related errors
@@ -414,8 +414,11 @@ impl ObjectStore for LocalFileSystem {
                 None => 0..meta.size,
             };
 
+            const CHUNK_SIZE: usize = 8 * 1024;
+            let payload = chunked_stream(file, path, range.clone(), CHUNK_SIZE);
+
             Ok(GetResult {
-                payload: GetResultPayload::File(file, path),
+                payload,
                 attributes: Attributes::default(),
                 range,
                 meta,

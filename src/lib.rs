@@ -111,6 +111,8 @@
 //!
 //! [`BufReader`]: buffered::BufReader
 //! [`BufWriter`]: buffered::BufWriter
+//! [`Read`]: std::io::Read
+//! [`Seek`]: std::io::Seek
 //!
 //! # Adapters
 //!
@@ -238,7 +240,7 @@
 //! assert_eq!(object.len() as u64, meta.size);
 //!
 //! // Alternatively stream the bytes from object storage
-//! let stream = object_store.get(&path).await.unwrap().into_stream();
+//! let stream = object_store.get(&path).await.unwrap().payload;
 //!
 //! // Count the '0's using `try_fold` from `TryStreamExt` trait
 //! let num_zeros = stream
@@ -575,8 +577,6 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use std::fmt::{Debug, Formatter};
-#[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
-use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -1035,10 +1035,9 @@ impl GetOptions {
 }
 
 /// Result for a get request
-#[derive(Debug)]
 pub struct GetResult {
-    /// The [`GetResultPayload`]
-    pub payload: GetResultPayload,
+    /// The payload.
+    pub payload: BoxStream<'static, Result<Bytes>>,
     /// The [`ObjectMeta`] for this object
     pub meta: ObjectMeta,
     /// The range of bytes returned by this request
@@ -1049,25 +1048,21 @@ pub struct GetResult {
     pub attributes: Attributes,
 }
 
-/// The kind of a [`GetResult`]
-///
-/// This special cases the case of a local file, as some systems may
-/// be able to optimise the case of a file already present on local disk
-pub enum GetResultPayload {
-    /// The file, path
-    #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
-    File(std::fs::File, std::path::PathBuf),
-    /// An opaque stream of bytes
-    Stream(BoxStream<'static, Result<Bytes>>),
-}
-
-impl Debug for GetResultPayload {
+impl std::fmt::Debug for GetResult {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
-            Self::File(_, _) => write!(f, "GetResultPayload(File)"),
-            Self::Stream(_) => write!(f, "GetResultPayload(Stream)"),
-        }
+        let Self {
+            payload: _,
+            meta,
+            range,
+            attributes,
+        } = self;
+
+        f.debug_struct("GetResult")
+            .field("payload", &"<STREAM>")
+            .field("meta", meta)
+            .field("range", range)
+            .field("attributes", attributes)
+            .finish()
     }
 }
 
@@ -1075,56 +1070,7 @@ impl GetResult {
     /// Collects the data into a [`Bytes`]
     pub async fn bytes(self) -> Result<Bytes> {
         let len = self.range.end - self.range.start;
-        match self.payload {
-            #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
-            GetResultPayload::File(mut file, path) => {
-                maybe_spawn_blocking(move || {
-                    file.seek(SeekFrom::Start(self.range.start as _))
-                        .map_err(|source| local::Error::Seek {
-                            source,
-                            path: path.clone(),
-                        })?;
-
-                    let mut buffer = if let Ok(len) = len.try_into() {
-                        Vec::with_capacity(len)
-                    } else {
-                        Vec::new()
-                    };
-                    file.take(len as _)
-                        .read_to_end(&mut buffer)
-                        .map_err(|source| local::Error::UnableToReadBytes { source, path })?;
-
-                    Ok(buffer.into())
-                })
-                .await
-            }
-            GetResultPayload::Stream(s) => collect_bytes(s, Some(len)).await,
-        }
-    }
-
-    /// Converts this into a byte stream
-    ///
-    /// If the `self.kind` is [`GetResultPayload::File`] will perform chunked reads of the file,
-    /// otherwise will return the [`GetResultPayload::Stream`].
-    ///
-    /// # Tokio Compatibility
-    ///
-    /// Tokio discourages performing blocking IO on a tokio worker thread, however,
-    /// no major operating systems have stable async file APIs. Therefore if called from
-    /// a tokio context, this will use [`tokio::runtime::Handle::spawn_blocking`] to dispatch
-    /// IO to a blocking thread pool, much like `tokio::fs` does under-the-hood.
-    ///
-    /// If not called from a tokio context, this will perform IO on the current thread with
-    /// no additional complexity or overheads
-    pub fn into_stream(self) -> BoxStream<'static, Result<Bytes>> {
-        match self.payload {
-            #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
-            GetResultPayload::File(file, path) => {
-                const CHUNK_SIZE: usize = 8 * 1024;
-                local::chunked_stream(file, path, self.range, CHUNK_SIZE)
-            }
-            GetResultPayload::Stream(s) => s,
-        }
+        collect_bytes(self.payload, Some(len)).await
     }
 }
 

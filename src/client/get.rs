@@ -20,8 +20,7 @@ use crate::client::retry::RetryContext;
 use crate::client::{HttpResponse, HttpResponseBody};
 use crate::path::Path;
 use crate::{
-    Attribute, Attributes, GetOptions, GetRange, GetResult, GetResultPayload, ObjectMeta, Result,
-    RetryConfig,
+    Attribute, Attributes, GetOptions, GetRange, GetResult, ObjectMeta, Result, RetryConfig,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -185,10 +184,10 @@ impl<T: GetClient> GetContext<T> {
         .map_err(Self::err)?;
 
         let attributes = get_attributes(T::HEADER_CONFIG, &parts.headers).map_err(Self::err)?;
-        let stream = self.retry_stream(body, meta.e_tag.clone(), range.clone());
+        let payload = self.retry_stream(body, meta.e_tag.clone(), range.clone());
 
         Ok(GetResult {
-            payload: GetResultPayload::Stream(stream),
+            payload,
             meta,
             range,
             attributes,
