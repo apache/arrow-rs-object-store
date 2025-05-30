@@ -25,10 +25,9 @@
 
 **Implemented enhancements:**
 
-- Add ObjectStoreUrl [\#356](https://github.com/apache/arrow-rs-object-store/issues/356)
-- object store: retry / recover after partially reading a streaming response \( fix timeout errors / `error decoding response body` \) [\#15](https://github.com/apache/arrow-rs-object-store/issues/15)
-- Expose list\_paginated in object\_store [\#291](https://github.com/apache/arrow-rs-object-store/issues/291)
-- Release object\_store `0.12.1` \(non breaking\) Around April 30 2025 [\#287](https://github.com/apache/arrow-rs-object-store/issues/287)
+- Add `ObjectStoreUrl` to resolve URLs to `ObjectStore` instances [\#356](https://github.com/apache/arrow-rs-object-store/issues/356)
+- Retry / recover after partially reading a streaming response \( fix timeout errors / `error decoding response body` \) [\#15](https://github.com/apache/arrow-rs-object-store/issues/15)
+- Expose `list_paginated` in object\_store [\#291](https://github.com/apache/arrow-rs-object-store/issues/291)
 
 **Fixed bugs:**
 
@@ -36,18 +35,17 @@
 - Error handling of HTTP storage backend not utilizing retry::RetryError::error when possible [\#365](https://github.com/apache/arrow-rs-object-store/issues/365)
 - Error running `cargo publish`:  wildcard \(`*`\) dependency constraints are not allowed on crates.io. [\#357](https://github.com/apache/arrow-rs-object-store/issues/357)
 - No retries when connection closes abruptly \(i.e TCP-RST\) [\#350](https://github.com/apache/arrow-rs-object-store/issues/350)
-- Error in rust 1.87: integer out of range for `u16` in format string [\#343](https://github.com/apache/arrow-rs-object-store/issues/343)
+- Compilation error in tests with Rust 1.87: integer out of range for `u16` in format string [\#343](https://github.com/apache/arrow-rs-object-store/issues/343)
 
 **Documentation updates:**
 
-- Improve parse\_url\_opts documentation [\#377](https://github.com/apache/arrow-rs-object-store/pull/377) ([alamb](https://github.com/alamb))
+- Improve `parse_url_opts` documentation [\#377](https://github.com/apache/arrow-rs-object-store/pull/377) ([alamb](https://github.com/alamb))
 
 **Closed issues:**
 
 - Introduce retry to other methods than get after \#383  [\#387](https://github.com/apache/arrow-rs-object-store/issues/387)
 - Security: AwsCredential prints plaintext may cause security issue. [\#363](https://github.com/apache/arrow-rs-object-store/issues/363)
 - Docs build fails for object\_store 0.12.1 [\#360](https://github.com/apache/arrow-rs-object-store/issues/360)
-- Release 0.12.1 on crates.io [\#355](https://github.com/apache/arrow-rs-object-store/issues/355)
 - Is there a way to go from `ObjectStore` to `(URL, opts)`? [\#347](https://github.com/apache/arrow-rs-object-store/issues/347)
 
 **Merged pull requests:**
