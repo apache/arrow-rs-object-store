@@ -752,15 +752,15 @@ impl ClientOptions {
         }
 
         if let Some(keepalive) = &self.tcp_keepalive {
-            builder = builder.tcp_keepalive(keepalive.get()?)
+            builder = builder.tcp_keepalive(Some(keepalive.get()?))
         }
 
         if let Some(interval) = &self.tcp_keepalive_interval {
-            builder = builder.tcp_keepalive_interval(interval.get()?)
+            builder = builder.tcp_keepalive_interval(Some(interval.get()?))
         }
 
         if let Some(retries) = &self.tcp_keepalive_retries {
-            builder = builder.tcp_keepalive_retries(retries.get()?)
+            builder = builder.tcp_keepalive_retries(Some(retries.get()?))
         }
 
         // Explicitly disable compression, since it may be automatically enabled

@@ -192,6 +192,7 @@ impl From<DeleteError> for Error {
 #[derive(Debug)]
 pub(crate) struct S3Config {
     pub region: String,
+    #[allow(dead_code)]
     pub endpoint: Option<String>,
     pub bucket: String,
     pub bucket_endpoint: String,

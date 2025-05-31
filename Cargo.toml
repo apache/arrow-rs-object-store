@@ -64,7 +64,7 @@ rand = { version = "0.9", default-features = false, features = [
     "std_rng",
     "thread_rng",
 ], optional = true }
-reqwest = { version = "0.12", default-features = false, features = [
+reqwest = { version = "0.12.18", default-features = false, features = [
     "rustls-tls-native-roots",
     "http2",
 ], optional = true }
@@ -97,7 +97,7 @@ web-time = { version = "1.1.0" }
 wasm-bindgen-futures = "0.4.18"
 
 [features]
-default = ["fs", "aws"]
+default = ["fs", "cloud", "aws"]
 cloud = [
     "serde",
     "serde_json",
@@ -128,7 +128,7 @@ rand = "0.9"
 tempfile = "3.1.0"
 regex = "1.11.1"
 # The "gzip" feature for reqwest is enabled for an integration test.
-reqwest = { version = "0.12", features = ["gzip"] }
+reqwest = { version = "0.12.18", features = ["gzip"] }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
 wasm-bindgen-test = "0.3.50"
