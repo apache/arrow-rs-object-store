@@ -132,6 +132,12 @@ pub enum ClientConfigKey {
     Timeout,
     /// User-Agent header to be used by this client
     UserAgent,
+    /// TCP keepalive
+    TcpKeepalive,
+    /// TCP keepalive interval
+    TcpKeepaliveInterval,
+    /// TCP keepalive retries
+    TcpKeepaliveRetries,
 }
 
 impl AsRef<str> for ClientConfigKey {
@@ -155,6 +161,9 @@ impl AsRef<str> for ClientConfigKey {
             Self::RandomizeAddresses => "randomize_addresses",
             Self::Timeout => "timeout",
             Self::UserAgent => "user_agent",
+            Self::TcpKeepalive => "tcp_keepalive",
+            Self::TcpKeepaliveInterval => "tcp_keepalive_interval",
+            Self::TcpKeepaliveRetries => "tcp_keepalive_retries",
         }
     }
 }
@@ -182,6 +191,9 @@ impl FromStr for ClientConfigKey {
             "randomize_addresses" => Ok(Self::RandomizeAddresses),
             "timeout" => Ok(Self::Timeout),
             "user_agent" => Ok(Self::UserAgent),
+            "tcp_keepalive" => Ok(Self::TcpKeepalive),
+            "tcp_keepalive_interval" => Ok(Self::TcpKeepaliveInterval),
+            "tcp_keepalive_retries" => Ok(Self::TcpKeepaliveRetries),
             _ => Err(super::Error::UnknownConfigurationKey {
                 store: "HTTP",
                 key: s.into(),
@@ -266,6 +278,9 @@ pub struct ClientOptions {
     http1_only: ConfigValue<bool>,
     http2_only: ConfigValue<bool>,
     randomize_addresses: ConfigValue<bool>,
+    tcp_keepalive: Option<ConfigValue<Duration>>,
+    tcp_keepalive_interval: Option<ConfigValue<Duration>>,
+    tcp_keepalive_retries: Option<ConfigValue<u32>>,
 }
 
 impl Default for ClientOptions {
@@ -303,6 +318,9 @@ impl Default for ClientOptions {
             http1_only: true.into(),
             http2_only: Default::default(),
             randomize_addresses: true.into(),
+            tcp_keepalive: None,
+            tcp_keepalive_interval: None,
+            tcp_keepalive_retries: None,
         }
     }
 }
@@ -352,6 +370,15 @@ impl ClientOptions {
             ClientConfigKey::UserAgent => {
                 self.user_agent = Some(ConfigValue::Deferred(value.into()))
             }
+            ClientConfigKey::TcpKeepalive => {
+                self.tcp_keepalive = Some(ConfigValue::Deferred(value.into()))
+            }
+            ClientConfigKey::TcpKeepaliveInterval => {
+                self.tcp_keepalive_interval = Some(ConfigValue::Deferred(value.into()))
+            }
+            ClientConfigKey::TcpKeepaliveRetries => {
+                self.tcp_keepalive_retries = Some(ConfigValue::Deferred(value.into()))
+            }
         }
         self
     }
@@ -391,6 +418,13 @@ impl ClientOptions {
                 .as_ref()
                 .and_then(|v| v.get().ok())
                 .and_then(|v| v.to_str().ok().map(|s| s.to_string())),
+            ClientConfigKey::TcpKeepalive => self.tcp_keepalive.as_ref().map(fmt_duration),
+            ClientConfigKey::TcpKeepaliveInterval => {
+                self.tcp_keepalive_interval.as_ref().map(fmt_duration)
+            }
+            ClientConfigKey::TcpKeepaliveRetries => {
+                self.tcp_keepalive_retries.as_ref().map(|v| v.to_string())
+            }
         }
     }
 
@@ -607,6 +641,24 @@ impl ClientOptions {
         }
     }
 
+    /// Set the TCP keepalive duration
+    pub fn with_tcp_keepalive(mut self, keepalive: Duration) -> Self {
+        self.tcp_keepalive = Some(ConfigValue::Parsed(keepalive));
+        self
+    }
+
+    /// Set the TCP keepalive interval
+    pub fn with_tcp_keepalive_interval(mut self, interval: Duration) -> Self {
+        self.tcp_keepalive_interval = Some(ConfigValue::Parsed(interval));
+        self
+    }
+
+    /// Set the TCP keepalive retries
+    pub fn with_tcp_keepalive_retries(mut self, retries: u32) -> Self {
+        self.tcp_keepalive_retries = Some(ConfigValue::Parsed(retries));
+        self
+    }
+
     /// Returns a copy of this [`ClientOptions`] with overrides necessary for metadata endpoint access
     ///
     /// In particular:
@@ -697,6 +749,18 @@ impl ClientOptions {
 
         if self.allow_insecure.get()? {
             builder = builder.danger_accept_invalid_certs(true)
+        }
+
+        if let Some(keepalive) = &self.tcp_keepalive {
+            builder = builder.tcp_keepalive(keepalive.get()?)
+        }
+
+        if let Some(interval) = &self.tcp_keepalive_interval {
+            builder = builder.tcp_keepalive_interval(interval.get()?)
+        }
+
+        if let Some(retries) = &self.tcp_keepalive_retries {
+            builder = builder.tcp_keepalive_retries(retries.get()?)
         }
 
         // Explicitly disable compression, since it may be automatically enabled
