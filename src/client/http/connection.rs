@@ -24,6 +24,7 @@ use http_body_util::BodyExt;
 use std::error::Error;
 use std::sync::Arc;
 use tokio::runtime::Handle;
+use tracing::info;
 
 /// An HTTP protocol error
 ///
@@ -84,6 +85,7 @@ impl HttpError {
     }
 
     pub(crate) fn reqwest(e: reqwest::Error) -> Self {
+        info!(error=?e, "Reqwest error");
         #[cfg(not(target_arch = "wasm32"))]
         let is_connect = || e.is_connect();
         #[cfg(target_arch = "wasm32")]
@@ -95,6 +97,8 @@ impl HttpError {
             HttpErrorKind::Connect
         } else if e.is_decode() {
             HttpErrorKind::Decode
+        } else if e.is_request() {
+            HttpErrorKind::Request
         } else {
             HttpErrorKind::Unknown
         };
@@ -102,6 +106,7 @@ impl HttpError {
         // Reqwest error variants aren't great, attempt to refine them
         let mut source = e.source();
         while let Some(e) = source {
+            info!(error=?e, "Source error");
             if let Some(e) = e.downcast_ref::<hyper::Error>() {
                 if e.is_closed() || e.is_incomplete_message() || e.is_body_write_aborted() {
                     kind = HttpErrorKind::Request;

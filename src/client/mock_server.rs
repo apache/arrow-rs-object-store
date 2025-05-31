@@ -97,6 +97,34 @@ impl MockServer {
         }
     }
 
+    pub(crate) async fn new_drop_connection() -> Self {
+        let responses: Arc<Mutex<VecDeque<ResponseFn>>> =
+            Arc::new(Mutex::new(VecDeque::with_capacity(10)));
+
+        let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+        let listener = TcpListener::bind(addr).await.unwrap();
+
+        let (shutdown, mut rx) = oneshot::channel::<()>();
+
+        let url = format!("http://{}", listener.local_addr().unwrap());
+
+        let handle = tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    conn = listener.accept() => drop(conn.unwrap()),
+                    _ = &mut rx => break,
+                };
+            }
+        });
+
+        Self {
+            responses,
+            shutdown,
+            handle,
+            url,
+        }
+    }
+
     /// The url of the mock server
     pub(crate) fn url(&self) -> &str {
         &self.url
