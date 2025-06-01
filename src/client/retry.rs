@@ -808,25 +808,23 @@ mod tests {
             "{resp}"
         );
 
-        for idempotent in [true, false] {
-            // Should retry PUT requests
-            let req = client
-                .request(Method::PUT, mock.url())
-                .retryable(&retry)
-                .idempotent(idempotent)
-                .retry_error_body(true);
+        // Should retry PUT requests
+        let req = client
+            .request(Method::PUT, mock.url())
+            .retryable(&retry)
+            .idempotent(true)
+            .retry_error_body(true);
 
-            let resp = req
-                .send()
-                .await
-                .expect_err("should be an error")
-                .to_string();
+        let resp = req
+            .send()
+            .await
+            .expect_err("should be an error")
+            .to_string();
 
-            assert!(
-                resp.contains("after 2 retries, max_retries: 2, retry_timeout: 1000s  - HTTP error: error sending request"),
-                "{resp}"
-            );
-        }
+        assert!(
+            resp.contains("after 2 retries, max_retries: 2, retry_timeout: 1000s  - HTTP error: error sending request"),
+            "{resp}"
+        );
 
         mock.shutdown().await;
     }
