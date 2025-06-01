@@ -1612,7 +1612,7 @@ Time:2018-06-14T16:46:54.6040685Z</Message></Error>\r
     }
 
     #[tokio::test]
-    #[should_panic]
+    #[should_panic(expected = "EmptySegment { path: \"foo//blob1.txt\" }")]
     async fn test_list_blobs_invalid_paths() {
         let fake_properties = BlobProperties {
             last_modified: Utc::now(),
