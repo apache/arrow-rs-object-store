@@ -1064,8 +1064,11 @@ fn to_list_result(
                 && blob.name.len() > prefix.len()
         })
         .map(BlobInternal::try_from)
-        .filter(|parsed| !ignore_unparsable_paths || parsed.is_ok())
-        .map(|parsed| parsed.unwrap())
+        .filter_map(|parsed| match parsed {
+            Ok(parsed) => Some(parsed),
+            Err(_) if ignore_unparsable_paths => None,
+            Err(e) => panic!("cannot parse path: {e}"),
+        })
         .map(ObjectMeta::try_from)
         .collect::<Result<_>>()?;
 
@@ -1612,7 +1615,7 @@ Time:2018-06-14T16:46:54.6040685Z</Message></Error>\r
     }
 
     #[tokio::test]
-    #[should_panic(expected = "EmptySegment { path: \"foo//blob1.txt\" }")]
+    #[should_panic(expected = "cannot parse path: Path \"foo//blob1.txt\" contained empty path segment")]
     async fn test_list_blobs_invalid_paths() {
         let fake_properties = BlobProperties {
             last_modified: Utc::now(),
