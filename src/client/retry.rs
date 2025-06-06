@@ -622,7 +622,7 @@ mod tests {
         assert_eq!(r.status(), StatusCode::OK);
 
         // Handles redirect loop
-        for _ in 0..10 {
+        for _ in 0..11 {
             mock.push(
                 Response::builder()
                     .status(StatusCode::FOUND)

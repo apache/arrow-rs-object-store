@@ -674,7 +674,8 @@ mod tests {
         let err = GoogleCloudStorageBuilder::new()
             .with_service_account_path(service_account_path.to_str().unwrap())
             .with_bucket_name("foo")
-            .with_proxy_url("asdf://example.com")
+            // use invalid url
+            .with_proxy_url("dxx:ddd\\example.com")
             .build()
             .unwrap_err()
             .to_string();
