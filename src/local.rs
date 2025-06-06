@@ -641,6 +641,7 @@ impl LocalFileSystem {
         let walkdir = WalkDir::new(root_path)
             // Don't include the root directory itself
             .min_depth(1)
+            .sort_by_file_name()
             .follow_links(true);
 
         let maybe_offset = maybe_offset.cloned();
