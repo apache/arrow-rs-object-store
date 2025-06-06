@@ -1526,7 +1526,8 @@ mod tests {
             .with_region("region")
             .with_bucket_name("bucket_name")
             .with_allow_http(true)
-            .with_proxy_url("asdf://example.com")
+            // use invalid url
+            .with_proxy_url("dxx:ddd\\example.com")
             .build()
             .unwrap_err()
             .to_string();
