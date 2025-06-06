@@ -19,7 +19,7 @@
 
 # Changelog
 
-## [v0.12.2](https://github.com/apache/arrow-rs-object-store/tree/v0.12.2) (2025-05-30)
+## [v0.12.2](https://github.com/apache/arrow-rs-object-store/tree/v0.12.2) (2025-06-06)
 
 [Full Changelog](https://github.com/apache/arrow-rs-object-store/compare/v0.12.1...v0.12.2)
 
@@ -31,6 +31,7 @@
 
 **Fixed bugs:**
 
+- Emulator tests are broken on main [\#395](https://github.com/apache/arrow-rs-object-store/issues/395)
 - Retry does not cover connection errors [\#368](https://github.com/apache/arrow-rs-object-store/issues/368)
 - Error handling of HTTP storage backend not utilizing retry::RetryError::error when possible [\#365](https://github.com/apache/arrow-rs-object-store/issues/365)
 - Error running `cargo publish`:  wildcard \(`*`\) dependency constraints are not allowed on crates.io. [\#357](https://github.com/apache/arrow-rs-object-store/issues/357)
@@ -43,6 +44,7 @@
 
 **Closed issues:**
 
+- object\_store pulls default reqwest features which always active native-tls [\#400](https://github.com/apache/arrow-rs-object-store/issues/400)
 - Introduce retry to other methods than get after \#383  [\#387](https://github.com/apache/arrow-rs-object-store/issues/387)
 - Security: AwsCredential prints plaintext may cause security issue. [\#363](https://github.com/apache/arrow-rs-object-store/issues/363)
 - Docs build fails for object\_store 0.12.1 [\#360](https://github.com/apache/arrow-rs-object-store/issues/360)
@@ -50,6 +52,7 @@
 
 **Merged pull requests:**
 
+- Chore: fix emulator tests due to changes in reqwest [\#401](https://github.com/apache/arrow-rs-object-store/pull/401) ([alamb](https://github.com/alamb))
 - Retry streaming get requests \(\#15\) [\#383](https://github.com/apache/arrow-rs-object-store/pull/383) ([tustvold](https://github.com/tustvold))
 - azure: do not set empty container name from parse\_url [\#379](https://github.com/apache/arrow-rs-object-store/pull/379) ([james-rms](https://github.com/james-rms))
 - Add ObjectStoreRegistry \(\#347\) [\#375](https://github.com/apache/arrow-rs-object-store/pull/375) ([tustvold](https://github.com/tustvold))
