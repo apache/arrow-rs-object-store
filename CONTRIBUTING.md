@@ -19,6 +19,12 @@
 
 # Development instructions
 
+Many dependencies are behind [cargo feature flags](https://doc.rust-lang.org/cargo/reference/features.html). When developing locally you may want to enable some or all of them. You can use `--all-features` option with cargo. If you're using VSCode you may want to add: `"rust-analyzer.cargo.features": "all"` to your `.vscode/settings.json` file to have full IDE support.
+
+Before submitting PR run linter clippy with command like: `cargo clippy --all-features -- -D warnings` or `cargo clippy --features azure -- -D warnings` for a specific feature. It's part of CI suite so any warnings here would be flagged in a PR.
+
+Additionally remember to run code formatter with command: `cargo fmt --all` as part of CI suite is running: `cargo fmt --all -- --check` which will throw error if it detects that some code is not formatted properly.
+
 ## Running Tests
 
 Tests can be run using `cargo`
