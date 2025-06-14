@@ -180,7 +180,7 @@ pub struct MicrosoftAzureBuilder {
     fabric_cluster_identifier: Option<String>,
     /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
-    /// When listing objects, ignore paths that throw and error when parsing
+    /// When listing objects, ignore paths that throw an error when parsing
     ignore_unparsable_paths: ConfigValue<bool>,
 }
 
