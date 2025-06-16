@@ -192,7 +192,6 @@ impl From<DeleteError> for Error {
 #[derive(Debug)]
 pub(crate) struct S3Config {
     pub region: String,
-    pub endpoint: Option<String>,
     pub bucket: String,
     pub bucket_endpoint: String,
     pub credentials: AwsCredentialProvider,

@@ -34,7 +34,6 @@ use crate::{
 use bytes::Bytes;
 use futures::stream::FuturesUnordered;
 use futures::{StreamExt, TryStreamExt};
-use rand::distr::Alphanumeric;
 use rand::{rng, Rng};
 use std::collections::HashSet;
 
@@ -629,15 +628,8 @@ pub async fn get_opts(storage: &dyn ObjectStore) {
 
 /// Tests conditional writes
 pub async fn put_opts(storage: &dyn ObjectStore, supports_update: bool) {
-    // When using DynamoCommit repeated runs of this test will produce the same sequence of records in DynamoDB
-    // As a result each conditional operation will need to wait for the lease to timeout before proceeding
-    // One solution would be to clear DynamoDB before each test, but this would require non-trivial additional code
-    // so we instead just generate a random suffix for the filenames
-    let rng = rng();
-    let suffix = String::from_utf8(rng.sample_iter(Alphanumeric).take(32).collect()).unwrap();
-
     delete_fixtures(storage).await;
-    let path = Path::from(format!("put_opts_{suffix}"));
+    let path = Path::from("put_opts");
     let v1 = storage
         .put_opts(&path, "a".into(), PutMode::Create.into())
         .await
@@ -695,7 +687,7 @@ pub async fn put_opts(storage: &dyn ObjectStore, supports_update: bool) {
     const NUM_WORKERS: usize = 5;
     const NUM_INCREMENTS: usize = 10;
 
-    let path = Path::from(format!("RACE-{suffix}"));
+    let path = Path::from("RACE");
     let mut futures: FuturesUnordered<_> = (0..NUM_WORKERS)
         .map(|_| async {
             for _ in 0..NUM_INCREMENTS {
