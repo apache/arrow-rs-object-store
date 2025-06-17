@@ -98,11 +98,6 @@ fn strip_meta(prefix: &Path, meta: ObjectMeta) -> ObjectMeta {
 }
 #[async_trait::async_trait]
 impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
-    async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
-        let full_path = self.full_path(location);
-        self.inner.put(&full_path, payload).await
-    }
-
     async fn put_opts(
         &self,
         location: &Path,
@@ -225,8 +220,8 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::integration::*;
     use crate::local::LocalFileSystem;
+    use crate::{integration::*, ObjectStoreExt};
 
     use tempfile::TempDir;
 

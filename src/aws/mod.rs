@@ -499,6 +499,7 @@ mod tests {
     use crate::integration::*;
     use crate::tests::*;
     use crate::ClientOptions;
+    use crate::ObjectStoreExt;
     use base64::prelude::BASE64_STANDARD;
     use base64::Engine;
     use http::HeaderMap;

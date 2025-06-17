@@ -309,6 +309,7 @@ mod tests {
     use super::*;
     use crate::integration::*;
     use crate::tests::*;
+    use crate::ObjectStoreExt;
     use bytes::Bytes;
 
     #[tokio::test]

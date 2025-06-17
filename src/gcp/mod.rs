@@ -287,6 +287,7 @@ mod test {
 
     use crate::integration::*;
     use crate::tests::*;
+    use crate::ObjectStoreExt;
 
     use super::*;
 

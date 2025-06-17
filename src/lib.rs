@@ -252,11 +252,11 @@
 //!
 //! # Put Object
 //!
-//! Use the [`ObjectStore::put`] method to atomically write data.
+//! Use the [`ObjectStoreExt::put`] method to atomically write data.
 //!
 //! ```
 //! # use object_store::local::LocalFileSystem;
-//! # use object_store::{ObjectStore, PutPayload};
+//! # use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
 //! # use std::sync::Arc;
 //! # use object_store::path::Path;
 //! # fn get_object_store() -> Arc<dyn ObjectStore> {
@@ -338,7 +338,7 @@
 //!
 //! ```
 //! # use object_store::local::LocalFileSystem;
-//! # use object_store::{ObjectStore, PutPayloadMut};
+//! # use object_store::{ObjectStore, ObjectStoreExt, PutPayloadMut};
 //! # use std::sync::Arc;
 //! # use bytes::Bytes;
 //! # use tokio::io::AsyncWriteExt;
@@ -587,19 +587,22 @@ pub type DynObjectStore = dyn ObjectStore;
 pub type MultipartId = String;
 
 /// Universal API to multiple object store services.
+///
+/// For more convience methods, check [`ObjectStoreExt`].
+///
+/// # Contract
+/// This trait is meant as a contract between object store implementations
+/// (e.g. providers, wrappers) and the `object_store` crate itself.
+///
+/// The [`ObjectStoreExt`] acts as an API/contract between `object_store`
+/// and the store users.
 #[async_trait]
 pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
-    /// Save the provided bytes to the specified location
+    /// Save the provided `payload` to `location` with the given options
     ///
     /// The operation is guaranteed to be atomic, it will either successfully
     /// write the entirety of `payload` to `location`, or fail. No clients
     /// should be able to observe a partially written object
-    async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
-        self.put_opts(location, payload, PutOptions::default())
-            .await
-    }
-
-    /// Save the provided `payload` to `location` with the given options
     async fn put_opts(
         &self,
         location: &Path,
@@ -609,7 +612,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
 
     /// Perform a multipart upload
     ///
-    /// Client should prefer [`ObjectStore::put`] for small payloads, as streaming uploads
+    /// Client should prefer [`ObjectStoreExt::put`] for small payloads, as streaming uploads
     /// typically require multiple separate requests. See [`MultipartUpload`] for more information
     ///
     /// For more advanced multipart uploads see [`MultipartStore`](multipart::MultipartStore)
@@ -620,7 +623,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
 
     /// Perform a multipart upload with options
     ///
-    /// Client should prefer [`ObjectStore::put`] for small payloads, as streaming uploads
+    /// Client should prefer [`ObjectStore::put_opts`] for small payloads, as streaming uploads
     /// typically require multiple separate requests. See [`MultipartUpload`] for more information
     ///
     /// For more advanced multipart uploads see [`MultipartStore`](multipart::MultipartStore)
@@ -696,7 +699,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # let root = tempfile::TempDir::new().unwrap();
     /// # let store = LocalFileSystem::new_with_prefix(root.path()).unwrap();
-    /// # use object_store::{ObjectStore, ObjectMeta};
+    /// # use object_store::{ObjectStore, ObjectStoreExt, ObjectMeta};
     /// # use object_store::path::Path;
     /// # use futures::{StreamExt, TryStreamExt};
     /// #
@@ -803,10 +806,6 @@ macro_rules! as_ref_impl {
     ($type:ty) => {
         #[async_trait]
         impl ObjectStore for $type {
-            async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
-                self.as_ref().put(location, payload).await
-            }
-
             async fn put_opts(
                 &self,
                 location: &Path,
@@ -900,6 +899,40 @@ macro_rules! as_ref_impl {
 
 as_ref_impl!(Arc<dyn ObjectStore>);
 as_ref_impl!(Box<dyn ObjectStore>);
+
+/// Helper module to [seal traits](https://predr.ag/blog/definitive-guide-to-sealed-traits-in-rust/).
+mod private {
+    pub trait Sealed {}
+
+    impl<T> Sealed for T where T: super::ObjectStore + ?Sized {}
+}
+
+/// Extension trait for [`ObjectStore`] with convinience functions.
+///
+/// See "contract" section within the [`ObjectStore`] documentation for more reasoning.
+///
+/// # Implementation
+/// You MUST NOT implement this trait yourself. It is automatically implemented for all [`ObjectStore`] implementations.
+#[async_trait]
+pub trait ObjectStoreExt: private::Sealed {
+    /// Save the provided bytes to the specified location
+    ///
+    /// The operation is guaranteed to be atomic, it will either successfully
+    /// write the entirety of `payload` to `location`, or fail. No clients
+    /// should be able to observe a partially written object
+    async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult>;
+}
+
+#[async_trait]
+impl<T> ObjectStoreExt for T
+where
+    T: ObjectStore + private::Sealed + ?Sized,
+{
+    async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
+        self.put_opts(location, payload, PutOptions::default())
+            .await
+    }
+}
 
 /// Result of a list call that includes objects, prefixes (directories) and a
 /// token for the next set of results. Individual result sets may be limited to

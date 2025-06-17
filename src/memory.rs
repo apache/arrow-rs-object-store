@@ -536,7 +536,7 @@ impl MultipartUpload for InMemoryUpload {
 
 #[cfg(test)]
 mod tests {
-    use crate::integration::*;
+    use crate::{integration::*, ObjectStoreExt};
 
     use super::*;
 

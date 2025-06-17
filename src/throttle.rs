@@ -90,7 +90,7 @@ pub struct ThrottleConfig {
     /// [`wait_list_with_delimiter_per_call`](Self::wait_list_with_delimiter_per_call).
     pub wait_list_with_delimiter_per_entry: Duration,
 
-    /// Sleep duration for every call to [`put`](ThrottledStore::put).
+    /// Sleep duration for every call to [`put_opts`](ThrottledStore::put_opts).
     ///
     /// Sleeping is done before the underlying store is called and independently of the success of
     /// the operation.
@@ -148,11 +148,6 @@ impl<T: ObjectStore> std::fmt::Display for ThrottledStore<T> {
 
 #[async_trait]
 impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
-    async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
-        sleep(self.config().wait_put_per_call).await;
-        self.inner.put(location, payload).await
-    }
-
     async fn put_opts(
         &self,
         location: &Path,
@@ -404,6 +399,7 @@ impl MultipartUpload for ThrottledUpload {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ObjectStoreExt;
     use crate::{integration::*, memory::InMemory, GetResultPayload};
     use futures::TryStreamExt;
     use tokio::time::Duration;
