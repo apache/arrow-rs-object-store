@@ -18,9 +18,8 @@
 //! An object store that limits the maximum concurrency of the wrapped implementation
 
 use crate::{
-    BoxStream, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, Path, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, StreamExt,
-    UploadPart,
+    BoxStream, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, Path,
+    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, StreamExt, UploadPart,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -200,13 +199,7 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
 }
 
 fn permit_get_result(r: GetResult, permit: OwnedSemaphorePermit) -> GetResult {
-    let payload = match r.payload {
-        #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
-        v @ GetResultPayload::File(_, _) => v,
-        GetResultPayload::Stream(s) => {
-            GetResultPayload::Stream(PermitWrapper::new(s, permit).boxed())
-        }
-    };
+    let payload = PermitWrapper::new(r.payload, permit).boxed();
     GetResult { payload, ..r }
 }
 
