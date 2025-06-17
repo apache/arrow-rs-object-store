@@ -36,7 +36,7 @@ use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpResponse};
 use crate::list::{PaginatedListOptions, PaginatedListResult};
 use crate::multipart::PartId;
 use crate::{
-    Attribute, Attributes, ClientOptions, GetOptions, MultipartId, Path, PutMultipartOpts,
+    Attribute, Attributes, ClientOptions, GetOptions, MultipartId, Path, PutMultipartOptions,
     PutPayload, PutResult, Result, RetryConfig, TagSet,
 };
 use async_trait::async_trait;
@@ -630,9 +630,9 @@ impl S3Client {
     pub(crate) async fn create_multipart(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<MultipartId> {
-        let PutMultipartOpts {
+        let PutMultipartOptions {
             tags,
             attributes,
             extensions,

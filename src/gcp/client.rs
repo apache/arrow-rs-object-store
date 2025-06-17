@@ -32,7 +32,7 @@ use crate::multipart::PartId;
 use crate::path::Path;
 use crate::util::hex_encode;
 use crate::{
-    Attribute, Attributes, ClientOptions, GetOptions, MultipartId, PutMode, PutMultipartOpts,
+    Attribute, Attributes, ClientOptions, GetOptions, MultipartId, PutMode, PutMultipartOptions,
     PutOptions, PutPayload, PutResult, Result, RetryConfig,
 };
 use async_trait::async_trait;
@@ -444,9 +444,9 @@ impl GoogleCloudStorageClient {
     pub(crate) async fn multipart_initiate(
         &self,
         path: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<MultipartId> {
-        let PutMultipartOpts {
+        let PutMultipartOptions {
             // not supported by GCP
             tags: _,
             attributes,

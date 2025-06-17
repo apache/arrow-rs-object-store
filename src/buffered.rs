@@ -19,7 +19,7 @@
 
 use crate::path::Path;
 use crate::{
-    Attributes, ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayloadMut, TagSet,
+    Attributes, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayloadMut, TagSet,
     WriteMultipart,
 };
 use bytes::Bytes;
@@ -337,7 +337,7 @@ impl BufWriter {
                     } else {
                         let buffer = std::mem::take(b);
                         let path = std::mem::take(path);
-                        let opts = PutMultipartOpts {
+                        let opts = PutMultipartOptions {
                             attributes: self.attributes.take().unwrap_or_default(),
                             tags: self.tags.take().unwrap_or_default(),
                             extensions: self.extensions.take().unwrap_or_default(),
@@ -397,7 +397,7 @@ impl AsyncWrite for BufWriter {
                     if b.content_length().saturating_add(buf.len()) >= cap {
                         let buffer = std::mem::take(b);
                         let path = std::mem::take(path);
-                        let opts = PutMultipartOpts {
+                        let opts = PutMultipartOptions {
                             attributes: self.attributes.take().unwrap_or_default(),
                             tags: self.tags.take().unwrap_or_default(),
                             extensions: self.extensions.take().unwrap_or_default(),

@@ -19,7 +19,7 @@
 
 use crate::{
     BoxStream, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, Path, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, StreamExt,
+    ObjectStore, Path, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, StreamExt,
     UploadPart,
 };
 use async_trait::async_trait;
@@ -96,7 +96,7 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
         let upload = self.inner.put_multipart_opts(location, opts).await?;
         Ok(Box::new(LimitUpload {

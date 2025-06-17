@@ -49,7 +49,7 @@ impl ObjectStore for MyStore {
     async fn put_multipart_opts(
         &self,
         _location: &Path,
-        _opts: PutMultipartOpts,
+        _opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
         todo!()
     }
