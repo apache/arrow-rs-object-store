@@ -29,7 +29,7 @@ use crate::multipart::PartId;
 use crate::util::{deserialize_rfc1123, GetRange};
 use crate::{
     Attribute, Attributes, ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode,
-    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, RetryConfig, TagSet,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, RetryConfig, TagSet,
 };
 use async_trait::async_trait;
 use base64::prelude::{BASE64_STANDARD, BASE64_STANDARD_NO_PAD};
@@ -597,9 +597,9 @@ impl AzureClient {
         &self,
         path: &Path,
         parts: Vec<PartId>,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<PutResult> {
-        let PutMultipartOpts {
+        let PutMultipartOptions {
             tags,
             attributes,
             extensions,

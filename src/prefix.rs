@@ -22,8 +22,8 @@ use std::ops::Range;
 
 use crate::path::Path;
 use crate::{
-    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOpts,
-    PutOptions, PutPayload, PutResult, Result,
+    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
 };
 
 /// Store wrapper that applies a constant prefix to all paths handled by the store.
@@ -121,7 +121,7 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
         let full_path = self.full_path(location);
         self.inner.put_multipart_opts(&full_path, opts).await

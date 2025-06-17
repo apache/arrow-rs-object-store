@@ -45,7 +45,7 @@ use crate::signer::Signer;
 use crate::util::STRICT_ENCODE_SET;
 use crate::{
     Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
-    ObjectStore, Path, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
+    ObjectStore, Path, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
     UploadPart,
 };
 
@@ -245,7 +245,7 @@ impl ObjectStore for AmazonS3 {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
         let upload_id = self.client.create_multipart(location, opts).await?;
 
@@ -331,7 +331,7 @@ impl ObjectStore for AmazonS3 {
             Some(S3CopyIfNotExists::Multipart) => {
                 let upload_id = self
                     .client
-                    .create_multipart(to, PutMultipartOpts::default())
+                    .create_multipart(to, PutMultipartOptions::default())
                     .await?;
 
                 let res = async {
@@ -460,7 +460,7 @@ impl MultipartUpload for S3MultiPartUpload {
 impl MultipartStore for AmazonS3 {
     async fn create_multipart(&self, path: &Path) -> Result<MultipartId> {
         self.client
-            .create_multipart(path, PutMultipartOpts::default())
+            .create_multipart(path, PutMultipartOptions::default())
             .await
     }
 
@@ -536,7 +536,7 @@ mod tests {
 
         let str = "test.bin";
         let path = Path::parse(str).unwrap();
-        let opts = PutMultipartOpts::default();
+        let opts = PutMultipartOptions::default();
         let mut upload = store.put_multipart_opts(&path, opts).await.unwrap();
 
         upload
@@ -567,7 +567,7 @@ mod tests {
 
         let str = "test.bin";
         let path = Path::parse(str).unwrap();
-        let opts = PutMultipartOpts::default();
+        let opts = PutMultipartOptions::default();
         let mut upload = store.put_multipart_opts(&path, opts).await.unwrap();
 
         upload

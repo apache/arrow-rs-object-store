@@ -614,7 +614,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ///
     /// For more advanced multipart uploads see [`MultipartStore`](multipart::MultipartStore)
     async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
-        self.put_multipart_opts(location, PutMultipartOpts::default())
+        self.put_multipart_opts(location, PutMultipartOptions::default())
             .await
     }
 
@@ -627,7 +627,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>>;
 
     /// Return the bytes that are stored at the specified location.
@@ -823,7 +823,7 @@ macro_rules! as_ref_impl {
             async fn put_multipart_opts(
                 &self,
                 location: &Path,
-                opts: PutMultipartOpts,
+                opts: PutMultipartOptions,
             ) -> Result<Box<dyn MultipartUpload>> {
                 self.as_ref().put_multipart_opts(location, opts).await
             }
@@ -1234,9 +1234,14 @@ impl From<Attributes> for PutOptions {
     }
 }
 
+// See <https://github.com/apache/arrow-rs-object-store/issues/339>.
+#[doc(hidden)]
+#[deprecated(note = "Use PutMultipartOptions", since = "0.13.0")]
+pub type PutMultipartOpts = PutMultipartOptions;
+
 /// Options for [`ObjectStore::put_multipart_opts`]
 #[derive(Debug, Clone, Default)]
-pub struct PutMultipartOpts {
+pub struct PutMultipartOptions {
     /// Provide a [`TagSet`] for this object
     ///
     /// Implementations that don't support object tagging should ignore this
@@ -1254,7 +1259,7 @@ pub struct PutMultipartOpts {
     pub extensions: ::http::Extensions,
 }
 
-impl PartialEq<Self> for PutMultipartOpts {
+impl PartialEq<Self> for PutMultipartOptions {
     fn eq(&self, other: &Self) -> bool {
         let Self {
             tags,
@@ -1270,9 +1275,9 @@ impl PartialEq<Self> for PutMultipartOpts {
     }
 }
 
-impl Eq for PutMultipartOpts {}
+impl Eq for PutMultipartOptions {}
 
-impl From<TagSet> for PutMultipartOpts {
+impl From<TagSet> for PutMultipartOptions {
     fn from(tags: TagSet) -> Self {
         Self {
             tags,
@@ -1281,7 +1286,7 @@ impl From<TagSet> for PutMultipartOpts {
     }
 }
 
-impl From<Attributes> for PutMultipartOpts {
+impl From<Attributes> for PutMultipartOptions {
     fn from(attributes: Attributes) -> Self {
         Self {
             attributes,
