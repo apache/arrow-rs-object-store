@@ -51,7 +51,7 @@ http-body-util = { version = "0.1.2", optional = true }
 httparse = { version = "1.8.0", default-features = false, features = ["std"], optional = true }
 hyper = { version = "1.2", default-features = false, optional = true }
 md-5 = { version = "0.10.6", default-features = false, optional = true }
-quick-xml = { version = "0.37.0", features = ["serialize", "overlapped-lists"], optional = true }
+quick-xml = { version = "0.38.0", features = ["serialize", "overlapped-lists"], optional = true }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"], optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "http2"], optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
