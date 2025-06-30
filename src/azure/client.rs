@@ -243,7 +243,7 @@ impl PutRequest<'_> {
                     builder.header(&MS_CONTENT_TYPE, v.as_ref())
                 }
                 Attribute::Metadata(k_suffix) => builder.header(
-                    &format!("{}{}", USER_DEFINED_METADATA_HEADER_PREFIX, k_suffix),
+                    &format!("{USER_DEFINED_METADATA_HEADER_PREFIX}{k_suffix}"),
                     v.as_ref(),
                 ),
             };
@@ -350,7 +350,7 @@ fn serialize_part_delete_request(
 
     // Encode the subrequest request-line
     extend(dst, b"DELETE ");
-    extend(dst, format!("/{} ", relative_url).as_bytes());
+    extend(dst, format!("/{relative_url} ").as_bytes());
     extend(dst, b"HTTP/1.1");
     extend(dst, b"\r\n");
 
@@ -716,7 +716,7 @@ impl AzureClient {
             .query(&[("restype", "container"), ("comp", "batch")])
             .header(
                 CONTENT_TYPE,
-                HeaderValue::from_str(format!("multipart/mixed; boundary={}", boundary).as_str())
+                HeaderValue::from_str(format!("multipart/mixed; boundary={boundary}").as_str())
                     .unwrap(),
             )
             .header(CONTENT_LENGTH, HeaderValue::from(body_bytes.len()))
