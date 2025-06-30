@@ -261,7 +261,7 @@ impl<'a> AzureAuthorizer<'a> {
             AzureCredential::BearerToken(token) => {
                 request.headers_mut().append(
                     AUTHORIZATION,
-                    HeaderValue::from_str(format!("Bearer {}", token).as_str()).unwrap(),
+                    HeaderValue::from_str(format!("Bearer {token}").as_str()).unwrap(),
                 );
             }
             AzureCredential::SASToken(query_pairs) => {

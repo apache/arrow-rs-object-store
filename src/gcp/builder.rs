@@ -733,7 +733,7 @@ mod tests {
                 config_key
             );
         } else {
-            panic!("{} not propagated as ClientConfigKey", key);
+            panic!("{key} not propagated as ClientConfigKey");
         }
     }
 }

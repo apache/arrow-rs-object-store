@@ -769,7 +769,7 @@ impl GCSAuthorizer {
         let email = &self.credential.email;
         let date = self.date.unwrap_or_else(Utc::now);
         let scope = self.scope(date);
-        let credential_with_scope = format!("{}/{}", email, scope);
+        let credential_with_scope = format!("{email}/{scope}");
 
         let mut headers = HeaderMap::new();
         headers.insert("host", DEFAULT_GCS_SIGN_BLOB_HOST.parse().unwrap());
@@ -821,8 +821,7 @@ impl GCSAuthorizer {
         let (canonical_headers, signed_headers) = Self::canonicalize_headers(headers);
 
         format!(
-            "{}\n{}\n{}\n{}\n\n{}\n{}",
-            verb, path, query, canonical_headers, signed_headers, DEFAULT_GCS_PLAYLOAD_STRING
+            "{verb}\n{path}\n{query}\n{canonical_headers}\n\n{signed_headers}\n{DEFAULT_GCS_PLAYLOAD_STRING}"
         )
     }
 

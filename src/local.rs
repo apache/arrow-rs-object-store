@@ -1498,7 +1498,7 @@ mod tests {
 
         let root_path = root.path();
         for i in 0..5 {
-            let filename = format!("test{}.parquet", i);
+            let filename = format!("test{i}.parquet");
             let file = root_path.join(filename);
             std::fs::write(file, "test").unwrap();
         }

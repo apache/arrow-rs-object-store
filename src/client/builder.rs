@@ -153,7 +153,7 @@ impl HttpRequestBuilder {
 
     #[cfg(feature = "gcp")]
     pub(crate) fn bearer_auth(mut self, token: &str) -> Self {
-        let value = HeaderValue::try_from(format!("Bearer {}", token));
+        let value = HeaderValue::try_from(format!("Bearer {token}"));
         match (value, &mut self.request) {
             (Ok(mut v), Ok(r)) => {
                 v.set_sensitive(true);
