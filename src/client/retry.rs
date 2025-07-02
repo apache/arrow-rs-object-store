@@ -32,7 +32,7 @@ use tracing::info;
 use web_time::{Duration, Instant};
 
 /// Retry request error
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub struct RetryError(Box<RetryErrorImpl>);
 
 /// Box error to avoid large error variant
@@ -63,6 +63,12 @@ impl std::fmt::Display for RetryError {
             )?;
         }
         write!(f, " - {}", self.0.inner)
+    }
+}
+
+impl std::error::Error for RetryError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0.inner)
     }
 }
 
@@ -504,6 +510,7 @@ mod tests {
     use hyper::header::LOCATION;
     use hyper::Response;
     use reqwest::{Client, Method, StatusCode};
+    use std::error::Error;
     use std::time::Duration;
 
     #[test]
@@ -657,10 +664,15 @@ mod tests {
             );
         }
 
-        let e = do_request().await.unwrap_err().to_string();
+        let e = do_request().await.unwrap_err();
         assert!(
-            e.contains(" after 2 retries, max_retries: 2, retry_timeout: 1000s  - Server returned non-2xx status code: 502 Bad Gateway"),
+            e.to_string().contains(" after 2 retries, max_retries: 2, retry_timeout: 1000s  - Server returned non-2xx status code: 502 Bad Gateway"),
             "{e}"
+        );
+        // verify e.source() is available as well for users who need programmatic access
+        assert_eq!(
+            e.source().unwrap().to_string(),
+            "Server returned non-2xx status code: 502 Bad Gateway: ",
         );
 
         // Panic results in an incomplete message error in the client
@@ -672,10 +684,15 @@ mod tests {
         for _ in 0..=retry.max_retries {
             mock.push_fn::<_, String>(|_| panic!());
         }
-        let e = do_request().await.unwrap_err().to_string();
+        let e = do_request().await.unwrap_err();
         assert!(
-            e.contains("after 2 retries, max_retries: 2, retry_timeout: 1000s  - HTTP error: error sending request"),
+            e.to_string().contains("after 2 retries, max_retries: 2, retry_timeout: 1000s  - HTTP error: error sending request"),
             "{e}"
+        );
+        // verify e.source() is available as well for users who need programmatic access
+        assert_eq!(
+            e.source().unwrap().to_string(),
+            "HTTP error: error sending request",
         );
 
         // Retries on client timeout
