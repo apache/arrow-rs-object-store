@@ -65,7 +65,7 @@ pub enum S3CopyIfNotExists {
 impl std::fmt::Display for S3CopyIfNotExists {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Header(k, v) => write!(f, "header: {}: {}", k, v),
+            Self::Header(k, v) => write!(f, "header: {k}: {v}"),
             Self::HeaderWithStatus(k, v, code) => {
                 write!(f, "header-with-status: {k}: {v}: {}", code.as_u16())
             }
