@@ -402,6 +402,7 @@ impl RetryableRequest {
                         let status = r.status();
                         if ctx.exhausted()
                             || !(status.is_server_error()
+                                || status == StatusCode::TOO_MANY_REQUESTS
                                 || (self.retry_on_conflict && status == StatusCode::CONFLICT))
                         {
                             let source = match status.is_client_error() {
