@@ -219,6 +219,7 @@ where
             builder_opts!(crate::http::HttpBuilder, url, _options)
         }
         #[cfg(not(all(
+            feature = "fs",
             feature = "aws",
             feature = "azure",
             feature = "gcp",
