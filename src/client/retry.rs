@@ -402,6 +402,8 @@ impl RetryableRequest {
                         let status = r.status();
                         if ctx.exhausted()
                             || !(status.is_server_error()
+                                || status == StatusCode::TOO_MANY_REQUESTS
+                                || status == StatusCode::REQUEST_TIMEOUT
                                 || (self.retry_on_conflict && status == StatusCode::CONFLICT))
                         {
                             let source = match status.is_client_error() {
@@ -586,6 +588,28 @@ mod tests {
         mock.push(
             Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
+                .body(String::new())
+                .unwrap(),
+        );
+
+        let r = do_request().await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+
+        // Should retry 429 Too Many Requests
+        mock.push(
+            Response::builder()
+                .status(StatusCode::TOO_MANY_REQUESTS)
+                .body(String::new())
+                .unwrap(),
+        );
+
+        let r = do_request().await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+
+        // Should retry 408 Request Timeout
+        mock.push(
+            Response::builder()
+                .status(StatusCode::REQUEST_TIMEOUT)
                 .body(String::new())
                 .unwrap(),
         );
