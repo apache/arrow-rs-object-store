@@ -89,6 +89,9 @@ pub enum Error {
 
     #[error("Error getting token response body: {}", source)]
     TokenResponseBody { source: HttpError },
+
+    #[error("Error reading pem file: {}", source)]
+    ReadPem { source: std::io::Error },
 }
 
 impl From<Error> for crate::Error {
@@ -130,11 +133,13 @@ impl ServiceAccountKey {
         let mut cursor = Cursor::new(encoded);
         let mut reader = BufReader::new(&mut cursor);
 
-        // Reading from string is infallible
-        match rustls_pemfile::read_one(&mut reader).unwrap() {
-            Some(Item::Pkcs8Key(key)) => Self::from_pkcs8(key.secret_pkcs8_der()),
-            Some(Item::Pkcs1Key(key)) => Self::from_der(key.secret_pkcs1_der()),
-            _ => Err(Error::MissingKey),
+        match rustls_pemfile::read_one(&mut reader) {
+            Ok(item) => match item {
+                Some(Item::Pkcs8Key(key)) => Self::from_pkcs8(key.secret_pkcs8_der()),
+                Some(Item::Pkcs1Key(key)) => Self::from_der(key.secret_pkcs1_der()),
+                _ => Err(Error::MissingKey),
+            },
+            Err(e) => Err(Error::ReadPem { source: e }),
         }
     }
 
