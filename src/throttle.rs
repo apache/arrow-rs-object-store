@@ -22,8 +22,9 @@ use std::{convert::TryInto, sync::Arc};
 
 use crate::multipart::{MultipartStore, PartId};
 use crate::{
-    path::Path, GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
+    path::Path, DeleteOptions, GetResult, GetResultPayload, ListResult, MultipartId,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload,
+    PutResult, Result,
 };
 use crate::{GetOptions, UploadPart};
 use async_trait::async_trait;
@@ -235,6 +236,12 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         sleep(self.config().wait_delete_per_call).await;
 
         self.inner.delete(location).await
+    }
+
+    async fn delete_opts(&self, location: &Path, opts: DeleteOptions) -> Result<()> {
+        sleep(self.config().wait_delete_per_call).await;
+
+        self.inner.delete_opts(location, opts).await
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {

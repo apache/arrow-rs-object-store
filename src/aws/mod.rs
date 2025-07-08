@@ -31,7 +31,7 @@
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
-use reqwest::header::{HeaderName, IF_MATCH, IF_NONE_MATCH};
+use reqwest::header::{HeaderName, IF_MATCH, IF_NONE_MATCH, IF_UNMODIFIED_SINCE};
 use reqwest::{Method, StatusCode};
 use std::{sync::Arc, time::Duration};
 use url::Url;
@@ -44,9 +44,9 @@ use crate::multipart::{MultipartStore, PartId};
 use crate::signer::Signer;
 use crate::util::STRICT_ENCODE_SET;
 use crate::{
-    Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
-    ObjectStore, Path, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
-    UploadPart,
+    DeleteOptions, Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
+    ObjectMeta, ObjectStore, Path, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    Result, UploadPart,
 };
 
 static TAGS_HEADER: HeaderName = HeaderName::from_static("x-amz-tagging");
@@ -252,6 +252,33 @@ impl ObjectStore for AmazonS3 {
 
     async fn delete(&self, location: &Path) -> Result<()> {
         self.client.request(Method::DELETE, location).send().await?;
+        Ok(())
+    }
+
+    async fn delete_opts(&self, location: &Path, opts: DeleteOptions) -> Result<()> {
+        let request = self.client.request(Method::DELETE, location);
+
+        // Add conditional headers if specified
+        let request = if let Some(if_match) = &opts.if_match {
+            request.header(&IF_MATCH, if_match)
+        } else {
+            request
+        };
+
+        let request = if let Some(if_unmodified_since) = opts.if_unmodified_since {
+            request.header(&IF_UNMODIFIED_SINCE, &if_unmodified_since.to_rfc2822())
+        } else {
+            request
+        };
+
+        // AWS S3 supports versioned deletes
+        let request = if let Some(version) = &opts.version {
+            request.query(&[("versionId", version)])
+        } else {
+            request
+        };
+
+        request.with_extensions(opts.extensions).send().await?;
         Ok(())
     }
 

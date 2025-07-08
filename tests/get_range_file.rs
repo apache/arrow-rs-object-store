@@ -62,6 +62,10 @@ impl ObjectStore for MyStore {
         todo!()
     }
 
+    async fn delete_opts(&self, _: &Path, _: DeleteOptions) -> Result<()> {
+        todo!()
+    }
+
     fn list(&self, _: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         todo!()
     }

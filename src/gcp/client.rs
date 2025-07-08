@@ -32,8 +32,8 @@ use crate::multipart::PartId;
 use crate::path::Path;
 use crate::util::hex_encode;
 use crate::{
-    Attribute, Attributes, ClientOptions, GetOptions, MultipartId, PutMode, PutMultipartOptions,
-    PutOptions, PutPayload, PutResult, Result, RetryConfig,
+    Attribute, Attributes, ClientOptions, DeleteOptions, GetOptions, MultipartId, PutMode,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, RetryConfig,
 };
 use async_trait::async_trait;
 use base64::prelude::BASE64_STANDARD;
@@ -560,6 +560,34 @@ impl GoogleCloudStorageClient {
     /// Perform a delete request <https://cloud.google.com/storage/docs/xml-api/delete-object>
     pub(crate) async fn delete_request(&self, path: &Path) -> Result<()> {
         self.request(Method::DELETE, path).send().await?;
+        Ok(())
+    }
+
+    pub(crate) async fn delete_request_with_opts(
+        &self,
+        path: &Path,
+        opts: DeleteOptions,
+    ) -> Result<()> {
+        let mut request = self.request(Method::DELETE, path);
+
+        // Add conditional headers if specified
+        if let Some(if_match) = &opts.if_match {
+            request = request.header(&HeaderName::from_static("if-match"), if_match);
+        }
+
+        if let Some(if_unmodified_since) = opts.if_unmodified_since {
+            request = request.header(
+                &HeaderName::from_static("if-unmodified-since"),
+                &if_unmodified_since.to_rfc2822(),
+            );
+        }
+
+        // GCS supports versioned deletes via generation parameter
+        if let Some(version) = &opts.version {
+            request = request.query(&[("generation", version)]);
+        }
+
+        request.with_extensions(opts.extensions).send().await?;
         Ok(())
     }
 

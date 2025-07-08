@@ -29,9 +29,9 @@ use parking_lot::RwLock;
 use crate::multipart::{MultipartStore, PartId};
 use crate::util::InvalidGetRange;
 use crate::{
-    path::Path, Attributes, GetRange, GetResult, GetResultPayload, ListResult, MultipartId,
-    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutResult,
-    Result, UpdateVersion, UploadPart,
+    path::Path, Attributes, DeleteOptions, GetRange, GetResult, GetResultPayload, ListResult,
+    MultipartId, MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOptions,
+    PutOptions, PutResult, Result, UpdateVersion, UploadPart,
 };
 use crate::{GetOptions, PutPayload};
 
@@ -307,6 +307,29 @@ impl ObjectStore for InMemory {
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
+        self.storage.write().map.remove(location);
+        Ok(())
+    }
+
+    async fn delete_opts(&self, location: &Path, opts: DeleteOptions) -> Result<()> {
+        // First check if object exists for conditional deletes
+        if opts.if_match.is_some() || opts.if_unmodified_since.is_some() {
+            let entry = self.entry(location)?;
+            let meta = ObjectMeta {
+                location: location.clone(),
+                e_tag: Some(entry.e_tag.to_string()),
+                last_modified: entry.last_modified,
+                size: entry.data.len() as u64,
+                version: None,
+            };
+            opts.check_preconditions(&meta)?;
+        }
+
+        // Version-specific delete is not supported in memory store
+        if opts.version.is_some() {
+            return Err(crate::Error::NotImplemented);
+        }
+
         self.storage.write().map.remove(location);
         Ok(())
     }

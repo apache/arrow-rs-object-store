@@ -37,9 +37,9 @@ use crate::{
     maybe_spawn_blocking,
     path::{absolute_path_to_url, Path},
     util::InvalidGetRange,
-    Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
-    UploadPart,
+    Attributes, DeleteOptions, GetOptions, GetResult, GetResultPayload, ListResult,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload,
+    PutResult, Result, UploadPart,
 };
 
 /// A specialized `Error` for filesystem object store-related errors
@@ -481,6 +481,22 @@ impl ObjectStore for LocalFileSystem {
             }
         })
         .await
+    }
+
+    async fn delete_opts(&self, location: &Path, opts: DeleteOptions) -> Result<()> {
+        // First check if we need to validate preconditions
+        if opts.if_match.is_some() || opts.if_unmodified_since.is_some() {
+            let meta = self.head(location).await?;
+            opts.check_preconditions(&meta)?;
+        }
+
+        // Version-specific delete is not supported in local filesystem
+        if opts.version.is_some() {
+            return Err(crate::Error::NotImplemented);
+        }
+
+        // Perform the delete
+        self.delete(location).await
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {

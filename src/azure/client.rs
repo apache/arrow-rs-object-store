@@ -28,8 +28,8 @@ use crate::list::{PaginatedListOptions, PaginatedListResult};
 use crate::multipart::PartId;
 use crate::util::{deserialize_rfc1123, GetRange};
 use crate::{
-    Attribute, Attributes, ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode,
-    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, RetryConfig, TagSet,
+    Attribute, Attributes, ClientOptions, DeleteOptions, GetOptions, ListResult, ObjectMeta, Path,
+    PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, RetryConfig, TagSet,
 };
 use async_trait::async_trait;
 use base64::prelude::{BASE64_STANDARD, BASE64_STANDARD_NO_PAD};
@@ -37,7 +37,10 @@ use base64::Engine;
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use http::{
-    header::{HeaderMap, HeaderValue, CONTENT_LENGTH, CONTENT_TYPE, IF_MATCH, IF_NONE_MATCH},
+    header::{
+        HeaderMap, HeaderValue, CONTENT_LENGTH, CONTENT_TYPE, IF_MATCH, IF_NONE_MATCH,
+        IF_UNMODIFIED_SINCE,
+    },
     HeaderName, Method,
 };
 use rand::Rng as _;
@@ -642,6 +645,54 @@ impl AzureClient {
             .delete(url.as_str())
             .query(query)
             .header(&DELETE_SNAPSHOTS, "include")
+            .with_azure_authorization(&credential, &self.config.account)
+            .retryable(&self.config.retry_config)
+            .sensitive(sensitive)
+            .send()
+            .await
+            .map_err(|source| {
+                let path = path.as_ref().into();
+                Error::DeleteRequest { source, path }
+            })?;
+
+        Ok(())
+    }
+
+    /// Make an Azure Delete request with conditional options
+    pub(crate) async fn delete_request_with_opts(
+        &self,
+        path: &Path,
+        opts: DeleteOptions,
+    ) -> Result<()> {
+        let credential = self.get_credential().await?;
+        let url = self.config.path_url(path);
+
+        let sensitive = credential
+            .as_deref()
+            .map(|c| c.sensitive_request())
+            .unwrap_or_default();
+
+        let mut builder = self
+            .client
+            .delete(url.as_str())
+            .header(&DELETE_SNAPSHOTS, "include");
+
+        // Add conditional headers if specified
+        if let Some(if_match) = &opts.if_match {
+            builder = builder.header(IF_MATCH, if_match);
+        }
+
+        if let Some(if_unmodified_since) = opts.if_unmodified_since {
+            builder = builder.header(IF_UNMODIFIED_SINCE, &if_unmodified_since.to_rfc2822());
+        }
+
+        // Azure supports versioned deletes via x-ms-version-id header
+        if let Some(version) = &opts.version {
+            builder = builder.header("x-ms-version-id", version);
+        }
+
+        builder
+            .extensions(opts.extensions)
             .with_azure_authorization(&credential, &self.config.account)
             .retryable(&self.config.retry_config)
             .sensitive(sensitive)
