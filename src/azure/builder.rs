@@ -664,15 +664,20 @@ impl MicrosoftAzureBuilder {
                 // or the convention for the hadoop driver abfs[s]://<file_system>@<account_name>.dfs.core.windows.net/<path>
                 if parsed.username().is_empty() {
                     self.container_name = Some(validate(host)?);
-                } else if let Some(a) = host.strip_suffix(".dfs.core.windows.net") {
-                    self.container_name = Some(validate(parsed.username())?);
-                    self.account_name = Some(validate(a)?);
-                } else if let Some(a) = host.strip_suffix(".dfs.fabric.microsoft.com") {
-                    self.container_name = Some(validate(parsed.username())?);
-                    self.account_name = Some(validate(a)?);
-                    self.use_fabric_endpoint = true.into();
                 } else {
-                    return Err(Error::UrlNotRecognised { url: url.into() }.into());
+                    match host.split_once('.') {
+                        Some((a, "dfs.core.windows.net")) | Some((a, "blob.core.windows.net")) => {
+                            self.account_name = Some(validate(a)?);
+                            self.container_name = Some(validate(parsed.username())?);
+                        }
+                        Some((a, "dfs.fabric.microsoft.com")) | Some((a, "blob.fabric.microsoft.net")) => {
+                            self.account_name = Some(validate(a)?);
+                            self.container_name = Some(validate(parsed.username())?);
+                            self.use_fabric_endpoint = true.into();
+                        }
+                        _ => return Err(Error::UrlNotRecognised { url: url.into() }.into())
+
+                    }
                 }
             }
             "https" => match host.split_once('.') {
@@ -1110,6 +1115,22 @@ mod tests {
         assert_eq!(builder.account_name, Some("account".to_string()));
         assert_eq!(builder.container_name, Some("container".to_string()));
         assert!(!builder.use_fabric_endpoint.get().unwrap());
+
+        let mut builder = MicrosoftAzureBuilder::new();
+        builder
+            .parse_url("az://container@account.blob.core.windows.net/path-part/file")
+            .unwrap();
+        assert_eq!(builder.account_name, Some("account".to_string()));
+        assert_eq!(builder.container_name, Some("container".to_string()));
+        assert!(!builder.use_fabric_endpoint.get().unwrap());
+
+        let mut builder = MicrosoftAzureBuilder::new();
+        builder
+            .parse_url("az://container@account.dfs.fabric.microsoft.com/path-part/file")
+            .unwrap();
+        assert_eq!(builder.account_name, Some("account".to_string()));
+        assert_eq!(builder.container_name, Some("container".to_string()));
+        assert!(builder.use_fabric_endpoint.get().unwrap());
 
         let mut builder = MicrosoftAzureBuilder::new();
         builder
