@@ -42,7 +42,7 @@ use crate::gcp::credential::GCSAuthorizer;
 use crate::signer::Signer;
 use crate::{
     multipart::PartId, path::Path, DeleteOptions, GetOptions, GetResult, ListResult, MultipartId,
-    MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
     Result, UploadPart,
 };
 use async_trait::async_trait;

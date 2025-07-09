@@ -683,7 +683,7 @@ impl AzureClient {
         }
 
         if let Some(if_unmodified_since) = opts.if_unmodified_since {
-            builder = builder.header(IF_UNMODIFIED_SINCE, &if_unmodified_since.to_rfc2822());
+            builder = builder.header(IF_UNMODIFIED_SINCE, if_unmodified_since.to_rfc2822());
         }
 
         // Azure supports versioned deletes via x-ms-version-id header
