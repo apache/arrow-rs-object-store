@@ -16,16 +16,17 @@
 // under the License.
 
 //! An object store that logs calls to the wrapped implementation.
-
 use crate::{
     path::Path, GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
     ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use log::info;
+use log::debug;
 
-/// An [`ObjectStore`] wrapper that logs operations made to the wrapped store.
+/// An [`ObjectStore`] wrapper that logs operations made to the wrapped store. The logs are written using the ['log'] crate.
+/// 
+/// Logs are written at the "debug" logging level.
 #[derive(Debug)]
 pub struct LoggingStore<T: ObjectStore> {
     store: T,
@@ -65,7 +66,7 @@ impl<T: ObjectStore> ObjectStore for LoggingStore<T> {
                         .end
                         .checked_sub(get_range.start)
                         .expect("Get range length is negative");
-                    info!(
+                    debug!(
                         "{} get request for {}/{} byte range {} to {} = {} bytes",
                         self.prefix,
                         self.path_prefix,
@@ -76,19 +77,19 @@ impl<T: ObjectStore> ObjectStore for LoggingStore<T> {
                     );
                 }
                 Some(GetRange::Offset(start_pos)) => {
-                    info!(
+                    debug!(
                         "{} get request for {}/{} for byte {} to EOF",
                         self.prefix, self.path_prefix, location, start_pos,
                     );
                 }
                 Some(GetRange::Suffix(pos)) => {
-                    info!(
+                    debug!(
                         "{} get request for {}/{} for last {} bytes of object",
                         self.prefix, self.path_prefix, location, pos,
                     );
                 }
                 None => {
-                    info!(
+                    debug!(
                         "{} get request for {}/{} for complete file range",
                         self.prefix, self.path_prefix, location
                     );
@@ -99,7 +100,7 @@ impl<T: ObjectStore> ObjectStore for LoggingStore<T> {
     }
 
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        info!(
+        debug!(
             "{} head request for {}/{}",
             self.prefix, self.path_prefix, location
         );
@@ -107,7 +108,7 @@ impl<T: ObjectStore> ObjectStore for LoggingStore<T> {
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
-        info!(
+        debug!(
             "{} delete request for {}/{}",
             self.prefix, self.path_prefix, location
         );
@@ -115,7 +116,7 @@ impl<T: ObjectStore> ObjectStore for LoggingStore<T> {
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        info!(
+        debug!(
             "{} list request for {}/{}",
             self.prefix,
             self.path_prefix,
@@ -125,7 +126,7 @@ impl<T: ObjectStore> ObjectStore for LoggingStore<T> {
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        info!(
+        debug!(
             "{} list_with_delimeter request for {}/{}",
             self.prefix,
             self.path_prefix,
@@ -135,7 +136,7 @@ impl<T: ObjectStore> ObjectStore for LoggingStore<T> {
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        info!(
+        debug!(
             "{} copy request from {}/{} to {}/{}",
             self.prefix, self.path_prefix, from, self.path_prefix, to
         );
@@ -143,7 +144,7 @@ impl<T: ObjectStore> ObjectStore for LoggingStore<T> {
     }
 
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        info!(
+        debug!(
             "{} copy_if_not_exists request from {}/{} to {}/{}",
             self.prefix, self.path_prefix, from, self.path_prefix, to
         );
@@ -156,7 +157,7 @@ impl<T: ObjectStore> ObjectStore for LoggingStore<T> {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
-        info!(
+        debug!(
             "{} put request for {}/{} of {} bytes",
             self.prefix,
             self.path_prefix,
@@ -171,7 +172,7 @@ impl<T: ObjectStore> ObjectStore for LoggingStore<T> {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
-        info!(
+        debug!(
             "{} put multipart request for {}/{}",
             self.prefix, self.path_prefix, location
         );
@@ -208,7 +209,7 @@ impl LoggingMultipartUpload {
 #[async_trait]
 impl MultipartUpload for LoggingMultipartUpload {
     fn put_part(&mut self, data: PutPayload) -> UploadPart {
-        info!(
+        debug!(
             "{} put_part request for {} of {} bytes",
             self.prefix,
             self.path,
@@ -218,7 +219,7 @@ impl MultipartUpload for LoggingMultipartUpload {
     }
 
     async fn complete(&mut self) -> Result<PutResult> {
-        info!("multipart complete for {}", self.path);
+        debug!("multipart complete for {}", self.path);
         self.inner.complete().await
     }
 
@@ -287,7 +288,7 @@ mod tests {
                 captured_logs[1].body,
                 "TEST get request for memory://test_file byte range 1 to 5 = 4 bytes"
             );
-            assert_eq!(captured_logs[1].level, Level::Info);
+            assert_eq!(captured_logs[1].level, Level::Debug);
         });
 
         Ok(())
@@ -314,7 +315,7 @@ mod tests {
                 captured_logs[1].body,
                 "TEST get request for memory://test_file for byte 3 to EOF"
             );
-            assert_eq!(captured_logs[1].level, Level::Info);
+            assert_eq!(captured_logs[1].level, Level::Debug);
         });
 
         Ok(())
@@ -341,7 +342,7 @@ mod tests {
                 captured_logs[1].body,
                 "TEST get request for memory://test_file for last 3 bytes of object"
             );
-            assert_eq!(captured_logs[1].level, Level::Info);
+            assert_eq!(captured_logs[1].level, Level::Debug);
         });
 
         Ok(())
@@ -365,7 +366,7 @@ mod tests {
                 captured_logs[1].body,
                 "TEST get request for memory://test_file for complete file range"
             );
-            assert_eq!(captured_logs[1].level, Level::Info);
+            assert_eq!(captured_logs[1].level, Level::Debug);
         });
 
         Ok(())
@@ -388,7 +389,7 @@ mod tests {
                 captured_logs[1].body,
                 "TEST head request for memory://test_file"
             );
-            assert_eq!(captured_logs[1].level, Level::Info);
+            assert_eq!(captured_logs[1].level, Level::Debug);
         });
 
         Ok(())
@@ -411,7 +412,7 @@ mod tests {
                 captured_logs[1].body,
                 "TEST delete request for memory://test_file"
             );
-            assert_eq!(captured_logs[1].level, Level::Info);
+            assert_eq!(captured_logs[1].level, Level::Debug);
         });
 
         Ok(())
@@ -431,7 +432,7 @@ mod tests {
         testing_logger::validate(|captured_logs| {
             assert_eq!(captured_logs.len(), 1);
             assert_eq!(captured_logs[0].body, "TEST list request for memory://foo");
-            assert_eq!(captured_logs[0].level, Level::Info);
+            assert_eq!(captured_logs[0].level, Level::Debug);
         });
 
         Ok(())
@@ -454,7 +455,7 @@ mod tests {
                 captured_logs[0].body,
                 "TEST list_with_delimeter request for memory://foo"
             );
-            assert_eq!(captured_logs[0].level, Level::Info);
+            assert_eq!(captured_logs[0].level, Level::Debug);
         });
 
         Ok(())
@@ -474,7 +475,7 @@ mod tests {
         testing_logger::validate(|captured_logs| {
             assert_eq!(captured_logs.len(), 1);
             assert_eq!(captured_logs[0].body, "TEST list request for memory://");
-            assert_eq!(captured_logs[0].level, Level::Info);
+            assert_eq!(captured_logs[0].level, Level::Debug);
         });
 
         Ok(())
@@ -497,7 +498,7 @@ mod tests {
                 captured_logs[0].body,
                 "TEST list_with_delimeter request for memory://"
             );
-            assert_eq!(captured_logs[0].level, Level::Info);
+            assert_eq!(captured_logs[0].level, Level::Debug);
         });
 
         Ok(())
@@ -522,7 +523,7 @@ mod tests {
                 captured_logs[1].body,
                 "TEST copy request from memory://test_file to memory://test_file2"
             );
-            assert_eq!(captured_logs[1].level, Level::Info);
+            assert_eq!(captured_logs[1].level, Level::Debug);
         });
 
         Ok(())
@@ -547,7 +548,7 @@ mod tests {
                 captured_logs[1].body,
                 "TEST copy_if_not_exists request from memory://test_file to memory://test_file2"
             );
-            assert_eq!(captured_logs[1].level, Level::Info);
+            assert_eq!(captured_logs[1].level, Level::Debug);
         });
 
         Ok(())
@@ -571,7 +572,7 @@ mod tests {
                 captured_logs[0].body,
                 "TEST put request for memory://test_file of 3 bytes"
             );
-            assert_eq!(captured_logs[0].level, Level::Info);
+            assert_eq!(captured_logs[0].level, Level::Debug);
         });
 
         Ok(())
@@ -597,27 +598,27 @@ mod tests {
                 captured_logs[0].body,
                 "TEST put multipart request for memory://test_file"
             );
-            assert_eq!(captured_logs[0].level, Level::Info);
+            assert_eq!(captured_logs[0].level, Level::Debug);
             assert_eq!(
                 captured_logs[1].body,
                 "TEST put_part request for memory://test_file of 3 bytes"
             );
-            assert_eq!(captured_logs[1].level, Level::Info);
+            assert_eq!(captured_logs[1].level, Level::Debug);
             assert_eq!(
                 captured_logs[2].body,
                 "TEST put_part request for memory://test_file of 4 bytes"
             );
-            assert_eq!(captured_logs[2].level, Level::Info);
+            assert_eq!(captured_logs[2].level, Level::Debug);
             assert_eq!(
                 captured_logs[3].body,
                 "TEST put_part request for memory://test_file of 5 bytes"
             );
-            assert_eq!(captured_logs[3].level, Level::Info);
+            assert_eq!(captured_logs[3].level, Level::Debug);
             assert_eq!(
                 captured_logs[4].body,
                 "multipart complete for memory://test_file"
             );
-            assert_eq!(captured_logs[4].level, Level::Info);
+            assert_eq!(captured_logs[4].level, Level::Debug);
         });
 
         let retrieved_data = String::from_utf8(
