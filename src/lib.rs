@@ -521,6 +521,7 @@ pub mod http;
 pub mod limit;
 #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 pub mod local;
+pub mod logging;
 pub mod memory;
 pub mod path;
 pub mod prefix;
