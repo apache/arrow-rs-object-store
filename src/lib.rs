@@ -46,8 +46,8 @@
 //! 2. Production quality, leading this crate to be used in large
 //!    scale production systems, such as [crates.io] and [InfluxDB IOx]
 //!
-//! 3. Support for advanced functionality, including atomic, conditional reads
-//!    and writes, vectored IO, bulk deletion, and more...
+//! 3. Support for advanced functionality, including atomic, conditional reads,
+//!    writes, and deletes, vectored IO, bulk deletion, and more...
 //!
 //! 4. Stable and predictable governance via the [Apache Arrow] project
 //!
@@ -486,6 +486,45 @@
 //! [Apache Iceberg]: https://iceberg.apache.org/
 //! [Delta Lake]: https://delta.io/
 //!
+//! # Conditional Delete
+//!
+//! Similar to conditional put operations, conditional deletes allow you to delete objects
+//! only when certain preconditions are met. This is useful for preventing the deletion of
+//! objects that have been recently modified, implementing garbage collection with safety
+//! checks, or coordinating deletions in distributed systems.
+//!
+//! ```
+//! # use object_store::{Error, ObjectStore, DeleteOptions};
+//! # use std::sync::Arc;
+//! # use object_store::memory::InMemory;
+//! # use object_store::path::Path;
+//! # fn get_object_store() -> Arc<dyn ObjectStore> {
+//! #   Arc::new(InMemory::new())
+//! # }
+//! # async fn conditional_delete() -> Result<(), Box<dyn std::error::Error>> {
+//! let store = get_object_store();
+//! let path = Path::from("archived-data.parquet");
+//!
+//! // Get metadata for the object we want to delete
+//! let meta = store.head(&path).await?;
+//!
+//! // Only delete if the object hasn't been modified (using ETag)
+//! let delete_opts = DeleteOptions {
+//!     if_match: meta.e_tag,
+//!     ..Default::default()
+//! };
+//!
+//! match store.delete_opts(&path, delete_opts).await {
+//!     Ok(_) => println!("Object safely deleted"),
+//!     Err(Error::Precondition { .. }) => {
+//!         println!("Object was modified, skipping deletion");
+//!     }
+//!     Err(e) => return Err(e.into()),
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # TLS Certificates
 //!
 //! Stores that use HTTPS/TLS (this is true for most cloud stores) can choose the source of their [CA]
@@ -671,7 +710,33 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     }
 
     /// Delete the object at the specified location.
-    async fn delete(&self, location: &Path) -> Result<()>;
+    async fn delete(&self, location: &Path) -> Result<()> {
+        self.delete_opts(location, DeleteOptions::default()).await
+    }
+
+    /// Delete the object at the specified location with options.
+    ///
+    /// This method provides conditional delete capabilities through the [`DeleteOptions`] parameter.
+    /// It allows for atomic delete operations based on preconditions such as ETag matching or
+    /// modification time checks.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use object_store::{ObjectStore, DeleteOptions};
+    /// # use object_store::path::Path;
+    /// # async fn example(store: &dyn ObjectStore) -> Result<(), Box<dyn std::error::Error>> {
+    /// // Only delete if the object hasn't changed (matches the ETag)
+    /// let meta = store.head(&Path::from("file.txt")).await?;
+    /// let opts = DeleteOptions {
+    ///     if_match: meta.e_tag,
+    ///     ..Default::default()
+    /// };
+    /// store.delete_opts(&Path::from("file.txt"), opts).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    async fn delete_opts(&self, location: &Path, opts: DeleteOptions) -> Result<()>;
 
     /// Delete all the objects at the specified locations
     ///
@@ -854,6 +919,10 @@ macro_rules! as_ref_impl {
 
             async fn delete(&self, location: &Path) -> Result<()> {
                 self.as_ref().delete(location).await
+            }
+
+            async fn delete_opts(&self, location: &Path, opts: DeleteOptions) -> Result<()> {
+                self.as_ref().delete_opts(location, opts).await
             }
 
             fn delete_stream<'a>(
@@ -1234,6 +1303,72 @@ impl From<Attributes> for PutOptions {
     }
 }
 
+/// Options for a delete request
+#[derive(Debug, Clone, Default)]
+pub struct DeleteOptions {
+    /// Delete will succeed if the `ObjectMeta::e_tag` matches
+    /// otherwise returning [`Error::Precondition`]
+    ///
+    /// See <https://datatracker.ietf.org/doc/html/rfc9110#name-if-match>
+    ///
+    /// Examples:
+    ///
+    /// ```text
+    /// If-Match: "xyzzy"
+    /// If-Match: "xyzzy", "r2d2xxxx", "c3piozzzz"
+    /// If-Match: *
+    /// ```
+    pub if_match: Option<String>,
+    /// Delete will succeed if the object has not been modified since
+    /// otherwise returning [`Error::Precondition`]
+    ///
+    /// Some stores may only return `Precondition` for exact
+    /// timestamp matches, instead of for any timestamp greater than or equal.
+    ///
+    /// <https://datatracker.ietf.org/doc/html/rfc9110#section-13.1.4>
+    pub if_unmodified_since: Option<DateTime<Utc>>,
+    /// Request a particular object version be deleted
+    ///
+    /// Cloud providers often support object versioning, allowing multiple versions of the same object
+    /// to exist within the same bucket. This option allows specifying a specific version to delete.
+    /// If not specified, the latest version is typically deleted (though behavior may vary by provider).
+    pub version: Option<String>,
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to pass context-specific information (like tracing spans) via trait methods.
+    ///
+    /// These extensions are ignored entirely by backends offered through this crate.
+    pub extensions: ::http::Extensions,
+}
+
+impl DeleteOptions {
+    /// Returns an error if the preconditions on this request are not satisfied
+    pub fn check_preconditions(&self, meta: &ObjectMeta) -> Result<()> {
+        // The use of the invalid etag "*" means no ETag is equivalent to never matching
+        let etag = meta.e_tag.as_deref().unwrap_or("*");
+        let last_modified = meta.last_modified;
+
+        if let Some(m) = &self.if_match {
+            if m != "*" && m.split(',').map(str::trim).all(|x| x != etag) {
+                return Err(Error::Precondition {
+                    path: meta.location.to_string(),
+                    source: format!("{etag} does not match {m}").into(),
+                });
+            }
+        }
+
+        if let Some(date) = self.if_unmodified_since {
+            if last_modified > date {
+                return Err(Error::Precondition {
+                    path: meta.location.to_string(),
+                    source: format!("{date} < {last_modified}").into(),
+                });
+            }
+        }
+
+        Ok(())
+    }
+}
+
 // See <https://github.com/apache/arrow-rs-object-store/issues/339>.
 #[doc(hidden)]
 #[deprecated(note = "Use PutMultipartOptions", since = "0.13.0")]
@@ -1448,6 +1583,47 @@ mod tests {
         };
     }
     pub(crate) use maybe_skip_integration;
+
+    #[tokio::test]
+    async fn test_delete_opts_precondition() {
+        use crate::memory::InMemory;
+
+        let store = InMemory::new();
+        let path = Path::from("test.txt");
+        let data = Bytes::from("test data");
+
+        // Put an object
+        let result = store.put(&path, data.into()).await.unwrap();
+        let etag = result.e_tag.unwrap();
+
+        // Test delete with matching ETag - should succeed
+        let opts = DeleteOptions {
+            if_match: Some(etag.clone()),
+            ..Default::default()
+        };
+        store.delete_opts(&path, opts).await.unwrap();
+
+        // Verify object is deleted
+        let err = store.get(&path).await.unwrap_err();
+        assert!(matches!(err, Error::NotFound { .. }));
+
+        // Put object again
+        store
+            .put(&path, Bytes::from("test data 2").into())
+            .await
+            .unwrap();
+
+        // Test delete with non-matching ETag - should fail
+        let opts = DeleteOptions {
+            if_match: Some("wrong-etag".to_string()),
+            ..Default::default()
+        };
+        let err = store.delete_opts(&path, opts).await.unwrap_err();
+        assert!(matches!(err, Error::Precondition { .. }));
+
+        // Verify object still exists
+        store.get(&path).await.unwrap();
+    }
 
     /// Test that the returned stream does not borrow the lifetime of Path
     fn list_store<'a>(

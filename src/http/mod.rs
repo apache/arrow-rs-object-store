@@ -45,9 +45,9 @@ use crate::client::{http_connector, HttpConnector};
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
-    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
-    RetryConfig,
+    ClientConfigKey, ClientOptions, DeleteOptions, GetOptions, GetResult, ListResult,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload,
+    PutResult, Result, RetryConfig,
 };
 
 mod client;
@@ -134,6 +134,11 @@ impl ObjectStore for HttpStore {
 
     async fn delete(&self, location: &Path) -> Result<()> {
         self.client.delete(location).await
+    }
+
+    async fn delete_opts(&self, _location: &Path, _opts: DeleteOptions) -> Result<()> {
+        // HTTP/WebDAV protocol doesn't support conditional deletes
+        Err(crate::Error::NotImplemented)
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
