@@ -498,12 +498,21 @@ impl ClientOptions {
         self
     }
 
-    /// Set a request timeout
+    /// Set timeout for the overall request
     ///
-    /// The timeout is applied from when the request starts connecting until the
-    /// response body has finished
+    /// The timeout starts from when the request starts connecting until the
+    /// response body has finished. If the request does not complete within the
+    /// timeout, the client returns a timeout error.
+    ///
+    /// Timeout errors are retried, subject to the [`RetryConfig`]
     ///
     /// Default is 30 seconds
+    ///
+    /// # See Also
+    /// * [`Self::with_timeout_disabled`] to disable the timeout
+    /// * [`Self::with_connect_timeout`] to set a timeout for the connect phase
+    ///
+    /// [`RetryConfig`]: crate::RetryConfig
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(ConfigValue::Parsed(timeout));
         self
@@ -511,7 +520,8 @@ impl ClientOptions {
 
     /// Disables the request timeout
     ///
-    /// See [`Self::with_timeout`]
+    /// # See Also
+    /// * [`Self::with_timeout`]
     pub fn with_timeout_disabled(mut self) -> Self {
         self.timeout = None;
         self
@@ -519,7 +529,19 @@ impl ClientOptions {
 
     /// Set a timeout for only the connect phase of a Client
     ///
+    /// This is the time allowed for the client to establish a connection
+    /// and if the connection is not established within this time,
+    /// the client returns a timeout error.
+    ///
+    /// Timeout errors are retried, subject to the [`RetryConfig`]
+    ///
     /// Default is 5 seconds
+    ///
+    /// # See Also
+    /// * [`Self::with_timeout`] to set a timeout for the overall request
+    /// * [`Self::with_connect_timeout_disabled`] to disable the connect timeout
+    ///
+    /// [`RetryConfig`]: crate::RetryConfig
     pub fn with_connect_timeout(mut self, timeout: Duration) -> Self {
         self.connect_timeout = Some(ConfigValue::Parsed(timeout));
         self
@@ -527,7 +549,8 @@ impl ClientOptions {
 
     /// Disables the connection timeout
     ///
-    /// See [`Self::with_connect_timeout`]
+    /// # See Also
+    /// * [`Self::with_connect_timeout`]
     pub fn with_connect_timeout_disabled(mut self) -> Self {
         self.connect_timeout = None;
         self
