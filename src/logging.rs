@@ -24,8 +24,8 @@ use async_trait::async_trait;
 use futures::stream::BoxStream;
 use log::debug;
 
-/// An [`ObjectStore`] wrapper that logs operations made to the wrapped store. The logs are written using the ['log'] crate.
-/// 
+/// An [`ObjectStore`] wrapper that logs operations made to the wrapped store. The logs are written using the [`log`] crate.
+///
 /// Logs are written at the "debug" logging level.
 #[derive(Debug)]
 pub struct LoggingStore<T: ObjectStore> {
