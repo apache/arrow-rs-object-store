@@ -638,6 +638,8 @@ mod tests {
         }
         if test_conditional_put {
             put_opts(&integration, true).await;
+            delete_opts(&integration, true).await;
+            delete_opts_race_condition(&integration, true).await;
         }
 
         // run integration test with unsigned payload enabled

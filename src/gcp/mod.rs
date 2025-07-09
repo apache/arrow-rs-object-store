@@ -42,8 +42,8 @@ use crate::gcp::credential::GCSAuthorizer;
 use crate::signer::Signer;
 use crate::{
     multipart::PartId, path::Path, DeleteOptions, GetOptions, GetResult, ListResult, MultipartId,
-    MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload,
-    PutResult, Result, UploadPart,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult,
+    Result, UploadPart,
 };
 use async_trait::async_trait;
 use client::GoogleCloudStorageClient;
@@ -319,6 +319,8 @@ mod test {
             // Fake GCS server doesn't currently honor preconditions
             get_opts(&integration).await;
             put_opts(&integration, true).await;
+            delete_opts(&integration, true).await;
+            delete_opts_race_condition(&integration, true).await;
             // Fake GCS server doesn't currently support attributes
             put_get_attributes(&integration).await;
         }

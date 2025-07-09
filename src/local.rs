@@ -1125,6 +1125,7 @@ mod tests {
         copy_rename_nonexistent_object(&integration).await;
         stream_get(&integration).await;
         put_opts(&integration, false).await;
+        delete_opts(&integration, true).await;
     }
 
     #[test]

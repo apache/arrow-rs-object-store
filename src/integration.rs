@@ -1313,3 +1313,289 @@ pub async fn list_paginated(storage: &dyn ObjectStore, list: &dyn PaginatedListS
     );
     assert!(ret.page_token.is_none());
 }
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use crate::DeleteOptions;
+use chrono::{Duration, Utc};
+
+/// Tests conditional deletes
+pub async fn delete_opts(storage: &dyn ObjectStore, supports_conditional: bool) {
+    let rng = rng();
+    let suffix = String::from_utf8(rng.sample_iter(Alphanumeric).take(32).collect()).unwrap();
+
+    // Test 1: Delete with matching ETag
+    let path = Path::from(format!("delete_opts_etag_{suffix}"));
+    let result = storage.put(&path, "test data".into()).await.unwrap();
+    let etag = result.e_tag.clone();
+
+    if supports_conditional && etag.is_some() {
+        // Delete with correct ETag should succeed
+        let opts = DeleteOptions {
+            if_match: etag.clone(),
+            ..Default::default()
+        };
+        storage.delete_opts(&path, opts).await.unwrap();
+
+        // Verify object was deleted
+        let err = storage.get(&path).await.unwrap_err();
+        assert!(matches!(err, Error::NotFound { .. }), "{err}");
+    } else if !supports_conditional {
+        // Should return NotImplemented for stores that don't support it
+        let opts = DeleteOptions {
+            if_match: Some("some-etag".to_string()),
+            ..Default::default()
+        };
+        let err = storage.delete_opts(&path, opts).await.unwrap_err();
+        assert!(matches!(err, Error::NotImplemented), "{err}");
+
+        // Clean up
+        storage.delete(&path).await.unwrap();
+        return;
+    }
+
+    // Test 2: Delete with non-matching ETag should fail
+    let path = Path::from(format!("delete_opts_etag_fail_{suffix}"));
+    let result = storage.put(&path, "test data".into()).await.unwrap();
+
+    if supports_conditional && result.e_tag.is_some() {
+        let opts = DeleteOptions {
+            if_match: Some("wrong-etag".to_string()),
+            ..Default::default()
+        };
+        let err = storage.delete_opts(&path, opts).await.unwrap_err();
+        assert!(matches!(err, Error::Precondition { .. }), "{err}");
+
+        // Verify object still exists
+        let data = storage.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(data.as_ref(), b"test data");
+
+        // Clean up
+        storage.delete(&path).await.unwrap();
+    }
+
+    // Test 3: Delete with if_unmodified_since
+    let path = Path::from(format!("delete_opts_time_{suffix}"));
+    let _result = storage.put(&path, "test data".into()).await.unwrap();
+    let meta = storage.head(&path).await.unwrap();
+
+    if supports_conditional {
+        // Delete with future timestamp should succeed
+        let opts = DeleteOptions {
+            if_unmodified_since: Some(meta.last_modified + Duration::hours(1)),
+            ..Default::default()
+        };
+        storage.delete_opts(&path, opts).await.unwrap();
+
+        // Verify object was deleted
+        let err = storage.get(&path).await.unwrap_err();
+        assert!(matches!(err, Error::NotFound { .. }), "{err}");
+    }
+
+    // Test 4: Delete with past if_unmodified_since should fail
+    let path = Path::from(format!("delete_opts_time_fail_{suffix}"));
+    storage.put(&path, "test data".into()).await.unwrap();
+    let meta = storage.head(&path).await.unwrap();
+
+    if supports_conditional {
+        let opts = DeleteOptions {
+            if_unmodified_since: Some(meta.last_modified - Duration::hours(1)),
+            ..Default::default()
+        };
+        let err = storage.delete_opts(&path, opts).await.unwrap_err();
+        assert!(matches!(err, Error::Precondition { .. }), "{err}");
+
+        // Verify object still exists
+        let data = storage.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(data.as_ref(), b"test data");
+
+        // Clean up
+        storage.delete(&path).await.unwrap();
+    }
+
+    // Test 5: Delete with multiple conditions (ETag takes precedence)
+    let path = Path::from(format!("delete_opts_multi_{suffix}"));
+    let result = storage.put(&path, "test data".into()).await.unwrap();
+    let meta = storage.head(&path).await.unwrap();
+
+    if supports_conditional && result.e_tag.is_some() {
+        // Both conditions satisfied - should succeed
+        let opts = DeleteOptions {
+            if_match: result.e_tag.clone(),
+            if_unmodified_since: Some(meta.last_modified + Duration::hours(1)),
+            ..Default::default()
+        };
+        storage.delete_opts(&path, opts).await.unwrap();
+
+        // Verify object was deleted
+        let err = storage.get(&path).await.unwrap_err();
+        assert!(matches!(err, Error::NotFound { .. }), "{err}");
+
+        // Test with ETag match and time match - should succeed
+        storage.put(&path, "test data 2".into()).await.unwrap();
+        let result2 = storage.put(&path, "test data 3".into()).await.unwrap();
+        let opts = DeleteOptions {
+            if_match: result2.e_tag.clone(),
+            if_unmodified_since: Some(Utc::now() + Duration::hours(1)), // Future time
+            ..Default::default()
+        };
+        storage.delete_opts(&path, opts).await.unwrap();
+    }
+
+    // Test 6: Delete non-existent object with conditions
+    let path = Path::from(format!("delete_opts_notfound_{suffix}"));
+    if supports_conditional {
+        let opts = DeleteOptions {
+            if_match: Some("some-etag".to_string()),
+            ..Default::default()
+        };
+        // Behavior varies by store - some return NotFound, others may return success
+        let result = storage.delete_opts(&path, opts).await;
+        if let Err(err) = result {
+            // Most stores should return NotFound
+            assert!(
+                matches!(err, Error::NotFound { .. }) || matches!(err, Error::Precondition { .. }),
+                "{err}"
+            );
+        }
+    }
+
+    // Test 7: Version-specific delete (if supported)
+    let path = Path::from(format!("delete_opts_version_{suffix}"));
+    storage.put(&path, "version 1".into()).await.unwrap();
+
+    // Most stores don't support versioning in tests, so we just verify it doesn't crash
+    let opts = DeleteOptions {
+        version: Some("v123".to_string()),
+        ..Default::default()
+    };
+    let result = storage.delete_opts(&path, opts).await;
+    match result {
+        Ok(_) => {
+            // Some stores might ignore version
+        }
+        Err(Error::NotImplemented) => {
+            // Expected for stores that don't support versioning
+        }
+        Err(Error::NotFound { .. }) => {
+            // Also acceptable - version doesn't exist
+        }
+        Err(err) => {
+            // Other errors might indicate version mismatch
+            assert!(
+                matches!(err, Error::Precondition { .. }) || matches!(err, Error::Generic { .. }),
+                "Unexpected error: {err}"
+            );
+        }
+    }
+
+    // Clean up
+    let _ = storage.delete(&path).await;
+
+    // Test 8: Wildcard ETag matching
+    let path = Path::from(format!("delete_opts_wildcard_{suffix}"));
+    storage.put(&path, "test data".into()).await.unwrap();
+
+    if supports_conditional {
+        // "*" should match any existing object
+        let opts = DeleteOptions {
+            if_match: Some("*".to_string()),
+            ..Default::default()
+        };
+        storage.delete_opts(&path, opts).await.unwrap();
+
+        // Verify object was deleted
+        let err = storage.get(&path).await.unwrap_err();
+        assert!(matches!(err, Error::NotFound { .. }), "{err}");
+    }
+
+    // Test 9: Multiple ETags (comma-separated)
+    let path = Path::from(format!("delete_opts_multi_etag_{suffix}"));
+    let result = storage.put(&path, "test data".into()).await.unwrap();
+
+    if supports_conditional && result.e_tag.is_some() {
+        let etag = result.e_tag.unwrap();
+        // Include correct ETag among others
+        let opts = DeleteOptions {
+            if_match: Some(format!("\"wrong1\", {}, \"wrong2\"", etag)),
+            ..Default::default()
+        };
+        storage.delete_opts(&path, opts).await.unwrap();
+
+        // Verify object was deleted
+        let err = storage.get(&path).await.unwrap_err();
+        assert!(matches!(err, Error::NotFound { .. }), "{err}");
+    }
+}
+
+/// Test concurrent conditional deletes (race conditions)
+pub async fn delete_opts_race_condition(storage: &dyn ObjectStore, supports_conditional: bool) {
+    if !supports_conditional {
+        return;
+    }
+
+    use futures::stream::{FuturesUnordered, StreamExt};
+
+    let rng = rng();
+    let suffix = String::from_utf8(rng.sample_iter(Alphanumeric).take(32).collect()).unwrap();
+    let path = Path::from(format!("delete_race_{suffix}"));
+
+    // Create object
+    let result = storage.put(&path, "test data".into()).await.unwrap();
+
+    if let Some(etag) = result.e_tag {
+        const NUM_WORKERS: usize = 5;
+
+        // Multiple workers try to delete with same ETag
+        let mut futures: FuturesUnordered<_> = (0..NUM_WORKERS)
+            .map(|_| {
+                let opts = DeleteOptions {
+                    if_match: Some(etag.clone()),
+                    ..Default::default()
+                };
+                storage.delete_opts(&path, opts)
+            })
+            .collect();
+
+        let mut success_count = 0;
+        let mut precondition_count = 0;
+        let mut not_found_count = 0;
+
+        while let Some(result) = futures.next().await {
+            match result {
+                Ok(_) => success_count += 1,
+                Err(Error::Precondition { .. }) => precondition_count += 1,
+                Err(Error::NotFound { .. }) => not_found_count += 1,
+                Err(err) => panic!("Unexpected error: {err}"),
+            }
+        }
+
+        // Exactly one should succeed
+        assert_eq!(success_count, 1, "Exactly one delete should succeed");
+
+        // Others should fail with either Precondition or NotFound
+        assert_eq!(
+            precondition_count + not_found_count,
+            NUM_WORKERS - 1,
+            "Other deletes should fail"
+        );
+
+        // Verify object is actually deleted
+        let err = storage.get(&path).await.unwrap_err();
+        assert!(matches!(err, Error::NotFound { .. }));
+    }
+}
