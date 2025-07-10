@@ -37,7 +37,6 @@ futures = "0.3"
 http = "1.2.0"
 humantime = "2.1"
 itertools = "0.14.0"
-log = "0.4.27"
 parking_lot = { version = "0.12" }
 percent-encoding = "2.1"
 thiserror = "2.0.2"
@@ -88,7 +87,7 @@ regex = "1.11.1"
 # The "gzip" feature for reqwest is enabled for an integration test.
 reqwest = { version = "0.12", features = ["gzip"] }
 tempfile = "3.1.0"
-testing_logger = "0.1.1"    
+tracing-test = "0.2.5" 
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
 wasm-bindgen-test = "0.3.50"

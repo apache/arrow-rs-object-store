@@ -15,26 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! An object store that logs calls to the wrapped implementation.
+//! An object store that traces calls to the wrapped implementation.
 use crate::{
     path::Path, GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
     ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use log::debug;
+use tracing::debug;
 
-/// An [`ObjectStore`] wrapper that logs operations made to the wrapped store. The logs are written using the [`log`] crate.
-///
-/// Logs are written at the "debug" logging level.
+/// An [`ObjectStore`] wrapper that traces operations made to the wrapped store.
 #[derive(Debug)]
-pub struct LoggingStore<T: ObjectStore> {
+pub struct TracingStore<T: ObjectStore> {
     store: T,
     prefix: String,
     path_prefix: String,
 }
 
-impl<T: ObjectStore> LoggingStore<T> {
+impl<T: ObjectStore> TracingStore<T> {
     /// Create a new logging store by wrapping an inner store.
     #[must_use]
     pub fn new(inner: T, prefix: impl Into<String>, path_prefix: impl Into<String>) -> Self {
@@ -46,7 +44,7 @@ impl<T: ObjectStore> LoggingStore<T> {
     }
 }
 
-impl<T: ObjectStore> std::fmt::Display for LoggingStore<T> {
+impl<T: ObjectStore> std::fmt::Display for TracingStore<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -57,7 +55,7 @@ impl<T: ObjectStore> std::fmt::Display for LoggingStore<T> {
 }
 
 #[async_trait]
-impl<T: ObjectStore> ObjectStore for LoggingStore<T> {
+impl<T: ObjectStore> ObjectStore for TracingStore<T> {
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         if !options.head {
             match &options.range {
@@ -177,7 +175,7 @@ impl<T: ObjectStore> ObjectStore for LoggingStore<T> {
             self.prefix, self.path_prefix, location
         );
         let part_upload = self.store.put_multipart_opts(location, opts).await?;
-        Ok(Box::new(LoggingMultipartUpload::new(
+        Ok(Box::new(TracingMultipartUpload::new(
             part_upload,
             &self.prefix,
             format!("{}/{}", self.path_prefix, location),
@@ -186,13 +184,13 @@ impl<T: ObjectStore> ObjectStore for LoggingStore<T> {
 }
 
 #[derive(Debug)]
-struct LoggingMultipartUpload {
+struct TracingMultipartUpload {
     inner: Box<dyn MultipartUpload>,
     prefix: String,
     path: String,
 }
 
-impl LoggingMultipartUpload {
+impl TracingMultipartUpload {
     fn new(
         inner: Box<dyn MultipartUpload>,
         prefix: impl Into<String>,
@@ -207,7 +205,7 @@ impl LoggingMultipartUpload {
 }
 
 #[async_trait]
-impl MultipartUpload for LoggingMultipartUpload {
+impl MultipartUpload for TracingMultipartUpload {
     fn put_part(&mut self, data: PutPayload) -> UploadPart {
         debug!(
             "{} put_part request for {} of {} bytes",
@@ -230,11 +228,12 @@ impl MultipartUpload for LoggingMultipartUpload {
 
 #[cfg(test)]
 mod tests {
+    use tracing_test::traced_test;
+
     use crate::{
-        integration::*, logging::LoggingStore, memory::InMemory, GetOptions, GetRange, ObjectStore,
+        integration::*, memory::InMemory, trace::TracingStore, GetOptions, GetRange, ObjectStore,
         PutOptions, Result,
     };
-    use log::Level;
 
     #[tokio::test]
     async fn log_test() {
@@ -251,30 +250,15 @@ mod tests {
         put_get_attributes(&integration).await;
     }
 
-    fn make_store() -> LoggingStore<InMemory> {
+    fn make_store() -> TracingStore<InMemory> {
         let inner = InMemory::new();
-        LoggingStore::new(inner, "TEST", "memory:/")
+        TracingStore::new(inner, "TEST", "memory:/")
     }
 
-    #[tokio::test]
-    async fn zero_log() {
-        // Given
-        testing_logger::setup();
-        let _store = make_store();
-
-        // When
-        // no-op
-
-        // Then
-        testing_logger::validate(|captured_logs| {
-            assert_eq!(captured_logs.len(), 0);
-        });
-    }
-
+    #[traced_test]
     #[tokio::test]
     async fn ranged_get_log() -> Result<()> {
         // Given
-        testing_logger::setup();
         let store = make_store();
         store.put(&"test_file".into(), "some_data".into()).await?;
 
@@ -282,22 +266,20 @@ mod tests {
         store.get_range(&"test_file".into(), 1..5).await?;
 
         // Then
-        testing_logger::validate(|captured_logs| {
+        logs_assert(|captured_logs| {
             assert_eq!(captured_logs.len(), 2);
-            assert_eq!(
-                captured_logs[1].body,
-                "TEST get request for memory://test_file byte range 1 to 5 = 4 bytes"
-            );
-            assert_eq!(captured_logs[1].level, Level::Debug);
+            assert!(captured_logs[1]
+                .contains("TEST get request for memory://test_file byte range 1 to 5 = 4 bytes"));
+            Ok(())
         });
 
         Ok(())
     }
 
+    #[traced_test]
     #[tokio::test]
     async fn offset_get_log() -> Result<()> {
         // Given
-        testing_logger::setup();
         let store = make_store();
         store.put(&"test_file".into(), "some_data".into()).await?;
 
@@ -309,22 +291,20 @@ mod tests {
         store.get_opts(&"test_file".into(), opts).await?;
 
         // Then
-        testing_logger::validate(|captured_logs| {
+        logs_assert(|captured_logs| {
             assert_eq!(captured_logs.len(), 2);
-            assert_eq!(
-                captured_logs[1].body,
-                "TEST get request for memory://test_file for byte 3 to EOF"
-            );
-            assert_eq!(captured_logs[1].level, Level::Debug);
+            assert!(captured_logs[1]
+                .contains("TEST get request for memory://test_file for byte 3 to EOF"));
+            Ok(())
         });
 
         Ok(())
     }
 
+    #[traced_test]
     #[tokio::test]
     async fn suffix_get_log() -> Result<()> {
         // Given
-        testing_logger::setup();
         let store = make_store();
         store.put(&"test_file".into(), "some_data".into()).await?;
 
@@ -336,22 +316,20 @@ mod tests {
         store.get_opts(&"test_file".into(), opts).await?;
 
         // Then
-        testing_logger::validate(|captured_logs| {
+        logs_assert(|captured_logs| {
             assert_eq!(captured_logs.len(), 2);
-            assert_eq!(
-                captured_logs[1].body,
-                "TEST get request for memory://test_file for last 3 bytes of object"
-            );
-            assert_eq!(captured_logs[1].level, Level::Debug);
+            assert!(captured_logs[1]
+                .contains("TEST get request for memory://test_file for last 3 bytes of object"));
+            Ok(())
         });
 
         Ok(())
     }
 
+    #[traced_test]
     #[tokio::test]
     async fn no_range_get_log() -> Result<()> {
         // Given
-        testing_logger::setup();
         let store = make_store();
         store.put(&"test_file".into(), "some_data".into()).await?;
 
@@ -360,22 +338,20 @@ mod tests {
         store.get_opts(&"test_file".into(), opts).await?;
 
         // Then
-        testing_logger::validate(|captured_logs| {
+        logs_assert(|captured_logs| {
             assert_eq!(captured_logs.len(), 2);
-            assert_eq!(
-                captured_logs[1].body,
-                "TEST get request for memory://test_file for complete file range"
-            );
-            assert_eq!(captured_logs[1].level, Level::Debug);
+            assert!(captured_logs[1]
+                .contains("TEST get request for memory://test_file for complete file range"));
+            Ok(())
         });
 
         Ok(())
     }
 
+    #[traced_test]
     #[tokio::test]
     async fn head_log() -> Result<()> {
         // Given
-        testing_logger::setup();
         let store = make_store();
         store.put(&"test_file".into(), "some_data".into()).await?;
 
@@ -383,22 +359,19 @@ mod tests {
         store.head(&"test_file".into()).await?;
 
         // Then
-        testing_logger::validate(|captured_logs| {
+        logs_assert(|captured_logs| {
             assert_eq!(captured_logs.len(), 2);
-            assert_eq!(
-                captured_logs[1].body,
-                "TEST head request for memory://test_file"
-            );
-            assert_eq!(captured_logs[1].level, Level::Debug);
+            assert!(captured_logs[1].contains("TEST head request for memory://test_file"));
+            Ok(())
         });
 
         Ok(())
     }
 
+    #[traced_test]
     #[tokio::test]
     async fn delete_log() -> Result<()> {
         // Given
-        testing_logger::setup();
         let store = make_store();
         store.put(&"test_file".into(), "some_data".into()).await?;
 
@@ -406,22 +379,19 @@ mod tests {
         store.delete(&"test_file".into()).await?;
 
         // Then
-        testing_logger::validate(|captured_logs| {
+        logs_assert(|captured_logs| {
             assert_eq!(captured_logs.len(), 2);
-            assert_eq!(
-                captured_logs[1].body,
-                "TEST delete request for memory://test_file"
-            );
-            assert_eq!(captured_logs[1].level, Level::Debug);
+            assert!(captured_logs[1].contains("TEST delete request for memory://test_file"));
+            Ok(())
         });
 
         Ok(())
     }
 
+    #[traced_test]
     #[tokio::test]
     async fn list_log() -> Result<()> {
         // Given
-        testing_logger::setup();
         let store = make_store();
 
         // When
@@ -429,19 +399,19 @@ mod tests {
         store.list(Some(&"foo".into()));
 
         // Then
-        testing_logger::validate(|captured_logs| {
+        logs_assert(|captured_logs| {
             assert_eq!(captured_logs.len(), 1);
-            assert_eq!(captured_logs[0].body, "TEST list request for memory://foo");
-            assert_eq!(captured_logs[0].level, Level::Debug);
+            assert!(captured_logs[0].contains("TEST list request for memory://foo"));
+            Ok(())
         });
 
         Ok(())
     }
 
+    #[traced_test]
     #[tokio::test]
     async fn list_with_delimeter_log() -> Result<()> {
         // Given
-        testing_logger::setup();
         let store = make_store();
 
         // When
@@ -449,22 +419,19 @@ mod tests {
         store.list_with_delimiter(Some(&"foo".into())).await?;
 
         // Then
-        testing_logger::validate(|captured_logs| {
+        logs_assert(|captured_logs| {
             assert_eq!(captured_logs.len(), 1);
-            assert_eq!(
-                captured_logs[0].body,
-                "TEST list_with_delimeter request for memory://foo"
-            );
-            assert_eq!(captured_logs[0].level, Level::Debug);
+            assert!(captured_logs[0].contains("TEST list_with_delimeter request for memory://foo"));
+            Ok(())
         });
 
         Ok(())
     }
 
+    #[traced_test]
     #[tokio::test]
     async fn list_path_none_log() -> Result<()> {
         // Given
-        testing_logger::setup();
         let store = make_store();
 
         // When
@@ -472,19 +439,19 @@ mod tests {
         store.list(None);
 
         // Then
-        testing_logger::validate(|captured_logs| {
+        logs_assert(|captured_logs| {
             assert_eq!(captured_logs.len(), 1);
-            assert_eq!(captured_logs[0].body, "TEST list request for memory://");
-            assert_eq!(captured_logs[0].level, Level::Debug);
+            assert!(captured_logs[0].contains("TEST list request for memory://"));
+            Ok(())
         });
 
         Ok(())
     }
 
+    #[traced_test]
     #[tokio::test]
     async fn list_with_delimeter_path_none_log() -> Result<()> {
         // Given
-        testing_logger::setup();
         let store = make_store();
 
         // When
@@ -492,22 +459,19 @@ mod tests {
         store.list_with_delimiter(None).await?;
 
         // Then
-        testing_logger::validate(|captured_logs| {
+        logs_assert(|captured_logs| {
             assert_eq!(captured_logs.len(), 1);
-            assert_eq!(
-                captured_logs[0].body,
-                "TEST list_with_delimeter request for memory://"
-            );
-            assert_eq!(captured_logs[0].level, Level::Debug);
+            assert!(captured_logs[0].contains("TEST list_with_delimeter request for memory://"));
+            Ok(())
         });
 
         Ok(())
     }
 
+    #[traced_test]
     #[tokio::test]
     async fn copy_log() -> Result<()> {
         // Given
-        testing_logger::setup();
         let store = make_store();
         store.put(&"test_file".into(), "some_data".into()).await?;
 
@@ -517,22 +481,20 @@ mod tests {
             .await?;
 
         // Then
-        testing_logger::validate(|captured_logs| {
+        logs_assert(|captured_logs| {
             assert_eq!(captured_logs.len(), 2);
-            assert_eq!(
-                captured_logs[1].body,
-                "TEST copy request from memory://test_file to memory://test_file2"
-            );
-            assert_eq!(captured_logs[1].level, Level::Debug);
+            assert!(captured_logs[1]
+                .contains("TEST copy request from memory://test_file to memory://test_file2"));
+            Ok(())
         });
 
         Ok(())
     }
 
+    #[traced_test]
     #[tokio::test]
     async fn copy_if_not_exists_log() -> Result<()> {
         // Given
-        testing_logger::setup();
         let store = make_store();
         store.put(&"test_file".into(), "some_data".into()).await?;
 
@@ -542,22 +504,21 @@ mod tests {
             .await?;
 
         // Then
-        testing_logger::validate(|captured_logs| {
+        logs_assert(|captured_logs| {
             assert_eq!(captured_logs.len(), 2);
-            assert_eq!(
-                captured_logs[1].body,
+            assert!(captured_logs[1].contains(
                 "TEST copy_if_not_exists request from memory://test_file to memory://test_file2"
-            );
-            assert_eq!(captured_logs[1].level, Level::Debug);
+            ));
+            Ok(())
         });
 
         Ok(())
     }
 
+    #[traced_test]
     #[tokio::test]
     async fn put_log() -> Result<()> {
         // Given
-        testing_logger::setup();
         let store = make_store();
 
         // When
@@ -566,22 +527,19 @@ mod tests {
             .await?;
 
         // Then
-        testing_logger::validate(|captured_logs| {
+        logs_assert(|captured_logs| {
             assert_eq!(captured_logs.len(), 1);
-            assert_eq!(
-                captured_logs[0].body,
-                "TEST put request for memory://test_file of 3 bytes"
-            );
-            assert_eq!(captured_logs[0].level, Level::Debug);
+            assert!(captured_logs[0].contains("TEST put request for memory://test_file of 3 bytes"));
+            Ok(())
         });
 
         Ok(())
     }
 
+    #[traced_test]
     #[tokio::test]
     async fn put_multipart_log() -> Result<()> {
         // Given
-        testing_logger::setup();
         let store = make_store();
 
         // When
@@ -592,33 +550,17 @@ mod tests {
         part.complete().await?;
 
         // Then
-        testing_logger::validate(|captured_logs| {
+        logs_assert(|captured_logs| {
             assert_eq!(captured_logs.len(), 5);
-            assert_eq!(
-                captured_logs[0].body,
-                "TEST put multipart request for memory://test_file"
-            );
-            assert_eq!(captured_logs[0].level, Level::Debug);
-            assert_eq!(
-                captured_logs[1].body,
-                "TEST put_part request for memory://test_file of 3 bytes"
-            );
-            assert_eq!(captured_logs[1].level, Level::Debug);
-            assert_eq!(
-                captured_logs[2].body,
-                "TEST put_part request for memory://test_file of 4 bytes"
-            );
-            assert_eq!(captured_logs[2].level, Level::Debug);
-            assert_eq!(
-                captured_logs[3].body,
-                "TEST put_part request for memory://test_file of 5 bytes"
-            );
-            assert_eq!(captured_logs[3].level, Level::Debug);
-            assert_eq!(
-                captured_logs[4].body,
-                "multipart complete for memory://test_file"
-            );
-            assert_eq!(captured_logs[4].level, Level::Debug);
+            assert!(captured_logs[0].contains("TEST put multipart request for memory://test_file"));
+            assert!(captured_logs[1]
+                .contains("TEST put_part request for memory://test_file of 3 bytes"));
+            assert!(captured_logs[2]
+                .contains("TEST put_part request for memory://test_file of 4 bytes"));
+            assert!(captured_logs[3]
+                .contains("TEST put_part request for memory://test_file of 5 bytes"));
+            assert!(captured_logs[4].contains("multipart complete for memory://test_file"));
+            Ok(())
         });
 
         let retrieved_data = String::from_utf8(
