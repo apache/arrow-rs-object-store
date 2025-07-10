@@ -181,9 +181,28 @@ impl HttpRequestBuilder {
     pub(crate) fn query<T: serde::Serialize + ?Sized>(mut self, query: &T) -> Self {
         let mut error = None;
         if let Ok(ref mut req) = self.request {
-            let mut out = format!("{}?", req.uri().path());
-            let start_position = out.len();
-            let mut encoder = form_urlencoded::Serializer::for_suffix(&mut out, start_position);
+            // Build the query string, preserving any existing query parameters.
+            // This prevents malformed URIs like "/bucket?&list-type=2" when the URI
+            // already contains query parameters.
+            let mut out = match req.uri().query() {
+                // If URI already has query params (e.g., "/bucket?existing=param"),
+                // preserve them: "/bucket?existing=param"
+                Some(existing_query) => format!("{}?{}", req.uri().path(), existing_query),
+                // If no existing query params, just add the "?": "/bucket?"
+                None => format!("{}?", req.uri().path()),
+            };
+
+            // Choose the appropriate form encoder based on whether we have existing parameters:
+            let mut encoder = if out.ends_with('?') {
+                // No existing params - use for_suffix to append after the "?"
+                // Result: "/bucket?list-type=2"
+                let start_position = out.len();
+                form_urlencoded::Serializer::for_suffix(&mut out, start_position)
+            } else {
+                // Has existing params - use new() to properly add "&" separators
+                // Result: "/bucket?existing=param&list-type=2"
+                form_urlencoded::Serializer::new(&mut out)
+            };
             let serializer = serde_urlencoded::Serializer::new(&mut encoder);
 
             if let Err(err) = query.serialize(serializer) {
@@ -320,6 +339,15 @@ mod tests {
                 .uri("http://example.com")
                 .query(&[("foo", "1")]),
             "http://example.com/?foo=1",
+        );
+
+        // Test that adding query parameters to a URI that already has query parameters
+        // doesn't create malformed URIs like "/bucket?&list-type=2"
+        assert_request_uri(
+            HttpRequestBuilder::new(client.clone())
+                .uri("http://example.com/bucket?existing=param")
+                .query(&[("list-type", "2")]),
+            "http://example.com/bucket?existing=param&list-type=2",
         );
     }
 
