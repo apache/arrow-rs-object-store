@@ -33,7 +33,7 @@ pub struct TracingStore<T: ObjectStore> {
 }
 
 impl<T: ObjectStore> TracingStore<T> {
-    /// Create a new logging store by wrapping an inner store.
+    /// Create a new tracing store by wrapping an inner store.
     #[must_use]
     pub fn new(inner: T, prefix: impl Into<String>, path_prefix: impl Into<String>) -> Self {
         Self {
@@ -48,7 +48,7 @@ impl<T: ObjectStore> std::fmt::Display for TracingStore<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "LoggingStore \"{}\" path prefix: \"{}\" ({})",
+            "TracingStore \"{}\" path prefix: \"{}\" ({})",
             self.prefix, self.path_prefix, self.store
         )
     }
