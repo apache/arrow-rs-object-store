@@ -521,7 +521,6 @@ pub mod http;
 pub mod limit;
 #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 pub mod local;
-pub mod trace;
 pub mod memory;
 pub mod path;
 pub mod prefix;
@@ -529,6 +528,7 @@ pub mod registry;
 #[cfg(feature = "cloud")]
 pub mod signer;
 pub mod throttle;
+pub mod trace;
 
 #[cfg(feature = "cloud")]
 pub mod client;
