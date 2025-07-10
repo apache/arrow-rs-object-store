@@ -349,6 +349,33 @@ mod tests {
                 .query(&[("list-type", "2")]),
             "http://example.com/bucket?existing=param&list-type=2",
         );
+
+        // Test multiple parameters
+        assert_request_uri(
+            HttpRequestBuilder::new(client.clone())
+                .uri("http://example.com/bucket")
+                .query(&[("list-type", "2"),
+                    ("prefix", "foo/")]),
+            "http://example.com/bucket?list-type=2&prefix=foo%2F",
+        );
+
+        // Test multiple parameters to existing URI
+        assert_request_uri(
+            HttpRequestBuilder::new(client.clone())
+                .uri("http://example.com/bucket?existing=param")
+                .query(&[("list-type", "2"),
+                    ("prefix", "foo/")]),
+            "http://example.com/bucket?existing=param&list-type=2&prefix=foo%2F",
+        );
+
+        // Test multiple appends
+        assert_request_uri(
+            HttpRequestBuilder::new(client.clone())
+                .uri("http://example.com/bucket?existing=param")
+                .query(&[("list-type", "2")])
+                .query(&[("prefix", "foo/")]),
+            "http://example.com/bucket?existing=param&list-type=2&prefix=foo%2F",
+        );
     }
 
     fn assert_request_uri(builder: HttpRequestBuilder, expected: &str) {
