@@ -1236,7 +1236,7 @@ impl From<Attributes> for PutOptions {
 
 // See <https://github.com/apache/arrow-rs-object-store/issues/339>.
 #[doc(hidden)]
-#[deprecated(note = "Use PutMultipartOptions", since = "0.13.0")]
+#[deprecated(note = "Use PutMultipartOptions", since = "0.12.3")]
 pub type PutMultipartOpts = PutMultipartOptions;
 
 /// Options for [`ObjectStore::put_multipart_opts`]
