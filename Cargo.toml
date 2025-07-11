@@ -83,10 +83,11 @@ integration = ["rand"]
 hyper = { version = "1.2", features = ["server"] }
 hyper-util = "0.1"
 rand = "0.9"
-tempfile = "3.1.0"
 regex = "1.11.1"
 # The "gzip" feature for reqwest is enabled for an integration test.
 reqwest = { version = "0.12", features = ["gzip"] }
+tempfile = "3.1.0"
+tracing-test = "0.2.5" 
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
 wasm-bindgen-test = "0.3.50"
