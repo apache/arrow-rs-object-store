@@ -57,14 +57,11 @@ labels associated with them.
 
 Now prepare a PR to update `CHANGELOG.md` and versions on `main` to reflect the planned release.
 
-Note this process is done in the `object_store` directory. See [#437] for an example
+See [#437] for an example.
 
 [#437]: https://github.com/apache/arrow-rs-object-store/pull/437
 
 ```bash
-# NOTE: Run commands in object_store sub directory (not main repo checkout)
-# cd object_store
-
 git checkout main
 git pull
 git checkout -b <RELEASE_BRANCH>
