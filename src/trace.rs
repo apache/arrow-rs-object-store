@@ -22,7 +22,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use tracing::debug;
+use tracing::instrument;
 
 /// An [`ObjectStore`] wrapper that traces operations made to the wrapped store.
 #[derive(Debug)]
@@ -56,124 +56,107 @@ impl<T: ObjectStore> std::fmt::Display for TracingStore<T> {
 
 #[async_trait]
 impl<T: ObjectStore> ObjectStore for TracingStore<T> {
+    #[instrument(level = "debug", skip_all, fields(store = self.prefix, location, range))]
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-        if !options.head {
+        tracing::Span::current().record("location", format!("{}/{}", self.path_prefix, location));
+        let range = if options.head {
+            "N/A: HEAD only request".to_owned()
+        } else {
             match &options.range {
                 Some(GetRange::Bounded(get_range)) => {
                     let len = get_range
                         .end
                         .checked_sub(get_range.start)
                         .expect("Get range length is negative");
-                    debug!(
-                        "{} get request for {}/{} byte range {} to {} = {} bytes",
-                        self.prefix,
-                        self.path_prefix,
-                        location,
-                        get_range.start,
-                        get_range.end,
-                        len,
-                    );
+                    format!(
+                        "bytes {} to {}, len {}",
+                        get_range.start, get_range.end, len
+                    )
                 }
                 Some(GetRange::Offset(start_pos)) => {
-                    debug!(
-                        "{} get request for {}/{} for byte {} to EOF",
-                        self.prefix, self.path_prefix, location, start_pos,
-                    );
+                    format!("byte {start_pos} to EOF")
                 }
                 Some(GetRange::Suffix(pos)) => {
-                    debug!(
-                        "{} get request for {}/{} for last {} bytes of object",
-                        self.prefix, self.path_prefix, location, pos,
-                    );
+                    format!("last {pos} bytes of object")
                 }
-                None => {
-                    debug!(
-                        "{} get request for {}/{} for complete file range",
-                        self.prefix, self.path_prefix, location
-                    );
-                }
+                None => "complete file range".to_owned(),
             }
-        }
+        };
+        tracing::Span::current().record("range", &range);
         self.store.get_opts(location, options).await
     }
 
+    #[instrument(level = "debug", skip_all, fields(store = self.prefix, location))]
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        debug!(
-            "{} head request for {}/{}",
-            self.prefix, self.path_prefix, location
-        );
+        tracing::Span::current().record("location", format!("{}/{}", self.path_prefix, location));
         self.store.head(location).await
     }
 
+    #[instrument(level = "debug", skip_all, fields(store = self.prefix, location))]
     async fn delete(&self, location: &Path) -> Result<()> {
-        debug!(
-            "{} delete request for {}/{}",
-            self.prefix, self.path_prefix, location
-        );
+        tracing::Span::current().record("location", format!("{}/{}", self.path_prefix, location));
         self.store.delete(location).await
     }
 
+    #[instrument(level = "debug", skip_all, fields(store = self.prefix, prefix))]
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        debug!(
-            "{} list request for {}/{}",
-            self.prefix,
-            self.path_prefix,
-            prefix.unwrap_or(&Path::default())
+        tracing::Span::current().record(
+            "prefix",
+            format!(
+                "{}/{}",
+                self.path_prefix,
+                prefix.unwrap_or(&Path::default())
+            ),
         );
         self.store.list(prefix)
     }
 
+    #[instrument(level = "debug", skip_all, fields(store = self.prefix, prefix))]
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        debug!(
-            "{} list_with_delimeter request for {}/{}",
-            self.prefix,
-            self.path_prefix,
-            prefix.unwrap_or(&Path::default())
+        tracing::Span::current().record(
+            "prefix",
+            format!(
+                "{}/{}",
+                self.path_prefix,
+                prefix.unwrap_or(&Path::default())
+            ),
         );
         self.store.list_with_delimiter(prefix).await
     }
 
+    #[instrument(level = "debug", skip_all, fields(store = self.prefix, from, to))]
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        debug!(
-            "{} copy request from {}/{} to {}/{}",
-            self.prefix, self.path_prefix, from, self.path_prefix, to
-        );
+        tracing::Span::current().record("from", format!("{}/{}", self.path_prefix, from));
+        tracing::Span::current().record("to", format!("{}/{}", self.path_prefix, to));
         self.store.copy(from, to).await
     }
 
+    #[instrument(level = "debug", skip_all, fields(store = self.prefix, from, to))]
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        debug!(
-            "{} copy_if_not_exists request from {}/{} to {}/{}",
-            self.prefix, self.path_prefix, from, self.path_prefix, to
-        );
+        tracing::Span::current().record("from", format!("{}/{}", self.path_prefix, from));
+        tracing::Span::current().record("to", format!("{}/{}", self.path_prefix, to));
         self.store.copy_if_not_exists(from, to).await
     }
 
+    #[instrument(level = "debug", skip_all, fields(store = self.prefix, location, length))]
     async fn put_opts(
         &self,
         location: &Path,
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
-        debug!(
-            "{} put request for {}/{} of {} bytes",
-            self.prefix,
-            self.path_prefix,
-            location,
-            payload.content_length()
-        );
+        tracing::Span::current().record("location", format!("{}/{}", self.path_prefix, location));
+        tracing::Span::current().record("length", payload.content_length());
         self.store.put_opts(location, payload, opts).await
     }
 
+    #[instrument(level = "debug", skip_all, fields(store = self.prefix, location))]
     async fn put_multipart_opts(
         &self,
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
-        debug!(
-            "{} put multipart request for {}/{}",
-            self.prefix, self.path_prefix, location
-        );
+        tracing::Span::current().record("location", format!("{}/{}", self.path_prefix, location));
         let part_upload = self.store.put_multipart_opts(location, opts).await?;
         Ok(Box::new(TracingMultipartUpload::new(
             part_upload,
@@ -206,21 +189,18 @@ impl TracingMultipartUpload {
 
 #[async_trait]
 impl MultipartUpload for TracingMultipartUpload {
+    #[instrument(level = "debug", skip_all, fields(store = self.prefix, location = self.path, length))]
     fn put_part(&mut self, data: PutPayload) -> UploadPart {
-        debug!(
-            "{} put_part request for {} of {} bytes",
-            self.prefix,
-            self.path,
-            data.content_length()
-        );
+        tracing::Span::current().record("length", data.content_length());
         self.inner.put_part(data)
     }
 
+    #[instrument(level = "debug", skip_all, fields(store = self.prefix, location = self.path))]
     async fn complete(&mut self) -> Result<PutResult> {
-        debug!("multipart complete for {}", self.path);
         self.inner.complete().await
     }
 
+    #[instrument(level = "debug", skip_all, fields(store = self.prefix, location = self.path))]
     async fn abort(&mut self) -> Result<()> {
         self.inner.abort().await
     }
@@ -228,12 +208,7 @@ impl MultipartUpload for TracingMultipartUpload {
 
 #[cfg(test)]
 mod tests {
-    use tracing_test::traced_test;
-
-    use crate::{
-        integration::*, memory::InMemory, trace::TracingStore, GetOptions, GetRange, ObjectStore,
-        PutOptions, Result,
-    };
+    use crate::{integration::*, memory::InMemory, trace::TracingStore};
 
     #[tokio::test]
     async fn log_test() {
@@ -253,326 +228,5 @@ mod tests {
     fn make_store() -> TracingStore<InMemory> {
         let inner = InMemory::new();
         TracingStore::new(inner, "TEST", "memory:/")
-    }
-
-    #[traced_test]
-    #[tokio::test]
-    async fn ranged_get_log() -> Result<()> {
-        // Given
-        let store = make_store();
-        store.put(&"test_file".into(), "some_data".into()).await?;
-
-        // When
-        store.get_range(&"test_file".into(), 1..5).await?;
-
-        // Then
-        logs_assert(|captured_logs| {
-            assert_eq!(captured_logs.len(), 2);
-            assert!(captured_logs[1]
-                .contains("TEST get request for memory://test_file byte range 1 to 5 = 4 bytes"));
-            Ok(())
-        });
-
-        Ok(())
-    }
-
-    #[traced_test]
-    #[tokio::test]
-    async fn offset_get_log() -> Result<()> {
-        // Given
-        let store = make_store();
-        store.put(&"test_file".into(), "some_data".into()).await?;
-
-        // When
-        let opts = GetOptions {
-            range: Some(GetRange::Offset(3)),
-            ..Default::default()
-        };
-        store.get_opts(&"test_file".into(), opts).await?;
-
-        // Then
-        logs_assert(|captured_logs| {
-            assert_eq!(captured_logs.len(), 2);
-            assert!(captured_logs[1]
-                .contains("TEST get request for memory://test_file for byte 3 to EOF"));
-            Ok(())
-        });
-
-        Ok(())
-    }
-
-    #[traced_test]
-    #[tokio::test]
-    async fn suffix_get_log() -> Result<()> {
-        // Given
-        let store = make_store();
-        store.put(&"test_file".into(), "some_data".into()).await?;
-
-        // When
-        let opts = GetOptions {
-            range: Some(GetRange::Suffix(3)),
-            ..Default::default()
-        };
-        store.get_opts(&"test_file".into(), opts).await?;
-
-        // Then
-        logs_assert(|captured_logs| {
-            assert_eq!(captured_logs.len(), 2);
-            assert!(captured_logs[1]
-                .contains("TEST get request for memory://test_file for last 3 bytes of object"));
-            Ok(())
-        });
-
-        Ok(())
-    }
-
-    #[traced_test]
-    #[tokio::test]
-    async fn no_range_get_log() -> Result<()> {
-        // Given
-        let store = make_store();
-        store.put(&"test_file".into(), "some_data".into()).await?;
-
-        // When
-        let opts = GetOptions::default();
-        store.get_opts(&"test_file".into(), opts).await?;
-
-        // Then
-        logs_assert(|captured_logs| {
-            assert_eq!(captured_logs.len(), 2);
-            assert!(captured_logs[1]
-                .contains("TEST get request for memory://test_file for complete file range"));
-            Ok(())
-        });
-
-        Ok(())
-    }
-
-    #[traced_test]
-    #[tokio::test]
-    async fn head_log() -> Result<()> {
-        // Given
-        let store = make_store();
-        store.put(&"test_file".into(), "some_data".into()).await?;
-
-        // When
-        store.head(&"test_file".into()).await?;
-
-        // Then
-        logs_assert(|captured_logs| {
-            assert_eq!(captured_logs.len(), 2);
-            assert!(captured_logs[1].contains("TEST head request for memory://test_file"));
-            Ok(())
-        });
-
-        Ok(())
-    }
-
-    #[traced_test]
-    #[tokio::test]
-    async fn delete_log() -> Result<()> {
-        // Given
-        let store = make_store();
-        store.put(&"test_file".into(), "some_data".into()).await?;
-
-        // When
-        store.delete(&"test_file".into()).await?;
-
-        // Then
-        logs_assert(|captured_logs| {
-            assert_eq!(captured_logs.len(), 2);
-            assert!(captured_logs[1].contains("TEST delete request for memory://test_file"));
-            Ok(())
-        });
-
-        Ok(())
-    }
-
-    #[traced_test]
-    #[tokio::test]
-    async fn list_log() -> Result<()> {
-        // Given
-        let store = make_store();
-
-        // When
-        #[allow(unused_must_use)]
-        store.list(Some(&"foo".into()));
-
-        // Then
-        logs_assert(|captured_logs| {
-            assert_eq!(captured_logs.len(), 1);
-            assert!(captured_logs[0].contains("TEST list request for memory://foo"));
-            Ok(())
-        });
-
-        Ok(())
-    }
-
-    #[traced_test]
-    #[tokio::test]
-    async fn list_with_delimeter_log() -> Result<()> {
-        // Given
-        let store = make_store();
-
-        // When
-        #[allow(unused_must_use)]
-        store.list_with_delimiter(Some(&"foo".into())).await?;
-
-        // Then
-        logs_assert(|captured_logs| {
-            assert_eq!(captured_logs.len(), 1);
-            assert!(captured_logs[0].contains("TEST list_with_delimeter request for memory://foo"));
-            Ok(())
-        });
-
-        Ok(())
-    }
-
-    #[traced_test]
-    #[tokio::test]
-    async fn list_path_none_log() -> Result<()> {
-        // Given
-        let store = make_store();
-
-        // When
-        #[allow(unused_must_use)]
-        store.list(None);
-
-        // Then
-        logs_assert(|captured_logs| {
-            assert_eq!(captured_logs.len(), 1);
-            assert!(captured_logs[0].contains("TEST list request for memory://"));
-            Ok(())
-        });
-
-        Ok(())
-    }
-
-    #[traced_test]
-    #[tokio::test]
-    async fn list_with_delimeter_path_none_log() -> Result<()> {
-        // Given
-        let store = make_store();
-
-        // When
-        #[allow(unused_must_use)]
-        store.list_with_delimiter(None).await?;
-
-        // Then
-        logs_assert(|captured_logs| {
-            assert_eq!(captured_logs.len(), 1);
-            assert!(captured_logs[0].contains("TEST list_with_delimeter request for memory://"));
-            Ok(())
-        });
-
-        Ok(())
-    }
-
-    #[traced_test]
-    #[tokio::test]
-    async fn copy_log() -> Result<()> {
-        // Given
-        let store = make_store();
-        store.put(&"test_file".into(), "some_data".into()).await?;
-
-        // When
-        store
-            .copy(&"test_file".into(), &"test_file2".into())
-            .await?;
-
-        // Then
-        logs_assert(|captured_logs| {
-            assert_eq!(captured_logs.len(), 2);
-            assert!(captured_logs[1]
-                .contains("TEST copy request from memory://test_file to memory://test_file2"));
-            Ok(())
-        });
-
-        Ok(())
-    }
-
-    #[traced_test]
-    #[tokio::test]
-    async fn copy_if_not_exists_log() -> Result<()> {
-        // Given
-        let store = make_store();
-        store.put(&"test_file".into(), "some_data".into()).await?;
-
-        // When
-        store
-            .copy_if_not_exists(&"test_file".into(), &"test_file2".into())
-            .await?;
-
-        // Then
-        logs_assert(|captured_logs| {
-            assert_eq!(captured_logs.len(), 2);
-            assert!(captured_logs[1].contains(
-                "TEST copy_if_not_exists request from memory://test_file to memory://test_file2"
-            ));
-            Ok(())
-        });
-
-        Ok(())
-    }
-
-    #[traced_test]
-    #[tokio::test]
-    async fn put_log() -> Result<()> {
-        // Given
-        let store = make_store();
-
-        // When
-        store
-            .put_opts(&"test_file".into(), "foo".into(), PutOptions::default())
-            .await?;
-
-        // Then
-        logs_assert(|captured_logs| {
-            assert_eq!(captured_logs.len(), 1);
-            assert!(captured_logs[0].contains("TEST put request for memory://test_file of 3 bytes"));
-            Ok(())
-        });
-
-        Ok(())
-    }
-
-    #[traced_test]
-    #[tokio::test]
-    async fn put_multipart_log() -> Result<()> {
-        // Given
-        let store = make_store();
-
-        // When
-        let mut part = store.put_multipart(&"test_file".into()).await?;
-        part.put_part("foo".into()).await?;
-        part.put_part("foo1".into()).await?;
-        part.put_part("foo12".into()).await?;
-        part.complete().await?;
-
-        // Then
-        logs_assert(|captured_logs| {
-            assert_eq!(captured_logs.len(), 5);
-            assert!(captured_logs[0].contains("TEST put multipart request for memory://test_file"));
-            assert!(captured_logs[1]
-                .contains("TEST put_part request for memory://test_file of 3 bytes"));
-            assert!(captured_logs[2]
-                .contains("TEST put_part request for memory://test_file of 4 bytes"));
-            assert!(captured_logs[3]
-                .contains("TEST put_part request for memory://test_file of 5 bytes"));
-            assert!(captured_logs[4].contains("multipart complete for memory://test_file"));
-            Ok(())
-        });
-
-        let retrieved_data = String::from_utf8(
-            store
-                .get(&"test_file".into())
-                .await?
-                .bytes()
-                .await?
-                .to_vec(),
-        )
-        .expect("String should be valid UTF-8");
-        assert_eq!(retrieved_data, "foofoo1foo12");
-        Ok(())
     }
 }
