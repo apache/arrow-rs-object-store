@@ -20,6 +20,52 @@
 # Historical Changelog
 
 
+## [v0.12.2](https://github.com/apache/arrow-rs-object-store/tree/v0.12.2) (2025-06-06)
+
+[Full Changelog](https://github.com/apache/arrow-rs-object-store/compare/v0.12.1...v0.12.2)
+
+**Implemented enhancements:**
+
+- Add `ObjectStoreUrl` to resolve URLs to `ObjectStore` instances [\#356](https://github.com/apache/arrow-rs-object-store/issues/356)
+- Retry / recover after partially reading a streaming response \( fix timeout errors / `error decoding response body` \) [\#15](https://github.com/apache/arrow-rs-object-store/issues/15)
+- Expose `list_paginated` in object\_store [\#291](https://github.com/apache/arrow-rs-object-store/issues/291)
+
+**Fixed bugs:**
+
+- Emulator tests are broken on main [\#395](https://github.com/apache/arrow-rs-object-store/issues/395)
+- Retry does not cover connection errors [\#368](https://github.com/apache/arrow-rs-object-store/issues/368)
+- Error handling of HTTP storage backend not utilizing retry::RetryError::error when possible [\#365](https://github.com/apache/arrow-rs-object-store/issues/365)
+- Error running `cargo publish`:  wildcard \(`*`\) dependency constraints are not allowed on crates.io. [\#357](https://github.com/apache/arrow-rs-object-store/issues/357)
+- No retries when connection closes abruptly \(i.e TCP-RST\) [\#350](https://github.com/apache/arrow-rs-object-store/issues/350)
+- Compilation error in tests with Rust 1.87: integer out of range for `u16` in format string [\#343](https://github.com/apache/arrow-rs-object-store/issues/343)
+
+**Documentation updates:**
+
+- Improve `parse_url_opts` documentation [\#377](https://github.com/apache/arrow-rs-object-store/pull/377) ([alamb](https://github.com/alamb))
+
+**Closed issues:**
+
+- object\_store pulls default reqwest features which always active native-tls [\#400](https://github.com/apache/arrow-rs-object-store/issues/400)
+- Introduce retry to other methods than get after \#383  [\#387](https://github.com/apache/arrow-rs-object-store/issues/387)
+- Security: AwsCredential prints plaintext may cause security issue. [\#363](https://github.com/apache/arrow-rs-object-store/issues/363)
+- Docs build fails for object\_store 0.12.1 [\#360](https://github.com/apache/arrow-rs-object-store/issues/360)
+- Is there a way to go from `ObjectStore` to `(URL, opts)`? [\#347](https://github.com/apache/arrow-rs-object-store/issues/347)
+
+**Merged pull requests:**
+
+- Chore: fix emulator tests due to changes in reqwest [\#401](https://github.com/apache/arrow-rs-object-store/pull/401) ([alamb](https://github.com/alamb))
+- Retry streaming get requests \(\#15\) [\#383](https://github.com/apache/arrow-rs-object-store/pull/383) ([tustvold](https://github.com/tustvold))
+- azure: do not set empty container name from parse\_url [\#379](https://github.com/apache/arrow-rs-object-store/pull/379) ([james-rms](https://github.com/james-rms))
+- Add ObjectStoreRegistry \(\#347\) [\#375](https://github.com/apache/arrow-rs-object-store/pull/375) ([tustvold](https://github.com/tustvold))
+- Deprecate DynamoCommit \(\#373\) [\#374](https://github.com/apache/arrow-rs-object-store/pull/374) ([tustvold](https://github.com/tustvold))
+- Add PaginatedListStore [\#371](https://github.com/apache/arrow-rs-object-store/pull/371) ([tustvold](https://github.com/tustvold))
+- Fix 1.87 Clippy Lints [\#370](https://github.com/apache/arrow-rs-object-store/pull/370) ([tustvold](https://github.com/tustvold))
+- Return Non-Generic Errors from HttpStore [\#366](https://github.com/apache/arrow-rs-object-store/pull/366) ([Rynoxx](https://github.com/Rynoxx))
+- fix: mask the aws credential info [\#364](https://github.com/apache/arrow-rs-object-store/pull/364) ([yanghua](https://github.com/yanghua))
+- Update integration test to avoid long format strings [\#359](https://github.com/apache/arrow-rs-object-store/pull/359) ([alamb](https://github.com/alamb))
+- fix: treat TCP reset as a retryable error [\#351](https://github.com/apache/arrow-rs-object-store/pull/351) ([OmriSteiner](https://github.com/OmriSteiner))
+
+
 ## [v0.12.1](https://github.com/apache/arrow-rs-object-store/tree/v0.12.1) (2025-05-08)
 
 [Full Changelog](https://github.com/apache/arrow-rs-object-store/compare/v0.12.0...v0.12.1)
