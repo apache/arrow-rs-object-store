@@ -101,27 +101,29 @@ impl HttpError {
 
         // Reqwest error variants aren't great, attempt to refine them
         let mut source = e.source();
-        while let Some(e) = source {
-            if let Some(e) = e.downcast_ref::<hyper::Error>() {
-                if e.is_closed() || e.is_incomplete_message() || e.is_body_write_aborted() {
-                    kind = HttpErrorKind::Request;
-                } else if e.is_timeout() {
-                    kind = HttpErrorKind::Timeout;
+        while kind == HttpErrorKind::Unknown {
+            if let Some(e) = source {
+                if let Some(e) = e.downcast_ref::<hyper::Error>() {
+                    if e.is_closed() || e.is_incomplete_message() || e.is_body_write_aborted() {
+                        kind = HttpErrorKind::Request;
+                    } else if e.is_timeout() {
+                        kind = HttpErrorKind::Timeout;
+                    }
                 }
+                if let Some(e) = e.downcast_ref::<std::io::Error>() {
+                    match e.kind() {
+                        std::io::ErrorKind::TimedOut => kind = HttpErrorKind::Timeout,
+                        std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::BrokenPipe
+                        | std::io::ErrorKind::UnexpectedEof => kind = HttpErrorKind::Interrupted,
+                        _ => {}
+                    }
+                }
+                source = e.source();
+            } else {
                 break;
             }
-            if let Some(e) = e.downcast_ref::<std::io::Error>() {
-                match e.kind() {
-                    std::io::ErrorKind::TimedOut => kind = HttpErrorKind::Timeout,
-                    std::io::ErrorKind::ConnectionAborted
-                    | std::io::ErrorKind::ConnectionReset
-                    | std::io::ErrorKind::BrokenPipe
-                    | std::io::ErrorKind::UnexpectedEof => kind = HttpErrorKind::Interrupted,
-                    _ => {}
-                }
-                break;
-            }
-            source = e.source();
         }
         Self {
             kind,
