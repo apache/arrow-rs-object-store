@@ -19,8 +19,8 @@
 
 use crate::path::Path;
 use crate::{
-    Attributes, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayloadMut, TagSet,
-    WriteMultipart,
+    Attributes, Extensions, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions,
+    PutPayloadMut, TagSet, WriteMultipart,
 };
 use bytes::Bytes;
 use futures::future::{BoxFuture, FutureExt};
@@ -222,7 +222,7 @@ pub struct BufWriter {
     max_concurrency: usize,
     attributes: Option<Attributes>,
     tags: Option<TagSet>,
-    extensions: Option<::http::Extensions>,
+    extensions: Option<Extensions>,
     state: BufWriterState,
     store: Arc<dyn ObjectStore>,
 }
@@ -297,7 +297,7 @@ impl BufWriter {
     /// that need to pass context-specific information (like tracing spans) via trait methods.
     ///
     /// These extensions are ignored entirely by backends offered through this crate.
-    pub fn with_extensions(self, extensions: ::http::Extensions) -> Self {
+    pub fn with_extensions(self, extensions: Extensions) -> Self {
         Self {
             extensions: Some(extensions),
             ..self

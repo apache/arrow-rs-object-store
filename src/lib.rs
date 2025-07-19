@@ -567,6 +567,9 @@ pub use payload::*;
 pub use upload::*;
 pub use util::{coalesce_ranges, collect_bytes, GetRange, OBJECT_STORE_COALESCE_DEFAULT};
 
+// Re-export HTTP types used in public API
+pub use ::http::{Extensions, HeaderMap, HeaderValue};
+
 use crate::path::Path;
 #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 use crate::util::maybe_spawn_blocking;
@@ -987,7 +990,7 @@ pub struct GetOptions {
     /// that need to pass context-specific information (like tracing spans) via trait methods.
     ///
     /// These extensions are ignored entirely by backends offered through this crate.
-    pub extensions: ::http::Extensions,
+    pub extensions: Extensions,
 }
 
 impl GetOptions {
@@ -1184,7 +1187,7 @@ pub struct PutOptions {
     /// These extensions are ignored entirely by backends offered through this crate.
     ///
     /// They are also eclused from [`PartialEq`] and [`Eq`].
-    pub extensions: ::http::Extensions,
+    pub extensions: Extensions,
 }
 
 impl PartialEq<Self> for PutOptions {
@@ -1256,7 +1259,7 @@ pub struct PutMultipartOptions {
     /// These extensions are ignored entirely by backends offered through this crate.
     ///
     /// They are also eclused from [`PartialEq`] and [`Eq`].
-    pub extensions: ::http::Extensions,
+    pub extensions: Extensions,
 }
 
 impl PartialEq<Self> for PutMultipartOptions {
@@ -1648,5 +1651,23 @@ mod tests {
         options = GetOptions::default();
         options.if_match = Some("*".to_string()); // Passes if file exists
         options.check_preconditions(&meta).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "http")]
+    fn test_reexported_types() {
+        // Test HeaderMap
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", HeaderValue::from_static("text/plain"));
+        assert_eq!(headers.len(), 1);
+
+        // Test HeaderValue
+        let value = HeaderValue::from_static("test-value");
+        assert_eq!(value.as_bytes(), b"test-value");
+
+        // Test Extensions
+        let mut extensions = Extensions::new();
+        extensions.insert("test-key");
+        assert!(extensions.get::<&str>().is_some());
     }
 }
