@@ -80,7 +80,7 @@ impl HdfsObjectStore {
     /// ```rust
     /// # use std::sync::Arc;
     /// use hdfs_native::Client;
-    /// # use hdfs_native_object_store::HdfsObjectStore;
+    /// # use object_store::hdfs::HdfsObjectStore;
     /// # fn main() -> object_store::Result<()> {
     /// let client = Client::new("hdfs://127.0.0.1:9000")?;
     /// let store = HdfsObjectStore::new(Arc::new(client));
@@ -95,7 +95,7 @@ impl HdfsObjectStore {
     ///
     /// Connect to a NameNode
     /// ```rust
-    /// # use hdfs_native_object_store::HdfsObjectStore;
+    /// # use object_store::hdfs::HdfsObjectStore;
     /// # fn main() -> object_store::Result<()> {
     /// let store = HdfsObjectStore::with_url("hdfs://127.0.0.1:9000")?;
     /// # Ok(())
@@ -109,7 +109,7 @@ impl HdfsObjectStore {
     ///
     /// Connect to a NameService
     /// ```rust
-    /// # use hdfs_native_object_store::HdfsObjectStore;
+    /// # use object_store::hdfs::HdfsObjectStore;
     /// # use std::collections::HashMap;
     /// # fn main() -> object_store::Result<()> {
     /// let config = HashMap::from([
