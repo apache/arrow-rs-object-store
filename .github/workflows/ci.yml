@@ -55,6 +55,8 @@ jobs:
         run: cargo clippy --features gcp -- -D warnings
       - name: Run clippy with azure feature
         run: cargo clippy --features azure -- -D warnings
+      - name: Run clippy with hdfs feature
+        run: cargo clippy --features hdfs -- -D warnings
       - name: Run clippy with http feature
         run: cargo clippy --features http -- -D warnings
       - name: Run clippy with integration feature
@@ -109,6 +111,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Install Java for HDFS integration tests
+      - uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
       # We are forced to use docker commands instead of service containers as we need to override the entrypoints
       # which is currently not supported - https://github.com/actions/runner/discussions/1872
       - name: Configure Fake GCS Server (GCP emulation)
@@ -148,7 +156,7 @@ jobs:
           rustup default stable
 
       - name: Run object_store tests
-        run: cargo test --features=aws,azure,gcp,http
+        run: cargo test --features=aws,azure,gcp,hdfs,http
 
       # Don't rerun doc tests (some of them rely on features other than aws)
       - name: Run object_store tests (AWS native conditional put)
@@ -192,7 +200,7 @@ jobs:
       - name: Install wasm32-wasip1
         run: rustup target add wasm32-wasip1
       - name: Build wasm32-wasip1
-        run: cargo build --all-features --target wasm32-wasip1
+        run: cargo build fs,aws,azure,gcp,http,cloud,tls-webpki-roots --target wasm32-wasip1
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - uses: actions/setup-node@v4
