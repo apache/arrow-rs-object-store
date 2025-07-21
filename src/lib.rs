@@ -87,6 +87,10 @@
     doc = "* [`azure`]: [Azure Blob Storage](https://azure.microsoft.com/en-gb/services/storage/blobs/). See [`MicrosoftAzureBuilder`](azure::MicrosoftAzureBuilder)"
 )]
 #![cfg_attr(
+    feature = "hdfs",
+    doc = "* [`hdfs`]: [Hadoop Distributed File System](https://hadoop.apache.org/docs/stable/hadoop-project-dist/hadoop-hdfs/HdfsDesign.html). See [`MicrosoftAzureBuilder`](azure::MicrosoftAzureBuilder)"
+)]
+#![cfg_attr(
     feature = "http",
     doc = "* [`http`]: [HTTP/WebDAV Storage](https://datatracker.ietf.org/doc/html/rfc2518). See [`HttpBuilder`](http::HttpBuilder)"
 )]
@@ -516,6 +520,10 @@ pub mod chunked;
 pub mod delimited;
 #[cfg(feature = "gcp")]
 pub mod gcp;
+
+#[cfg(feature = "hdfs")]
+pub mod hdfs;
+
 #[cfg(feature = "http")]
 pub mod http;
 pub mod limit;
