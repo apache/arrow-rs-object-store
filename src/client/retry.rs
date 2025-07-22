@@ -506,14 +506,21 @@ impl RetryExt for HttpRequestBuilder {
 #[cfg(test)]
 mod tests {
     use crate::client::mock_server::MockServer;
-    use crate::client::retry::{body_contains_error, RequestError, RetryExt};
-    use crate::client::HttpClient;
+    use crate::client::retry::{body_contains_error, RequestError, RetryContext, RetryExt};
+    use crate::client::{HttpClient, HttpResponse};
     use crate::RetryConfig;
+    use http::StatusCode;
     use hyper::header::LOCATION;
+    use hyper::server::conn::http1;
+    use hyper::service::service_fn;
     use hyper::Response;
-    use reqwest::{Client, Method, StatusCode};
+    use hyper_util::rt::TokioIo;
+    use reqwest::{Client, Method};
+    use std::convert::Infallible;
     use std::error::Error;
     use std::time::Duration;
+    use tokio::net::TcpListener;
+    use tokio::time::timeout;
 
     #[test]
     fn test_body_contains_error() {
@@ -817,5 +824,56 @@ mod tests {
 
         // Shutdown
         mock.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn test_connection_reset_is_retried() {
+        let retry = RetryConfig {
+            backoff: Default::default(),
+            max_retries: 2,
+            retry_timeout: Duration::from_secs(1),
+        };
+        assert!(retry.max_retries > 0);
+
+        // Setup server which resets a connection and then quits
+        let listener = TcpListener::bind("::1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let handle = tokio::spawn(async move {
+            // Reset the connection on the first n-1 attempts
+            for _ in 0..retry.max_retries {
+                let (stream, _) = listener.accept().await.unwrap();
+                stream.set_linger(Some(Duration::from_secs(0))).unwrap();
+            }
+            // Succeed on the last attempt
+            let (stream, _) = listener.accept().await.unwrap();
+            let _ = http1::Builder::new()
+                // we want the connection to end after responding
+                .keep_alive(false)
+                .serve_connection(
+                    TokioIo::new(stream),
+                    service_fn(move |_req| async {
+                        Ok::<_, Infallible>(HttpResponse::new("Success!".to_string().into()))
+                    }),
+                )
+                .await
+                .unwrap();
+        });
+
+        // Perform the request
+        let client = HttpClient::new(reqwest::Client::new());
+        let ctx = &mut RetryContext::new(&retry);
+        let res = client
+            .get(url)
+            .retryable_request()
+            .send(ctx)
+            .await
+            .expect("request should eventually succeed");
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(ctx.exhausted());
+
+        // Wait for server to shutdown
+        let _ = timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("shutdown shouldn't hang");
     }
 }
