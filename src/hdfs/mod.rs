@@ -331,7 +331,6 @@ impl ObjectStore for HdfsObjectStore {
     /// Note: the order of returned [`ObjectMeta`] is not guaranteed
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         let absolute_dir = prefix.map(make_absolute_file).unwrap_or("/".to_string());
-        println!("Listing from {absolute_dir}");
 
         let status_stream = self
             .client
@@ -361,7 +360,6 @@ impl ObjectStore for HdfsObjectStore {
     /// `foo/bar_baz/x`.
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
         let absolute_dir = prefix.map(make_absolute_file).unwrap_or("/".to_string());
-        println!("Listing from {absolute_dir}");
 
         let mut status_stream = self
             .client
