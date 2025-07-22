@@ -846,7 +846,7 @@ mod tests {
             }
             // Succeed on the last attempt
             let (stream, _) = listener.accept().await.unwrap();
-            let _ = http1::Builder::new()
+            http1::Builder::new()
                 // we want the connection to end after responding
                 .keep_alive(false)
                 .serve_connection(
