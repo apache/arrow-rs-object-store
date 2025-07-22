@@ -59,6 +59,7 @@ use std::sync::Arc;
 
 const VERSION_HEADER: &str = "x-amz-version-id";
 const SHA256_CHECKSUM: &str = "x-amz-checksum-sha256";
+const IMPL_DEFINED_ATTR_HEADER_PREFIX: &str = "x-amz-";
 const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-amz-meta-";
 const ALGORITHM: &str = "x-amz-checksum-algorithm";
 
@@ -375,6 +376,10 @@ impl Request<'_> {
                 }
                 Attribute::Metadata(k_suffix) => builder.header(
                     &format!("{USER_DEFINED_METADATA_HEADER_PREFIX}{k_suffix}"),
+                    v.as_ref(),
+                ),
+                Attribute::Other(attr) => builder.header(
+                    &format!("{IMPL_DEFINED_ATTR_HEADER_PREFIX}{attr}"),
                     v.as_ref(),
                 ),
             };
