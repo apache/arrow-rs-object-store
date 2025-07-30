@@ -49,6 +49,7 @@ use url::Url;
 
 const VERSION_HEADER: &str = "x-ms-version-id";
 const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-ms-meta-";
+const IMPL_DEFINED_ATTR_HEADER_PREFIX: &str = "x-ms-";
 static MS_CACHE_CONTROL: HeaderName = HeaderName::from_static("x-ms-blob-cache-control");
 static MS_CONTENT_TYPE: HeaderName = HeaderName::from_static("x-ms-blob-content-type");
 static MS_CONTENT_DISPOSITION: HeaderName =
@@ -244,6 +245,10 @@ impl PutRequest<'_> {
                 }
                 Attribute::Metadata(k_suffix) => builder.header(
                     &format!("{USER_DEFINED_METADATA_HEADER_PREFIX}{k_suffix}"),
+                    v.as_ref(),
+                ),
+                Attribute::Other(attr) => builder.header(
+                    &format!("{IMPL_DEFINED_ATTR_HEADER_PREFIX}{attr}"),
                     v.as_ref(),
                 ),
             };
