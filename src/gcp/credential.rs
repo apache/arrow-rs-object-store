@@ -31,7 +31,13 @@ use futures::TryFutureExt;
 use http::{HeaderMap, Method};
 use itertools::Itertools;
 use percent_encoding::utf8_percent_encode;
+// Crypto provider imports - ring
+#[cfg(feature = "crypto-ring")]
 use ring::signature::RsaKeyPair;
+
+// Crypto provider imports - aws-lc-rs
+#[cfg(feature = "crypto-aws-lc-rs")]
+use aws_lc_rs::signature::RsaKeyPair;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::env;
@@ -70,11 +76,20 @@ pub enum Error {
     #[error("Invalid RSA key: {}", source)]
     InvalidKey {
         #[from]
+        #[cfg(feature = "crypto-ring")]
         source: ring::error::KeyRejected,
+        #[from]
+        #[cfg(feature = "crypto-aws-lc-rs")]
+        source: aws_lc_rs::error::KeyRejected,
     },
 
     #[error("Error signing: {}", source)]
-    Sign { source: ring::error::Unspecified },
+    Sign {
+        #[cfg(feature = "crypto-ring")]
+        source: ring::error::Unspecified,
+        #[cfg(feature = "crypto-aws-lc-rs")]
+        source: aws_lc_rs::error::Unspecified,
+    },
 
     #[error("Error encoding jwt payload: {}", source)]
     Encode { source: serde_json::Error },
@@ -154,17 +169,34 @@ impl ServiceAccountKey {
     }
 
     fn sign(&self, string_to_sign: &str) -> Result<String> {
-        let mut signature = vec![0; self.0.public().modulus_len()];
-        self.0
-            .sign(
-                &ring::signature::RSA_PKCS1_SHA256,
-                &ring::rand::SystemRandom::new(),
-                string_to_sign.as_bytes(),
-                &mut signature,
-            )
-            .map_err(|source| Error::Sign { source })?;
+        #[cfg(feature = "crypto-ring")]
+        {
+            let mut signature = vec![0; self.0.public().modulus_len()];
+            self.0
+                .sign(
+                    &ring::signature::RSA_PKCS1_SHA256,
+                    &ring::rand::SystemRandom::new(),
+                    string_to_sign.as_bytes(),
+                    &mut signature,
+                )
+                .map_err(|source| Error::Sign { source })?;
+            Ok(hex_encode(&signature))
+        }
 
-        Ok(hex_encode(&signature))
+        #[cfg(feature = "crypto-aws-lc-rs")]
+        {
+            // aws-lc-rs is ring-compatible, but uses public_modulus_len() instead of public().modulus_len()
+            let mut signature = vec![0; self.0.public_modulus_len()];
+            self.0
+                .sign(
+                    &aws_lc_rs::signature::RSA_PKCS1_SHA256,
+                    &aws_lc_rs::rand::SystemRandom::new(),
+                    string_to_sign.as_bytes(),
+                    &mut signature,
+                )
+                .map_err(|source| Error::Sign { source })?;
+            Ok(hex_encode(&signature))
+        }
     }
 }
 
@@ -290,16 +322,36 @@ impl TokenProvider for SelfSignedJwt {
 
         let claim_str = b64_encode_obj(&claims)?;
         let message = [jwt_header.as_ref(), claim_str.as_ref()].join(".");
-        let mut sig_bytes = vec![0; self.private_key.0.public().modulus_len()];
-        self.private_key
-            .0
-            .sign(
-                &ring::signature::RSA_PKCS1_SHA256,
-                &ring::rand::SystemRandom::new(),
-                message.as_bytes(),
-                &mut sig_bytes,
-            )
-            .map_err(|source| Error::Sign { source })?;
+        #[cfg(feature = "crypto-ring")]
+        let sig_bytes = {
+            let mut sig_bytes = vec![0; self.private_key.0.public().modulus_len()];
+            self.private_key
+                .0
+                .sign(
+                    &ring::signature::RSA_PKCS1_SHA256,
+                    &ring::rand::SystemRandom::new(),
+                    message.as_bytes(),
+                    &mut sig_bytes,
+                )
+                .map_err(|source| Error::Sign { source })?;
+            sig_bytes
+        };
+
+        #[cfg(feature = "crypto-aws-lc-rs")]
+        let sig_bytes = {
+            // aws-lc-rs is ring-compatible, but uses public_modulus_len() instead of public().modulus_len()
+            let mut sig_bytes = vec![0; self.private_key.0.public_modulus_len()];
+            self.private_key
+                .0
+                .sign(
+                    &aws_lc_rs::signature::RSA_PKCS1_SHA256,
+                    &aws_lc_rs::rand::SystemRandom::new(),
+                    message.as_bytes(),
+                    &mut sig_bytes,
+                )
+                .map_err(|source| Error::Sign { source })?;
+            sig_bytes
+        };
 
         let signature = BASE64_URL_SAFE_NO_PAD.encode(sig_bytes);
         let bearer = [message, signature].join(".");

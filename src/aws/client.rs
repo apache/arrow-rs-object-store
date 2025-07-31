@@ -52,8 +52,17 @@ use itertools::Itertools;
 use md5::{Digest, Md5};
 use percent_encoding::{utf8_percent_encode, PercentEncode};
 use quick_xml::events::{self as xml_events};
+// Crypto provider imports - ring
+#[cfg(feature = "crypto-ring")]
 use ring::digest;
+#[cfg(feature = "crypto-ring")]
 use ring::digest::Context;
+
+// Crypto provider imports - aws-lc-rs
+#[cfg(feature = "crypto-aws-lc-rs")]
+use aws_lc_rs::digest;
+#[cfg(feature = "crypto-aws-lc-rs")]
+use aws_lc_rs::digest::Context;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
