@@ -80,6 +80,44 @@ There following community maintained crates provide additional functionality for
 [anda_object_store-readme]: https://github.com/ldclabs/anda-db/blob/main/rs/anda_object_store
 [ICP]: https://www.internetcomputer.org/
 
+## Cryptographic Provider Selection
+
+This crate supports two cryptographic providers for cloud storage operations:
+
+- **ring** (default): The original cryptographic library
+- **aws-lc-rs**: AWS's FIPS-compliant cryptographic library
+
+### Usage
+
+By default, the crate uses `ring` as the cryptographic provider:
+
+```toml
+[dependencies]
+object_store = { version = "0.12", features = ["cloud"] }
+```
+
+To use `aws-lc-rs` instead, disable the default features and enable the `crypto-aws-lc-rs` feature:
+
+```toml
+[dependencies]
+object_store = { version = "0.12", default-features = false, features = ["cloud-aws-lc-rs"] }
+```
+
+Or manually select the crypto provider:
+
+```toml
+[dependencies]
+object_store = { version = "0.12", default-features = false, features = ["cloud", "crypto-aws-lc-rs"] }
+```
+
+**Important**: You cannot enable both `crypto-ring` and `crypto-aws-lc-rs` features simultaneously. The crate will fail to compile if both are enabled.
+
+### Feature Flags
+
+- `crypto-ring`: Enable ring cryptographic provider
+- `crypto-aws-lc-rs`: Enable aws-lc-rs cryptographic provider
+- `cloud`: Base cloud storage features (requires a crypto provider)
+
 ## Release Schedule
 
 The [`object_store`] crate follows [Semantic Versioning]. We aim to release new
