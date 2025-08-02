@@ -61,6 +61,7 @@ const VERSION_HEADER: &str = "x-amz-version-id";
 const SHA256_CHECKSUM: &str = "x-amz-checksum-sha256";
 const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-amz-meta-";
 const ALGORITHM: &str = "x-amz-checksum-algorithm";
+const STORAGE_CLASS: &str = "x-amz-storage-class";
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, thiserror::Error)]
@@ -373,6 +374,7 @@ impl Request<'_> {
                     has_content_type = true;
                     builder.header(CONTENT_TYPE, v.as_ref())
                 }
+                Attribute::StorageClass => builder.header(STORAGE_CLASS, v.as_ref()),
                 Attribute::Metadata(k_suffix) => builder.header(
                     &format!("{USER_DEFINED_METADATA_HEADER_PREFIX}{k_suffix}"),
                     v.as_ref(),

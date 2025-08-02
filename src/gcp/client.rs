@@ -51,6 +51,7 @@ use std::sync::Arc;
 const VERSION_HEADER: &str = "x-goog-generation";
 const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
 const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-goog-meta-";
+const STORAGE_CLASS: &str = "x-goog-storage-class";
 
 static VERSION_MATCH: HeaderName = HeaderName::from_static("x-goog-if-generation-match");
 
@@ -201,6 +202,7 @@ impl Request<'_> {
                     has_content_type = true;
                     builder.header(CONTENT_TYPE, v.as_ref())
                 }
+                Attribute::StorageClass => builder.header(STORAGE_CLASS, v.as_ref()),
                 Attribute::Metadata(k_suffix) => builder.header(
                     &format!("{USER_DEFINED_METADATA_HEADER_PREFIX}{k_suffix}"),
                     v.as_ref(),
