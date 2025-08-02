@@ -45,6 +45,10 @@ pub enum Attribute {
     ///
     /// See [Cache-Control](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Cache-Control)
     CacheControl,
+    /// Specifies the storage class of the object.
+    ///
+    /// See [AWS](https://aws.amazon.com/s3/storage-classes/) and [GCP](https://cloud.google.com/storage/docs/storage-classes).
+    StorageClass,
     /// Specifies a user-defined metadata field for the object
     ///
     /// The String is a user-defined key
