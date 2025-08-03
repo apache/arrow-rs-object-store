@@ -1079,7 +1079,6 @@ impl AmazonS3Builder {
 
         let config = S3Config {
             region,
-            endpoint: self.endpoint,
             bucket,
             bucket_endpoint,
             credentials,
@@ -1587,7 +1586,7 @@ mod tests {
                 config_key
             );
         } else {
-            panic!("{} not propagated as ClientConfigKey", key);
+            panic!("{key} not propagated as ClientConfigKey");
         }
     }
 
@@ -1606,7 +1605,7 @@ mod tests {
 
         let s3 = builder.build().expect("should build successfully");
         let creds = &s3.client.config.credentials;
-        let debug_str = format!("{:?}", creds);
+        let debug_str = format!("{creds:?}");
         assert!(
             debug_str.contains("EKSPodCredentialProvider"),
             "expected EKS provider but got: {debug_str}"

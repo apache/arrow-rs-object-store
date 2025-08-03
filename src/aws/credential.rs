@@ -1284,7 +1284,7 @@ mod tests {
             token: Some("temp_token".to_string()),
         };
 
-        let debug_output = format!("{:?}", cred);
+        let debug_output = format!("{cred:?}");
 
         assert!(debug_output.contains("key_id: \"AKIAXXX\""));
         assert!(debug_output.contains("secret_key: \"******\""));

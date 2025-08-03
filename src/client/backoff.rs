@@ -110,7 +110,23 @@ impl Backoff {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::rngs::mock::StepRng;
+    use rand::rand_core::impls::fill_bytes_via_next;
+
+    struct FixedRng(u64);
+
+    impl RngCore for FixedRng {
+        fn next_u32(&mut self) -> u32 {
+            self.0 as _
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            self.0
+        }
+
+        fn fill_bytes(&mut self, dst: &mut [u8]) {
+            fill_bytes_via_next(self, dst)
+        }
+    }
 
     #[test]
     fn test_backoff() {
@@ -127,7 +143,7 @@ mod tests {
         let assert_fuzzy_eq = |a: f64, b: f64| assert!((b - a).abs() < 0.0001, "{a} != {b}");
 
         // Create a static rng that takes the minimum of the range
-        let rng = Box::new(StepRng::new(0, 0));
+        let rng = Box::new(FixedRng(0));
         let mut backoff = Backoff::new_with_rng(&config, Some(rng));
 
         for _ in 0..20 {
@@ -135,7 +151,7 @@ mod tests {
         }
 
         // Create a static rng that takes the maximum of the range
-        let rng = Box::new(StepRng::new(u64::MAX, 0));
+        let rng = Box::new(FixedRng(u64::MAX));
         let mut backoff = Backoff::new_with_rng(&config, Some(rng));
 
         for i in 0..20 {
@@ -144,7 +160,7 @@ mod tests {
         }
 
         // Create a static rng that takes the mid point of the range
-        let rng = Box::new(StepRng::new(u64::MAX / 2, 0));
+        let rng = Box::new(FixedRng(u64::MAX / 2));
         let mut backoff = Backoff::new_with_rng(&config, Some(rng));
 
         let mut value = init_backoff_secs;

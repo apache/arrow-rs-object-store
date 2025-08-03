@@ -99,8 +99,8 @@ The vote will be open for at least 72 hours.
 
 [1]: https://github.com/apache/arrow-rs-object-store/tree/${release_hash}
 [2]: ${url}
-[3]: https://github.com/apache/arrow-rs-object-store/blob/${release_hash}/object_store/CHANGELOG.md
-[4]: https://github.com/apache/arrow-rs-object-store/blob/main/object_store/dev/release/verify-release-candidate.sh
+[3]: https://github.com/apache/arrow-rs-object-store/blob/${release_hash}/CHANGELOG.md
+[4]: https://github.com/apache/arrow-rs-object-store/blob/main/dev/release/verify-release-candidate.sh
 MAIL
 echo "---------------------------------------------------------"
 

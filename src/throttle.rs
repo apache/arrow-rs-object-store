@@ -23,7 +23,7 @@ use std::{convert::TryInto, sync::Arc};
 use crate::multipart::{MultipartStore, PartId};
 use crate::{
     path::Path, GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
+    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
 };
 use crate::{GetOptions, UploadPart};
 use async_trait::async_trait;
@@ -174,7 +174,7 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
         let upload = self.inner.put_multipart_opts(location, opts).await?;
         Ok(Box::new(ThrottledUpload {
@@ -404,7 +404,9 @@ impl MultipartUpload for ThrottledUpload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{integration::*, memory::InMemory, GetResultPayload};
+    #[cfg(target_os = "linux")]
+    use crate::GetResultPayload;
+    use crate::{integration::*, memory::InMemory};
     use futures::TryStreamExt;
     use tokio::time::Duration;
     use tokio::time::Instant;

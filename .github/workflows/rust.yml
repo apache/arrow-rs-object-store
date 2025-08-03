@@ -30,7 +30,6 @@ on:
   pull_request:
 
 jobs:
-
   # Run cargo fmt for all crates
   lint:
     name: Lint (cargo fmt)
@@ -60,6 +59,8 @@ jobs:
           cargo update -p tokio --precise 1.29.1
           cargo update -p url --precise 2.5.0
           cargo update -p once_cell --precise 1.20.3
+          cargo update -p tracing-core --precise 0.1.33
+          cargo update -p tracing-attributes --precise 0.1.28
       - name: Check
         run: |
           # run `cargo msrv verify` to see problems

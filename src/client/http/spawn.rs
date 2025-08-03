@@ -83,7 +83,9 @@ impl<T: HttpService + Clone> HttpService for SpawnService<T> {
             }
 
             while let Some(x) = body.frame().await {
-                sender.send(x).unwrap();
+                if sender.send(x).is_err() {
+                    return;
+                }
             }
         }));
 

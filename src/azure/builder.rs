@@ -658,8 +658,8 @@ impl MicrosoftAzureBuilder {
         };
 
         match parsed.scheme() {
-            "az" | "adl" | "azure" => self.container_name = Some(validate(host)?),
-            "abfs" | "abfss" => {
+            "adl" | "azure" => self.container_name = Some(validate(host)?),
+            "az" | "abfs" | "abfss" => {
                 // abfs(s) might refer to the fsspec convention abfs://<container>/<path>
                 // or the convention for the hadoop driver abfs[s]://<file_system>@<account_name>.dfs.core.windows.net/<path>
                 if parsed.username().is_empty() {
@@ -1105,6 +1105,14 @@ mod tests {
 
         let mut builder = MicrosoftAzureBuilder::new();
         builder
+            .parse_url("az://container@account.dfs.core.windows.net/path-part/file")
+            .unwrap();
+        assert_eq!(builder.account_name, Some("account".to_string()));
+        assert_eq!(builder.container_name, Some("container".to_string()));
+        assert!(!builder.use_fabric_endpoint.get().unwrap());
+
+        let mut builder = MicrosoftAzureBuilder::new();
+        builder
             .parse_url("abfss://file_system@account.dfs.fabric.microsoft.com/")
             .unwrap();
         assert_eq!(builder.account_name, Some("account".to_string()));
@@ -1245,7 +1253,7 @@ mod tests {
                 config_key
             );
         } else {
-            panic!("{} not propagated as ClientConfigKey", key);
+            panic!("{key} not propagated as ClientConfigKey");
         }
     }
 }

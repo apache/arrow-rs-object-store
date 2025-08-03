@@ -30,7 +30,7 @@ use crate::multipart::{MultipartStore, PartId};
 use crate::util::InvalidGetRange;
 use crate::{
     path::Path, Attributes, GetRange, GetResult, GetResultPayload, ListResult, MultipartId,
-    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutResult,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutResult,
     Result, UpdateVersion, UploadPart,
 };
 use crate::{GetOptions, PutPayload};
@@ -224,7 +224,7 @@ impl ObjectStore for InMemory {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
         Ok(Box::new(InMemoryUpload {
             location: location.clone(),

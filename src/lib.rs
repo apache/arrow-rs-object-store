@@ -567,6 +567,9 @@ pub use payload::*;
 pub use upload::*;
 pub use util::{coalesce_ranges, collect_bytes, GetRange, OBJECT_STORE_COALESCE_DEFAULT};
 
+// Re-export HTTP types used in public API
+pub use ::http::{Extensions, HeaderMap, HeaderValue};
+
 use crate::path::Path;
 #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 use crate::util::maybe_spawn_blocking;
@@ -614,7 +617,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ///
     /// For more advanced multipart uploads see [`MultipartStore`](multipart::MultipartStore)
     async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
-        self.put_multipart_opts(location, PutMultipartOpts::default())
+        self.put_multipart_opts(location, PutMultipartOptions::default())
             .await
     }
 
@@ -627,7 +630,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>>;
 
     /// Return the bytes that are stored at the specified location.
@@ -823,7 +826,7 @@ macro_rules! as_ref_impl {
             async fn put_multipart_opts(
                 &self,
                 location: &Path,
-                opts: PutMultipartOpts,
+                opts: PutMultipartOptions,
             ) -> Result<Box<dyn MultipartUpload>> {
                 self.as_ref().put_multipart_opts(location, opts).await
             }
@@ -987,7 +990,7 @@ pub struct GetOptions {
     /// that need to pass context-specific information (like tracing spans) via trait methods.
     ///
     /// These extensions are ignored entirely by backends offered through this crate.
-    pub extensions: ::http::Extensions,
+    pub extensions: Extensions,
 }
 
 impl GetOptions {
@@ -1184,7 +1187,7 @@ pub struct PutOptions {
     /// These extensions are ignored entirely by backends offered through this crate.
     ///
     /// They are also eclused from [`PartialEq`] and [`Eq`].
-    pub extensions: ::http::Extensions,
+    pub extensions: Extensions,
 }
 
 impl PartialEq<Self> for PutOptions {
@@ -1234,9 +1237,14 @@ impl From<Attributes> for PutOptions {
     }
 }
 
+// See <https://github.com/apache/arrow-rs-object-store/issues/339>.
+#[doc(hidden)]
+#[deprecated(note = "Use PutMultipartOptions", since = "0.12.3")]
+pub type PutMultipartOpts = PutMultipartOptions;
+
 /// Options for [`ObjectStore::put_multipart_opts`]
 #[derive(Debug, Clone, Default)]
-pub struct PutMultipartOpts {
+pub struct PutMultipartOptions {
     /// Provide a [`TagSet`] for this object
     ///
     /// Implementations that don't support object tagging should ignore this
@@ -1251,10 +1259,10 @@ pub struct PutMultipartOpts {
     /// These extensions are ignored entirely by backends offered through this crate.
     ///
     /// They are also eclused from [`PartialEq`] and [`Eq`].
-    pub extensions: ::http::Extensions,
+    pub extensions: Extensions,
 }
 
-impl PartialEq<Self> for PutMultipartOpts {
+impl PartialEq<Self> for PutMultipartOptions {
     fn eq(&self, other: &Self) -> bool {
         let Self {
             tags,
@@ -1270,9 +1278,9 @@ impl PartialEq<Self> for PutMultipartOpts {
     }
 }
 
-impl Eq for PutMultipartOpts {}
+impl Eq for PutMultipartOptions {}
 
-impl From<TagSet> for PutMultipartOpts {
+impl From<TagSet> for PutMultipartOptions {
     fn from(tags: TagSet) -> Self {
         Self {
             tags,
@@ -1281,7 +1289,7 @@ impl From<TagSet> for PutMultipartOpts {
     }
 }
 
-impl From<Attributes> for PutMultipartOpts {
+impl From<Attributes> for PutMultipartOptions {
     fn from(attributes: Attributes) -> Self {
         Self {
             attributes,
@@ -1643,5 +1651,23 @@ mod tests {
         options = GetOptions::default();
         options.if_match = Some("*".to_string()); // Passes if file exists
         options.check_preconditions(&meta).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "http")]
+    fn test_reexported_types() {
+        // Test HeaderMap
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", HeaderValue::from_static("text/plain"));
+        assert_eq!(headers.len(), 1);
+
+        // Test HeaderValue
+        let value = HeaderValue::from_static("test-value");
+        assert_eq!(value.as_bytes(), b"test-value");
+
+        // Test Extensions
+        let mut extensions = Extensions::new();
+        extensions.insert("test-key");
+        assert!(extensions.get::<&str>().is_some());
     }
 }

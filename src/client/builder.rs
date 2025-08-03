@@ -153,7 +153,7 @@ impl HttpRequestBuilder {
 
     #[cfg(feature = "gcp")]
     pub(crate) fn bearer_auth(mut self, token: &str) -> Self {
-        let value = HeaderValue::try_from(format!("Bearer {}", token));
+        let value = HeaderValue::try_from(format!("Bearer {token}"));
         match (value, &mut self.request) {
             (Ok(mut v), Ok(r)) => {
                 v.set_sensitive(true);
@@ -165,7 +165,7 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(any(feature = "aws", feature = "gcp"))]
+    #[cfg(feature = "gcp")]
     pub(crate) fn json<S: serde::Serialize>(mut self, s: S) -> Self {
         match (serde_json::to_vec(&s), &mut self.request) {
             (Ok(json), Ok(request)) => {
