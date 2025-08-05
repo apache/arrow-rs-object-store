@@ -22,7 +22,7 @@ use std::ops::Range;
 
 use crate::path::Path;
 use crate::{
-    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    DeleteOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
     PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
 };
 
@@ -156,6 +156,11 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
     async fn delete(&self, location: &Path) -> Result<()> {
         let full_path = self.full_path(location);
         self.inner.delete(&full_path).await
+    }
+
+    async fn delete_opts(&self, location: &Path, opts: DeleteOptions) -> Result<()> {
+        let full_path = self.full_path(location);
+        self.inner.delete_opts(&full_path, opts).await
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
