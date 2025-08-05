@@ -198,6 +198,7 @@ impl Client {
                     }
                     // Ignore metadata attributes
                     Attribute::Metadata(_) => builder,
+                    Attribute::Other(attr) => builder.header(&**attr, v.as_ref()),
                 };
             }
 

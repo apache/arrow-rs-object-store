@@ -49,6 +49,13 @@ pub enum Attribute {
     ///
     /// The String is a user-defined key
     Metadata(Cow<'static, str>),
+    /// Specifies an implementation-specific attribute to be sent with the object
+    ///
+    /// Attribute is prefixed with implementation-defined prefixes are as follows:
+    /// - [`AWS`](crate::aws): `x-amz-`
+    /// - [`Azure`](crate::azure): `x-ms-`
+    /// - [`GCP`](crate::gcp): `x-goog-`
+    Other(Cow<'static, str>),
 }
 
 /// The value of an [`Attribute`]
@@ -199,10 +206,11 @@ mod tests {
             (Attribute::ContentType, "test"),
             (Attribute::CacheControl, "control"),
             (Attribute::Metadata("key1".into()), "value1"),
+            (Attribute::Other("key2".into()), "value2"),
         ]);
 
         assert!(!attributes.is_empty());
-        assert_eq!(attributes.len(), 6);
+        assert_eq!(attributes.len(), 7);
 
         assert_eq!(
             attributes.get(&Attribute::ContentType),
@@ -215,18 +223,18 @@ mod tests {
             attributes.insert(Attribute::CacheControl, "v1".into()),
             Some(metav)
         );
-        assert_eq!(attributes.len(), 6);
+        assert_eq!(attributes.len(), 7);
 
         assert_eq!(
             attributes.remove(&Attribute::CacheControl).unwrap(),
             "v1".into()
         );
-        assert_eq!(attributes.len(), 5);
+        assert_eq!(attributes.len(), 6);
 
         let metav: AttributeValue = "v2".into();
         attributes.insert(Attribute::CacheControl, metav.clone());
         assert_eq!(attributes.get(&Attribute::CacheControl), Some(&metav));
-        assert_eq!(attributes.len(), 6);
+        assert_eq!(attributes.len(), 7);
 
         assert_eq!(
             attributes.get(&Attribute::ContentDisposition),
@@ -243,6 +251,10 @@ mod tests {
         assert_eq!(
             attributes.get(&Attribute::Metadata("key1".into())),
             Some(&"value1".into())
+        );
+        assert_eq!(
+            attributes.get(&Attribute::Other("key2".into())),
+            Some(&"value2".into())
         );
     }
 }
