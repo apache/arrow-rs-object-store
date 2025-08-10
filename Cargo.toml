@@ -60,6 +60,7 @@ serde = { version = "1.0", default-features = false, features = ["derive"], opti
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
 serde_urlencoded = { version = "0.7", optional = true }
 tokio = { version = "1.29.0", features = ["sync", "macros", "rt", "time", "io-util"] }
+openssl = "0.10.73"
 
 [target.'cfg(target_family="unix")'.dev-dependencies]
 nix = { version = "0.30.0", features = ["fs"] }
@@ -70,7 +71,8 @@ wasm-bindgen-futures = "0.4.18"
 
 [features]
 default = ["fs"]
-cloud = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/stream", "chrono/serde", "base64", "rand", "ring", "http-body-util", "form_urlencoded", "serde_urlencoded"]
+ring = ["dep:ring"]
+cloud = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/stream", "chrono/serde", "base64", "rand", "dep:ring", "http-body-util", "form_urlencoded", "serde_urlencoded"]
 azure = ["cloud", "httparse"]
 fs = ["walkdir"]
 gcp = ["cloud", "rustls-pemfile"]

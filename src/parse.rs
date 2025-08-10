@@ -142,7 +142,7 @@ impl ObjectStoreScheme {
 macro_rules! builder_opts {
     ($builder:ty, $url:expr, $options:expr) => {{
         let builder = $options.into_iter().fold(
-            <$builder>::new().with_url($url.to_string()),
+            <$builder>::default().with_url($url.to_string()),
             |builder, (key, value)| match key.as_ref().parse() {
                 Ok(k) => builder.with_config(k, value),
                 Err(_) => builder,
@@ -209,9 +209,15 @@ where
         ObjectStoreScheme::GoogleCloudStorage => {
             builder_opts!(crate::gcp::GoogleCloudStorageBuilder, url, _options)
         }
-        #[cfg(feature = "azure")]
+        #[cfg(all(feature = "azure", feature = "ring"))]
         ObjectStoreScheme::MicrosoftAzure => {
-            builder_opts!(crate::azure::MicrosoftAzureBuilder, url, _options)
+            use crate::crypto::ring_crypto::RingProvider;
+
+            builder_opts!(
+                crate::azure::MicrosoftAzureBuilder<RingProvider>,
+                url,
+                _options
+            )
         }
         #[cfg(feature = "http")]
         ObjectStoreScheme::Http => {
