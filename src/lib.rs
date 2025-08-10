@@ -513,6 +513,7 @@ pub mod azure;
 pub mod buffered;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod chunked;
+pub mod crypto;
 pub mod delimited;
 #[cfg(feature = "gcp")]
 pub mod gcp;
