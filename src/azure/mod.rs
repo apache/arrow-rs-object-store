@@ -23,6 +23,7 @@
 //!
 //! Unused blocks will automatically be dropped after 7 days.
 use crate::{
+    crypto::CryptoProvider,
     multipart::{MultipartStore, PartId},
     path::Path,
     signer::Signer,
@@ -32,9 +33,9 @@ use crate::{
 use async_trait::async_trait;
 use futures::stream::{BoxStream, StreamExt, TryStreamExt};
 use reqwest::Method;
-use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{fmt::Debug, marker::PhantomData};
 use url::Url;
 
 use crate::client::get::GetClientExt;
@@ -58,11 +59,12 @@ const STORE: &str = "MicrosoftAzure";
 
 /// Interface for [Microsoft Azure Blob Storage](https://azure.microsoft.com/en-us/services/storage/blobs/).
 #[derive(Debug)]
-pub struct MicrosoftAzure {
-    client: Arc<AzureClient>,
+pub struct MicrosoftAzure<T> {
+    client: Arc<AzureClient<T>>,
+    _crypto_provider: PhantomData<T>,
 }
 
-impl MicrosoftAzure {
+impl<T> MicrosoftAzure<T> {
     /// Returns the [`AzureCredentialProvider`] used by [`MicrosoftAzure`]
     pub fn credentials(&self) -> &AzureCredentialProvider {
         &self.client.config().credentials
@@ -74,7 +76,7 @@ impl MicrosoftAzure {
     }
 }
 
-impl std::fmt::Display for MicrosoftAzure {
+impl<T> std::fmt::Display for MicrosoftAzure<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -86,7 +88,7 @@ impl std::fmt::Display for MicrosoftAzure {
 }
 
 #[async_trait]
-impl ObjectStore for MicrosoftAzure {
+impl<T: CryptoProvider> ObjectStore for MicrosoftAzure<T> {
     async fn put_opts(
         &self,
         location: &Path,
@@ -157,7 +159,7 @@ impl ObjectStore for MicrosoftAzure {
 }
 
 #[async_trait]
-impl Signer for MicrosoftAzure {
+impl<T: CryptoProvider> Signer for MicrosoftAzure<T> {
     /// Create a URL containing the relevant [Service SAS] query parameters that authorize a request
     /// via `method` to the resource at `path` valid for the duration specified in `expires_in`.
     ///
@@ -260,7 +262,7 @@ impl MultipartUpload for AzureMultiPartUpload {
 }
 
 #[async_trait]
-impl MultipartStore for MicrosoftAzure {
+impl<T: CryptoProvider> MultipartStore for MicrosoftAzure<T> {
     async fn create_multipart(&self, _: &Path) -> Result<MultipartId> {
         Ok(String::new())
     }
@@ -294,7 +296,7 @@ impl MultipartStore for MicrosoftAzure {
 }
 
 #[async_trait]
-impl PaginatedListStore for MicrosoftAzure {
+impl<T: CryptoProvider> PaginatedListStore for MicrosoftAzure<T> {
     async fn list_paginated(
         &self,
         prefix: Option<&str>,
@@ -307,6 +309,7 @@ impl PaginatedListStore for MicrosoftAzure {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::ring_crypto::RingProvider;
     use crate::integration::*;
     use crate::tests::*;
     use bytes::Bytes;
@@ -314,7 +317,7 @@ mod tests {
     #[tokio::test]
     async fn azure_blob_test() {
         maybe_skip_integration!();
-        let integration = MicrosoftAzureBuilder::from_env().build().unwrap();
+        let integration = MicrosoftAzureBuilder::default().from_env().build().unwrap();
 
         put_get_delete_list(&integration).await;
         get_opts(&integration).await;
@@ -332,8 +335,9 @@ mod tests {
 
         let validate = !integration.client.config().disable_tagging;
         tagging(
-            Arc::new(MicrosoftAzure {
+            Arc::new(MicrosoftAzure::<RingProvider> {
                 client: Arc::clone(&integration.client),
+                _crypto_provider: PhantomData::default(),
             }),
             validate,
             |p| {
@@ -357,7 +361,7 @@ mod tests {
         let client_id = std::env::var("AZURE_CLIENT_ID").unwrap();
         let client_secret = std::env::var("AZURE_CLIENT_SECRET").unwrap();
         let tenant_id = std::env::var("AZURE_TENANT_ID").unwrap();
-        let integration = MicrosoftAzureBuilder::new()
+        let integration = MicrosoftAzureBuilder::default()
             .with_account(account)
             .with_container_name(container)
             .with_client_id(client_id)
@@ -386,7 +390,7 @@ mod tests {
         let azure_client_id = "object_store:fake_access_key_id".to_string();
         let azure_storage_account_name = "object_store:fake_secret_key".to_string();
         let azure_storage_token = "object_store:fake_default_region".to_string();
-        let builder = MicrosoftAzureBuilder::new()
+        let builder = MicrosoftAzureBuilder::default()
             .with_config(AzureConfigKey::ClientId, &azure_client_id)
             .with_config(AzureConfigKey::AccountName, &azure_storage_account_name)
             .with_config(AzureConfigKey::Token, &azure_storage_token);
