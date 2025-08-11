@@ -287,14 +287,14 @@ impl<'a, T: CryptoProvider> AzureAuthorizer<'a, T> {
     }
 }
 
-pub(crate) trait CredentialExt {
+pub(crate) trait CredentialExt: Sized {
     /// Apply authorization to requests against azure storage accounts
     /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-requests-to-azure-storage>
     fn with_azure_authorization<T: CryptoProvider>(
         self,
         credential: &Option<impl Deref<Target = AzureCredential>>,
         account: &str,
-    ) -> Self;
+    ) -> Result<Self>;
 }
 
 impl CredentialExt for HttpRequestBuilder {
@@ -302,20 +302,20 @@ impl CredentialExt for HttpRequestBuilder {
         self,
         credential: &Option<impl Deref<Target = AzureCredential>>,
         account: &str,
-    ) -> Self {
+    ) -> Result<Self> {
         let (client, request) = self.into_parts();
         let mut request = request.expect("request valid");
 
         match credential.as_deref() {
             Some(credential) => {
-                AzureAuthorizer::<T>::new(credential, account).authorize(&mut request);
+                AzureAuthorizer::<T>::new(credential, account).authorize(&mut request)?;
             }
             None => {
                 add_date_and_version_headers(&mut request);
             }
         }
 
-        Self::from_parts(client, request)
+        Ok(Self::from_parts(client, request))
     }
 }
 

@@ -68,29 +68,30 @@ pub mod ring_crypto {
     }
 }
 
-// pub mod openssl_crypto {
-//     use openssl::hash::MessageDigest;
-//     use openssl::pkey::PKey;
-//     use openssl::sign::Signer;
-//
-//     use super::{CryptoError, CryptoProvider, DynError};
-//
-//     pub struct OpenSslCrypto;
-//
-//     impl CryptoProvider for OpenSslCrypto {
-//         fn digest_sha256(bytes: &[u8]) -> Result<impl AsRef<[u8]>, CryptoError> {
-//             let digest = openssl::hash::hash(MessageDigest::sha256(), bytes)
-//                 .map_err(|e| Box::new(e) as DynError)?;
-//             Ok(digest)
-//         }
-//
-//         fn hmac_sha256(secret: &[u8], bytes: &[u8]) -> Result<impl AsRef<[u8]>, CryptoError> {
-//             let key = PKey::hmac(secret).map_err(|e| Box::new(e) as DynError)?;
-//             let mut signer =
-//                 Signer::new(MessageDigest::sha256(), &key).map_err(|e| Box::new(e) as DynError)?;
-//             signer.update(bytes).map_err(|e| Box::new(e) as DynError)?;
-//             let hmac = signer.sign_to_vec().map_err(|e| Box::new(e) as DynError)?;
-//             Ok(hmac)
-//         }
-//     }
-// }
+pub mod openssl_crypto {
+    use openssl::hash::MessageDigest;
+    use openssl::pkey::PKey;
+    use openssl::sign::Signer;
+
+    use super::{CryptoProvider, DynError, Error};
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct OpenSslCrypto;
+
+    impl CryptoProvider for OpenSslCrypto {
+        fn digest_sha256(bytes: &[u8]) -> Result<impl AsRef<[u8]>, Error> {
+            let digest = openssl::hash::hash(MessageDigest::sha256(), bytes)
+                .map_err(|e| Box::new(e) as DynError)?;
+            Ok(digest)
+        }
+
+        fn hmac_sha256(secret: &[u8], bytes: &[u8]) -> Result<impl AsRef<[u8]>, Error> {
+            let key = PKey::hmac(secret).map_err(|e| Box::new(e) as DynError)?;
+            let mut signer =
+                Signer::new(MessageDigest::sha256(), &key).map_err(|e| Box::new(e) as DynError)?;
+            signer.update(bytes).map_err(|e| Box::new(e) as DynError)?;
+            let hmac = signer.sign_to_vec().map_err(|e| Box::new(e) as DynError)?;
+            Ok(hmac)
+        }
+    }
+}
