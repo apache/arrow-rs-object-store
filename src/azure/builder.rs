@@ -29,6 +29,7 @@ use crate::crypto::CryptoProvider;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
+use std::marker::PhantomData;
 use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
@@ -123,8 +124,7 @@ impl From<Error> for crate::Error {
 /// ```
 #[derive(Clone)]
 pub struct MicrosoftAzureBuilder<T> {
-    /// Crypto provider. See [`crypto::CryptoProvider`]
-    crypto_provider: T,
+    _crypto_provider: PhantomData<T>,
     /// Account name
     account_name: Option<String>,
     /// Access key
@@ -190,7 +190,7 @@ pub struct MicrosoftAzureBuilder<T> {
 #[cfg(feature = "ring")]
 impl Default for MicrosoftAzureBuilder<RingProvider> {
     fn default() -> Self {
-        Self::new(RingProvider::default())
+        Self::new()
     }
 }
 
@@ -500,9 +500,9 @@ impl<T> std::fmt::Debug for MicrosoftAzureBuilder<T> {
 
 impl<T: CryptoProvider> MicrosoftAzureBuilder<T> {
     /// Create a new [`MicrosoftAzureBuilder`] with default values.
-    pub fn new(provider: T) -> Self {
+    pub fn new() -> Self {
         Self {
-            crypto_provider: provider,
+            _crypto_provider: PhantomData::default(),
             account_name: None,
             access_key: None,
             container_name: None,
@@ -945,7 +945,7 @@ impl<T: CryptoProvider> MicrosoftAzureBuilder<T> {
     }
 
     /// Configure a connection to container with given name on Microsoft Azure Blob store.
-    pub fn build(mut self) -> Result<MicrosoftAzure> {
+    pub fn build(mut self) -> Result<MicrosoftAzure<T>> {
         if let Some(url) = self.url.take() {
             self.parse_url(&url)?;
         }
@@ -1092,7 +1092,10 @@ impl<T: CryptoProvider> MicrosoftAzureBuilder<T> {
         let http_client = http.connect(&config.client_options)?;
         let client = Arc::new(AzureClient::new(config, http_client));
 
-        Ok(MicrosoftAzure { client })
+        Ok(MicrosoftAzure {
+            client,
+            _crypto_provider: PhantomData::default(),
+        })
     }
 }
 

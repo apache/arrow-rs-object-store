@@ -1,31 +1,31 @@
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 
 type DynError = Box<dyn std::error::Error + Send + Sync>;
 
 #[derive(Debug)]
-pub struct CryptoError {
+pub struct Error {
     inner: DynError,
 }
 
-impl Display for CryptoError {
+impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Crypto error: {}", self.inner)
     }
 }
 
-impl std::error::Error for CryptoError {}
+impl std::error::Error for Error {}
 
-impl From<DynError> for CryptoError {
+impl From<DynError> for Error {
     fn from(err: DynError) -> Self {
-        CryptoError { inner: err }
+        Error { inner: err }
     }
 }
 
 /// TODO(jakedern): Docs
-pub trait CryptoProvider {
-    fn digest_sha256(bytes: &[u8]) -> Result<impl AsRef<[u8]>, CryptoError>;
-    fn hmac_sha256(secret: &[u8], bytes: &[u8]) -> Result<impl AsRef<[u8]>, CryptoError>;
-    fn hex_digest(bytes: &[u8]) -> Result<String, CryptoError> {
+pub trait CryptoProvider: Send + Sync + Debug + 'static {
+    fn digest_sha256(bytes: &[u8]) -> Result<impl AsRef<[u8]>, Error>;
+    fn hmac_sha256(secret: &[u8], bytes: &[u8]) -> Result<impl AsRef<[u8]>, Error>;
+    fn hex_digest(bytes: &[u8]) -> Result<String, Error> {
         let digest = Self::digest_sha256(bytes)?;
         Ok(hex_encode(digest.as_ref()))
     }
@@ -43,17 +43,18 @@ pub(crate) fn hex_encode(bytes: &[u8]) -> String {
 /// TODO(jakedern): Docs
 #[cfg(feature = "ring")]
 pub mod ring_crypto {
-    use super::{CryptoError, CryptoProvider};
+    use super::{CryptoProvider, Error};
 
+    #[derive(Debug, Clone, Copy)]
     pub struct RingProvider;
 
     impl CryptoProvider for RingProvider {
-        fn digest_sha256(bytes: &[u8]) -> Result<impl AsRef<[u8]>, CryptoError> {
+        fn digest_sha256(bytes: &[u8]) -> Result<impl AsRef<[u8]>, Error> {
             let digest = ring::digest::digest(&ring::digest::SHA256, bytes);
             Ok(digest)
         }
 
-        fn hmac_sha256(secret: &[u8], bytes: &[u8]) -> Result<impl AsRef<[u8]>, CryptoError> {
+        fn hmac_sha256(secret: &[u8], bytes: &[u8]) -> Result<impl AsRef<[u8]>, Error> {
             let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret);
             let tag = ring::hmac::sign(&key, bytes);
             Ok(tag)
