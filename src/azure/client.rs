@@ -273,7 +273,7 @@ impl PutRequest<'_> {
         let response = self
             .builder
             .header(CONTENT_LENGTH, self.payload.content_length())
-            .with_azure_authorization::<T>(&credential, &self.config.account)
+            .with_azure_authorization::<T>(&credential, &self.config.account)?
             .retryable(&self.config.retry_config)
             .sensitive(sensitive)
             .idempotent(self.idempotent)
@@ -649,7 +649,7 @@ impl<T: CryptoProvider> AzureClient<T> {
             .delete(url.as_str())
             .query(query)
             .header(&DELETE_SNAPSHOTS, "include")
-            .with_azure_authorization::<T>(&credential, &self.config.account)
+            .with_azure_authorization::<T>(&credential, &self.config.account)?
             .retryable(&self.config.retry_config)
             .sensitive(sensitive)
             .send()
@@ -667,7 +667,7 @@ impl<T: CryptoProvider> AzureClient<T> {
         boundary: &str,
         paths: &[Path],
         credential: &Option<Arc<AzureCredential>>,
-    ) -> Vec<u8> {
+    ) -> Result<Vec<u8>> {
         let mut body_bytes = Vec::with_capacity(paths.len() * 2048);
 
         for (idx, path) in paths.iter().enumerate() {
@@ -681,7 +681,7 @@ impl<T: CryptoProvider> AzureClient<T> {
                 // Each subrequest must be authorized individually [1] and we use
                 // the CredentialExt for this.
                 // [1]: https://learn.microsoft.com/en-us/rest/api/storageservices/blob-batch?tabs=microsoft-entra-id#request-body
-                .with_azure_authorization::<T>(credential, &self.config.account)
+                .with_azure_authorization::<T>(credential, &self.config.account)?
                 .into_parts()
                 .1
                 .unwrap();
@@ -699,7 +699,7 @@ impl<T: CryptoProvider> AzureClient<T> {
         extend(&mut body_bytes, boundary.as_bytes());
         extend(&mut body_bytes, b"--");
         extend(&mut body_bytes, b"\r\n");
-        body_bytes
+        Ok(body_bytes)
     }
 
     pub(crate) async fn bulk_delete_request(&self, paths: Vec<Path>) -> Result<Vec<Result<Path>>> {
@@ -713,7 +713,7 @@ impl<T: CryptoProvider> AzureClient<T> {
         let random_bytes = rand::random::<[u8; 16]>(); // 128 bits
         let boundary = format!("batch_{}", BASE64_STANDARD_NO_PAD.encode(random_bytes));
 
-        let body_bytes = self.build_bulk_delete_body(&boundary, &paths, &credential);
+        let body_bytes = self.build_bulk_delete_body(&boundary, &paths, &credential)?;
 
         // Send multipart request
         let url = self.config.path_url(&Path::from("/"));
@@ -728,7 +728,7 @@ impl<T: CryptoProvider> AzureClient<T> {
             )
             .header(CONTENT_LENGTH, HeaderValue::from(body_bytes.len()))
             .body(body_bytes)
-            .with_azure_authorization::<T>(&credential, &self.config.account)
+            .with_azure_authorization::<T>(&credential, &self.config.account)?
             .send_retry(&self.config.retry_config)
             .await
             .map_err(|source| Error::BulkDeleteRequest { source })?;
@@ -773,7 +773,7 @@ impl<T: CryptoProvider> AzureClient<T> {
             .map(|c| c.sensitive_request())
             .unwrap_or_default();
         builder
-            .with_azure_authorization::<T>(&credential, &self.config.account)
+            .with_azure_authorization::<T>(&credential, &self.config.account)?
             .retryable(&self.config.retry_config)
             .sensitive(sensitive)
             .idempotent(overwrite)
@@ -814,7 +814,7 @@ impl<T: CryptoProvider> AzureClient<T> {
             .post(url.as_str())
             .body(body)
             .query(&[("restype", "service"), ("comp", "userdelegationkey")])
-            .with_azure_authorization::<T>(&credential, &self.config.account)
+            .with_azure_authorization::<T>(&credential, &self.config.account)?
             .retryable(&self.config.retry_config)
             .sensitive(sensitive)
             .idempotent(true)
@@ -878,7 +878,7 @@ impl<T: CryptoProvider> AzureClient<T> {
             .client
             .get(url.as_str())
             .query(&[("comp", "tags")])
-            .with_azure_authorization::<T>(&credential, &self.config.account)
+            .with_azure_authorization::<T>(&credential, &self.config.account)?
             .retryable(&self.config.retry_config)
             .sensitive(sensitive)
             .send()
@@ -948,7 +948,7 @@ impl<T: CryptoProvider> GetClient for AzureClient<T> {
 
         let response = builder
             .with_get_options(options)
-            .with_azure_authorization::<T>(&credential, &self.config.account)
+            .with_azure_authorization::<T>(&credential, &self.config.account)?
             .retryable_request()
             .sensitive(sensitive)
             .send(ctx)
@@ -1021,7 +1021,7 @@ impl<T: CryptoProvider> ListClient for Arc<AzureClient<T>> {
             .get(url.as_str())
             .extensions(opts.extensions)
             .query(&query)
-            .with_azure_authorization::<T>(&credential, &self.config.account)
+            .with_azure_authorization::<T>(&credential, &self.config.account)?
             .retryable(&self.config.retry_config)
             .sensitive(sensitive)
             .send()
@@ -1430,7 +1430,9 @@ mod tests {
 
         let boundary = "batch_statictestboundary".to_string();
 
-        let body_bytes = client.build_bulk_delete_body(&boundary, paths, &credential);
+        let body_bytes = client
+            .build_bulk_delete_body(&boundary, paths, &credential)
+            .unwrap();
 
         // Replace Date header value with a static date
         let re = Regex::new("Date:[^\r]+").unwrap();
