@@ -64,7 +64,7 @@ pub struct MicrosoftAzure<T> {
     _crypto_provider: PhantomData<T>,
 }
 
-impl<T> MicrosoftAzure<T> {
+impl<T: CryptoProvider> MicrosoftAzure<T> {
     /// Returns the [`AzureCredentialProvider`] used by [`MicrosoftAzure`]
     pub fn credentials(&self) -> &AzureCredentialProvider {
         &self.client.config().credentials
@@ -76,7 +76,7 @@ impl<T> MicrosoftAzure<T> {
     }
 }
 
-impl<T> std::fmt::Display for MicrosoftAzure<T> {
+impl<T: CryptoProvider> std::fmt::Display for MicrosoftAzure<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -220,21 +220,21 @@ impl<T: CryptoProvider> Signer for MicrosoftAzure<T> {
 /// complete -> PUT block list
 /// abort -> No equivalent; blocks are simply dropped after 7 days
 #[derive(Debug)]
-struct AzureMultiPartUpload {
+struct AzureMultiPartUpload<T> {
     part_idx: usize,
-    state: Arc<UploadState>,
+    state: Arc<UploadState<T>>,
     opts: PutMultipartOptions,
 }
 
 #[derive(Debug)]
-struct UploadState {
+struct UploadState<T> {
     location: Path,
     parts: Parts,
-    client: Arc<AzureClient>,
+    client: Arc<AzureClient<T>>,
 }
 
 #[async_trait]
-impl MultipartUpload for AzureMultiPartUpload {
+impl<T: CryptoProvider> MultipartUpload for AzureMultiPartUpload<T> {
     fn put_part(&mut self, data: PutPayload) -> UploadPart {
         let idx = self.part_idx;
         self.part_idx += 1;
