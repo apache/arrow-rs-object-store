@@ -550,6 +550,7 @@ impl AzureClient {
             tags,
             attributes,
             extensions,
+            idempotent,
         } = opts;
 
         let builder = self
@@ -560,10 +561,10 @@ impl AzureClient {
 
         let builder = match &mode {
             PutMode::Overwrite => builder.idempotent(true),
-            PutMode::Create => builder.header(&IF_NONE_MATCH, "*"),
+            PutMode::Create => builder.header(&IF_NONE_MATCH, "*").idempotent(idempotent),
             PutMode::Update(v) => {
                 let etag = v.e_tag.as_ref().ok_or(Error::MissingETag)?;
-                builder.header(&IF_MATCH, etag)
+                builder.header(&IF_MATCH, etag).idempotent(idempotent)
             }
         };
 

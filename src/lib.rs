@@ -1188,6 +1188,11 @@ pub struct PutOptions {
     ///
     /// They are also eclused from [`PartialEq`] and [`Eq`].
     pub extensions: Extensions,
+    /// Whether to flag create and update operations as idempotent
+    ///
+    /// This is useful for applications that want to retry put operations that fail
+    /// for unexpected reasons, like timeouts.
+    pub idempotent: bool,
 }
 
 impl PartialEq<Self> for PutOptions {
@@ -1197,14 +1202,16 @@ impl PartialEq<Self> for PutOptions {
             tags,
             attributes,
             extensions: _,
+            idempotent,
         } = self;
         let Self {
             mode: other_mode,
             tags: other_tags,
             attributes: other_attributes,
             extensions: _,
+            idempotent: other_idempotent,
         } = other;
-        (mode == other_mode) && (tags == other_tags) && (attributes == other_attributes)
+        (mode == other_mode) && (tags == other_tags) && (attributes == other_attributes) && (idempotent == other_idempotent)
     }
 }
 

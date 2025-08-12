@@ -387,6 +387,7 @@ impl GoogleCloudStorageClient {
             tags: _,
             attributes,
             extensions,
+            idempotent,
         } = opts;
 
         let builder = self
@@ -397,10 +398,10 @@ impl GoogleCloudStorageClient {
 
         let builder = match &mode {
             PutMode::Overwrite => builder.idempotent(true),
-            PutMode::Create => builder.header(&VERSION_MATCH, "0"),
+            PutMode::Create => builder.header(&VERSION_MATCH, "0").idempotent(idempotent),
             PutMode::Update(v) => {
                 let etag = v.version.as_ref().ok_or(Error::MissingVersion)?;
-                builder.header(&VERSION_MATCH, etag)
+                builder.header(&VERSION_MATCH, etag).idempotent(idempotent)
             }
         };
 
