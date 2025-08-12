@@ -24,7 +24,7 @@ use crate::client::header::{get_put_result, HeaderConfig};
 use crate::client::list::ListClient;
 use crate::client::retry::{RetryContext, RetryExt};
 use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpRequest, HttpResponse};
-use crate::crypto::CryptoProvider;
+use crate::crypto::{CryptoProvider, CryptoProviderRef};
 use crate::list::{PaginatedListOptions, PaginatedListResult};
 use crate::multipart::PartId;
 use crate::util::{deserialize_rfc1123, GetRange};
@@ -44,7 +44,6 @@ use http::{
 use rand::Rng as _;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
@@ -200,6 +199,7 @@ impl AzureConfig {
 
 /// A builder for a put request allowing customisation of the headers and query string
 struct PutRequest<'a> {
+    crypto_provider: &'a dyn CryptoProvider,
     path: &'a Path,
     config: &'a AzureConfig,
     payload: PutPayload,
@@ -266,7 +266,7 @@ impl PutRequest<'_> {
         Self { builder, ..self }
     }
 
-    async fn send<T: CryptoProvider>(self) -> Result<HttpResponse> {
+    async fn send(self) -> Result<HttpResponse> {
         let credential = self.config.get_credential().await?;
         let sensitive = credential
             .as_deref()
@@ -275,7 +275,7 @@ impl PutRequest<'_> {
         let response = self
             .builder
             .header(CONTENT_LENGTH, self.payload.content_length())
-            .with_azure_authorization::<T>(&credential, &self.config.account)?
+            .with_azure_authorization(&credential, self.crypto_provider, &self.config.account)?
             .retryable(&self.config.retry_config)
             .sensitive(sensitive)
             .idempotent(self.idempotent)
@@ -509,17 +509,21 @@ async fn parse_blob_batch_delete_body(
 }
 
 #[derive(Debug)]
-pub(crate) struct AzureClient<T> {
-    _crypto_provider: PhantomData<T>,
+pub(crate) struct AzureClient {
+    crypto_provider: CryptoProviderRef,
     config: AzureConfig,
     client: HttpClient,
 }
 
-impl<T: CryptoProvider> AzureClient<T> {
+impl AzureClient {
     /// create a new instance of [AzureClient]
-    pub(crate) fn new(config: AzureConfig, client: HttpClient) -> Self {
+    pub(crate) fn new(
+        config: AzureConfig,
+        client: HttpClient,
+        crypto_provider: CryptoProviderRef,
+    ) -> Self {
         Self {
-            _crypto_provider: PhantomData::default(),
+            crypto_provider,
             config,
             client,
         }
@@ -534,11 +538,17 @@ impl<T: CryptoProvider> AzureClient<T> {
         self.config.get_credential().await
     }
 
-    fn put_request<'a>(&'a self, path: &'a Path, payload: PutPayload) -> PutRequest<'a> {
+    fn put_request<'a>(
+        &'a self,
+        path: &'a Path,
+        payload: PutPayload,
+        crypto_provider: &'a dyn CryptoProvider,
+    ) -> PutRequest<'a> {
         let url = self.config.path_url(path);
         let builder = self.client.request(Method::PUT, url.as_str());
 
         PutRequest {
+            crypto_provider,
             path,
             builder,
             payload,
@@ -562,7 +572,7 @@ impl<T: CryptoProvider> AzureClient<T> {
         } = opts;
 
         let builder = self
-            .put_request(path, payload)
+            .put_request(path, payload, self.crypto_provider.as_ref())
             .with_attributes(attributes)
             .with_extensions(extensions)
             .with_tags(tags);
@@ -576,7 +586,7 @@ impl<T: CryptoProvider> AzureClient<T> {
             }
         };
 
-        let response = builder.header(&BLOB_TYPE, "BlockBlob").send::<T>().await?;
+        let response = builder.header(&BLOB_TYPE, "BlockBlob").send().await?;
         Ok(get_put_result(response.headers(), VERSION_HEADER)
             .map_err(|source| Error::Metadata { source })?)
     }
@@ -592,10 +602,10 @@ impl<T: CryptoProvider> AzureClient<T> {
         let content_id = format!("{part_idx:032x}");
         let block_id = BASE64_STANDARD.encode(&content_id);
 
-        self.put_request(path, payload)
+        self.put_request(path, payload, self.crypto_provider.as_ref())
             .query(&[("comp", "block"), ("blockid", &block_id)])
             .idempotent(true)
-            .send::<T>()
+            .send()
             .await?;
 
         Ok(PartId { content_id })
@@ -621,13 +631,13 @@ impl<T: CryptoProvider> AzureClient<T> {
 
         let payload = BlockList { blocks }.to_xml().into();
         let response = self
-            .put_request(path, payload)
+            .put_request(path, payload, self.crypto_provider.as_ref())
             .with_attributes(attributes)
             .with_tags(tags)
             .with_extensions(extensions)
             .query(&[("comp", "blocklist")])
             .idempotent(true)
-            .send::<T>()
+            .send()
             .await?;
 
         Ok(get_put_result(response.headers(), VERSION_HEADER)
@@ -651,7 +661,11 @@ impl<T: CryptoProvider> AzureClient<T> {
             .delete(url.as_str())
             .query(query)
             .header(&DELETE_SNAPSHOTS, "include")
-            .with_azure_authorization::<T>(&credential, &self.config.account)?
+            .with_azure_authorization(
+                &credential,
+                self.crypto_provider.as_ref(),
+                &self.config.account,
+            )?
             .retryable(&self.config.retry_config)
             .sensitive(sensitive)
             .send()
@@ -683,7 +697,11 @@ impl<T: CryptoProvider> AzureClient<T> {
                 // Each subrequest must be authorized individually [1] and we use
                 // the CredentialExt for this.
                 // [1]: https://learn.microsoft.com/en-us/rest/api/storageservices/blob-batch?tabs=microsoft-entra-id#request-body
-                .with_azure_authorization::<T>(credential, &self.config.account)?
+                .with_azure_authorization(
+                    credential,
+                    self.crypto_provider.as_ref(),
+                    &self.config.account,
+                )?
                 .into_parts()
                 .1
                 .unwrap();
@@ -730,7 +748,11 @@ impl<T: CryptoProvider> AzureClient<T> {
             )
             .header(CONTENT_LENGTH, HeaderValue::from(body_bytes.len()))
             .body(body_bytes)
-            .with_azure_authorization::<T>(&credential, &self.config.account)?
+            .with_azure_authorization(
+                &credential,
+                self.crypto_provider.as_ref(),
+                &self.config.account,
+            )?
             .send_retry(&self.config.retry_config)
             .await
             .map_err(|source| Error::BulkDeleteRequest { source })?;
@@ -775,7 +797,11 @@ impl<T: CryptoProvider> AzureClient<T> {
             .map(|c| c.sensitive_request())
             .unwrap_or_default();
         builder
-            .with_azure_authorization::<T>(&credential, &self.config.account)?
+            .with_azure_authorization(
+                &credential,
+                self.crypto_provider.as_ref(),
+                &self.config.account,
+            )?
             .retryable(&self.config.retry_config)
             .sensitive(sensitive)
             .idempotent(overwrite)
@@ -816,7 +842,11 @@ impl<T: CryptoProvider> AzureClient<T> {
             .post(url.as_str())
             .body(body)
             .query(&[("restype", "service"), ("comp", "userdelegationkey")])
-            .with_azure_authorization::<T>(&credential, &self.config.account)?
+            .with_azure_authorization(
+                &credential,
+                self.crypto_provider.as_ref(),
+                &self.config.account,
+            )?
             .retryable(&self.config.retry_config)
             .sensitive(sensitive)
             .idempotent(true)
@@ -838,7 +868,7 @@ impl<T: CryptoProvider> AzureClient<T> {
     ///
     /// Depending on the type of credential, this will either use the account key or a user delegation key.
     /// Since delegation keys are acquired ad-hoc, the signer aloows for signing multiple urls with the same key.
-    pub(crate) async fn signer(&self, expires_in: Duration) -> Result<AzureSigner<T>> {
+    pub(crate) async fn signer(&self, expires_in: Duration) -> Result<AzureSigner> {
         let credential = self.get_credential().await?;
         let signed_start = chrono::Utc::now();
         let signed_expiry = signed_start + expires_in;
@@ -854,6 +884,7 @@ impl<T: CryptoProvider> AzureClient<T> {
                     signed_start,
                     signed_expiry,
                     Some(key),
+                    self.crypto_provider.clone(),
                 ))
             }
             Some(AzureCredential::AccessKey(key)) => Ok(AzureSigner::new(
@@ -862,6 +893,7 @@ impl<T: CryptoProvider> AzureClient<T> {
                 signed_start,
                 signed_expiry,
                 None,
+                self.crypto_provider.clone(),
             )),
             None => Err(Error::SASwithSkipSignature.into()),
             _ => Err(Error::SASforSASNotSupported.into()),
@@ -880,7 +912,11 @@ impl<T: CryptoProvider> AzureClient<T> {
             .client
             .get(url.as_str())
             .query(&[("comp", "tags")])
-            .with_azure_authorization::<T>(&credential, &self.config.account)?
+            .with_azure_authorization(
+                &credential,
+                self.crypto_provider.as_ref(),
+                &self.config.account,
+            )?
             .retryable(&self.config.retry_config)
             .sensitive(sensitive)
             .send()
@@ -895,7 +931,7 @@ impl<T: CryptoProvider> AzureClient<T> {
 }
 
 #[async_trait]
-impl<T: CryptoProvider> GetClient for AzureClient<T> {
+impl GetClient for AzureClient {
     const STORE: &'static str = STORE;
 
     const HEADER_CONFIG: HeaderConfig = HeaderConfig {
@@ -950,7 +986,11 @@ impl<T: CryptoProvider> GetClient for AzureClient<T> {
 
         let response = builder
             .with_get_options(options)
-            .with_azure_authorization::<T>(&credential, &self.config.account)?
+            .with_azure_authorization(
+                &credential,
+                self.crypto_provider.as_ref(),
+                &self.config.account,
+            )?
             .retryable_request()
             .sensitive(sensitive)
             .send(ctx)
@@ -975,7 +1015,7 @@ impl<T: CryptoProvider> GetClient for AzureClient<T> {
 }
 
 #[async_trait]
-impl<T: CryptoProvider> ListClient for Arc<AzureClient<T>> {
+impl ListClient for Arc<AzureClient> {
     /// Make an Azure List request <https://docs.microsoft.com/en-us/rest/api/storageservices/list-blobs>
     async fn list_request(
         &self,
@@ -1023,7 +1063,11 @@ impl<T: CryptoProvider> ListClient for Arc<AzureClient<T>> {
             .get(url.as_str())
             .extensions(opts.extensions)
             .query(&query)
-            .with_azure_authorization::<T>(&credential, &self.config.account)?
+            .with_azure_authorization(
+                &credential,
+                self.crypto_provider.as_ref(),
+                &self.config.account,
+            )?
             .retryable(&self.config.retry_config)
             .sensitive(sensitive)
             .send()
@@ -1425,7 +1469,11 @@ mod tests {
             client_options: Default::default(),
         };
 
-        let client = AzureClient::<RingProvider>::new(config, HttpClient::new(Client::new()));
+        let client = AzureClient::new(
+            config,
+            HttpClient::new(Client::new()),
+            Arc::from(RingProvider::default()),
+        );
 
         let credential = client.get_credential().await.unwrap();
         let paths = &[Path::from("a"), Path::from("b"), Path::from("c")];

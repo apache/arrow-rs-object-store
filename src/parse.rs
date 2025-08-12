@@ -211,13 +211,7 @@ where
         }
         #[cfg(all(feature = "azure", feature = "ring"))]
         ObjectStoreScheme::MicrosoftAzure => {
-            use crate::crypto::ring_crypto::RingProvider;
-
-            builder_opts!(
-                crate::azure::MicrosoftAzureBuilder<RingProvider>,
-                url,
-                _options
-            )
+            builder_opts!(crate::azure::MicrosoftAzureBuilder, url, _options)
         }
         #[cfg(feature = "http")]
         ObjectStoreScheme::Http => {

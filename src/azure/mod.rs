@@ -23,7 +23,6 @@
 //!
 //! Unused blocks will automatically be dropped after 7 days.
 use crate::{
-    crypto::CryptoProvider,
     multipart::{MultipartStore, PartId},
     path::Path,
     signer::Signer,
@@ -33,9 +32,9 @@ use crate::{
 use async_trait::async_trait;
 use futures::stream::{BoxStream, StreamExt, TryStreamExt};
 use reqwest::Method;
+use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
-use std::{fmt::Debug, marker::PhantomData};
 use url::Url;
 
 use crate::client::get::GetClientExt;
@@ -59,12 +58,11 @@ const STORE: &str = "MicrosoftAzure";
 
 /// Interface for [Microsoft Azure Blob Storage](https://azure.microsoft.com/en-us/services/storage/blobs/).
 #[derive(Debug)]
-pub struct MicrosoftAzure<T> {
-    client: Arc<AzureClient<T>>,
-    _crypto_provider: PhantomData<T>,
+pub struct MicrosoftAzure {
+    client: Arc<AzureClient>,
 }
 
-impl<T: CryptoProvider> MicrosoftAzure<T> {
+impl MicrosoftAzure {
     /// Returns the [`AzureCredentialProvider`] used by [`MicrosoftAzure`]
     pub fn credentials(&self) -> &AzureCredentialProvider {
         &self.client.config().credentials
@@ -76,7 +74,7 @@ impl<T: CryptoProvider> MicrosoftAzure<T> {
     }
 }
 
-impl<T: CryptoProvider> std::fmt::Display for MicrosoftAzure<T> {
+impl std::fmt::Display for MicrosoftAzure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -88,7 +86,7 @@ impl<T: CryptoProvider> std::fmt::Display for MicrosoftAzure<T> {
 }
 
 #[async_trait]
-impl<T: CryptoProvider> ObjectStore for MicrosoftAzure<T> {
+impl ObjectStore for MicrosoftAzure {
     async fn put_opts(
         &self,
         location: &Path,
@@ -159,7 +157,7 @@ impl<T: CryptoProvider> ObjectStore for MicrosoftAzure<T> {
 }
 
 #[async_trait]
-impl<T: CryptoProvider> Signer for MicrosoftAzure<T> {
+impl Signer for MicrosoftAzure {
     /// Create a URL containing the relevant [Service SAS] query parameters that authorize a request
     /// via `method` to the resource at `path` valid for the duration specified in `expires_in`.
     ///
@@ -220,21 +218,21 @@ impl<T: CryptoProvider> Signer for MicrosoftAzure<T> {
 /// complete -> PUT block list
 /// abort -> No equivalent; blocks are simply dropped after 7 days
 #[derive(Debug)]
-struct AzureMultiPartUpload<T> {
+struct AzureMultiPartUpload {
     part_idx: usize,
-    state: Arc<UploadState<T>>,
+    state: Arc<UploadState>,
     opts: PutMultipartOptions,
 }
 
 #[derive(Debug)]
-struct UploadState<T> {
+struct UploadState {
     location: Path,
     parts: Parts,
-    client: Arc<AzureClient<T>>,
+    client: Arc<AzureClient>,
 }
 
 #[async_trait]
-impl<T: CryptoProvider> MultipartUpload for AzureMultiPartUpload<T> {
+impl MultipartUpload for AzureMultiPartUpload {
     fn put_part(&mut self, data: PutPayload) -> UploadPart {
         let idx = self.part_idx;
         self.part_idx += 1;
@@ -262,7 +260,7 @@ impl<T: CryptoProvider> MultipartUpload for AzureMultiPartUpload<T> {
 }
 
 #[async_trait]
-impl<T: CryptoProvider> MultipartStore for MicrosoftAzure<T> {
+impl MultipartStore for MicrosoftAzure {
     async fn create_multipart(&self, _: &Path) -> Result<MultipartId> {
         Ok(String::new())
     }
@@ -296,7 +294,7 @@ impl<T: CryptoProvider> MultipartStore for MicrosoftAzure<T> {
 }
 
 #[async_trait]
-impl<T: CryptoProvider> PaginatedListStore for MicrosoftAzure<T> {
+impl PaginatedListStore for MicrosoftAzure {
     async fn list_paginated(
         &self,
         prefix: Option<&str>,
@@ -309,7 +307,6 @@ impl<T: CryptoProvider> PaginatedListStore for MicrosoftAzure<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::ring_crypto::RingProvider;
     use crate::integration::*;
     use crate::tests::*;
     use bytes::Bytes;
@@ -335,9 +332,8 @@ mod tests {
 
         let validate = !integration.client.config().disable_tagging;
         tagging(
-            Arc::new(MicrosoftAzure::<RingProvider> {
+            Arc::new(MicrosoftAzure {
                 client: Arc::clone(&integration.client),
-                _crypto_provider: PhantomData::default(),
             }),
             validate,
             |p| {
