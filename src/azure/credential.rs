@@ -21,7 +21,7 @@ use crate::client::builder::{add_query_pairs, HttpRequestBuilder};
 use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
 use crate::client::{CredentialProvider, HttpClient, HttpError, HttpRequest, TokenProvider};
-use crate::crypto::{self, CryptoProvider};
+use crate::crypto::{CryptoProvider, CryptoProviderRef};
 use crate::RetryConfig;
 use async_trait::async_trait;
 use base64::prelude::{BASE64_STANDARD, BASE64_URL_SAFE_NO_PAD};
@@ -37,7 +37,6 @@ use serde::Deserialize;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::marker::PhantomData;
 use std::ops::Deref;
 use std::process::Command;
 use std::str;
@@ -97,7 +96,7 @@ pub enum Error {
     SASforSASNotSupported,
 
     #[error("Error performing cryptographic operations")]
-    CryptoError(crypto::Error),
+    Crypto(Box<dyn std::error::Error + Send + Sync>),
 }
 
 pub(crate) type Result<T, E = Error> = std::result::Result<T, E>;
@@ -108,12 +107,6 @@ impl From<Error> for crate::Error {
             store: STORE,
             source: Box::new(value),
         }
-    }
-}
-
-impl From<crypto::Error> for Error {
-    fn from(value: crypto::Error) -> Self {
-        Error::CryptoError(value)
     }
 }
 
@@ -173,8 +166,8 @@ pub mod authority_hosts {
     pub const AZURE_PUBLIC_CLOUD: &str = "https://login.microsoftonline.com";
 }
 
-pub(crate) struct AzureSigner<T> {
-    _crypto_provider: PhantomData<T>,
+pub(crate) struct AzureSigner {
+    crypto_provider: CryptoProviderRef,
     signing_key: AzureAccessKey,
     start: DateTime<Utc>,
     end: DateTime<Utc>,
@@ -182,16 +175,17 @@ pub(crate) struct AzureSigner<T> {
     delegation_key: Option<UserDelegationKey>,
 }
 
-impl<T: CryptoProvider> AzureSigner<T> {
+impl AzureSigner {
     pub(crate) fn new(
         signing_key: AzureAccessKey,
         account: String,
         start: DateTime<Utc>,
         end: DateTime<Utc>,
         delegation_key: Option<UserDelegationKey>,
+        crypto_provider: CryptoProviderRef,
     ) -> Self {
         Self {
-            _crypto_provider: PhantomData::default(),
+            crypto_provider: crypto_provider,
             signing_key,
             account,
             start,
@@ -212,7 +206,10 @@ impl<T: CryptoProvider> AzureSigner<T> {
             ),
             None => string_to_sign_service_sas(url, method, &self.account, &self.start, &self.end),
         };
-        let auth = T::hmac_sha256(&self.signing_key.0, &str_to_sign.as_bytes())?;
+        let auth = self
+            .crypto_provider
+            .hmac_sha256(&self.signing_key.0, &str_to_sign.as_bytes())
+            .map_err(|e| Error::Crypto(Box::new(e)))?;
         url.query_pairs_mut().extend_pairs(query_pairs);
         url.query_pairs_mut()
             .append_pair("sig", BASE64_STANDARD.encode(auth).as_str());
@@ -234,17 +231,21 @@ fn add_date_and_version_headers(request: &mut HttpRequest) {
 
 /// Authorize a [`HttpRequest`] with an [`AzureAuthorizer`]
 #[derive(Debug)]
-pub struct AzureAuthorizer<'a, T> {
-    _crypto_provider: PhantomData<T>,
+pub struct AzureAuthorizer<'a> {
+    crypto_provider: &'a dyn CryptoProvider,
     credential: &'a AzureCredential,
     account: &'a str,
 }
 
-impl<'a, T: CryptoProvider> AzureAuthorizer<'a, T> {
+impl<'a> AzureAuthorizer<'a> {
     /// Create a new [`AzureAuthorizer`]
-    pub fn new(credential: &'a AzureCredential, account: &'a str) -> Self {
+    pub fn new(
+        credential: &'a AzureCredential,
+        account: &'a str,
+        crypto_provider: &'a dyn CryptoProvider,
+    ) -> Self {
         AzureAuthorizer {
-            _crypto_provider: PhantomData::default(),
+            crypto_provider,
             credential,
             account,
         }
@@ -257,12 +258,13 @@ impl<'a, T: CryptoProvider> AzureAuthorizer<'a, T> {
         match self.credential {
             AzureCredential::AccessKey(key) => {
                 let url = Url::parse(&request.uri().to_string()).unwrap();
-                let signature = generate_authorization::<T>(
+                let signature = generate_authorization(
                     request.headers(),
                     &url,
                     request.method(),
                     self.account,
                     key,
+                    self.crypto_provider,
                 )?;
 
                 // "signature" is a base 64 encoded string so it should never
@@ -290,17 +292,19 @@ impl<'a, T: CryptoProvider> AzureAuthorizer<'a, T> {
 pub(crate) trait CredentialExt: Sized {
     /// Apply authorization to requests against azure storage accounts
     /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-requests-to-azure-storage>
-    fn with_azure_authorization<T: CryptoProvider>(
+    fn with_azure_authorization(
         self,
         credential: &Option<impl Deref<Target = AzureCredential>>,
+        crypto_provider: &dyn CryptoProvider,
         account: &str,
     ) -> Result<Self>;
 }
 
 impl CredentialExt for HttpRequestBuilder {
-    fn with_azure_authorization<T: CryptoProvider>(
+    fn with_azure_authorization(
         self,
         credential: &Option<impl Deref<Target = AzureCredential>>,
+        crypto_provider: &dyn CryptoProvider,
         account: &str,
     ) -> Result<Self> {
         let (client, request) = self.into_parts();
@@ -308,7 +312,8 @@ impl CredentialExt for HttpRequestBuilder {
 
         match credential.as_deref() {
             Some(credential) => {
-                AzureAuthorizer::<T>::new(credential, account).authorize(&mut request)?;
+                AzureAuthorizer::new(credential, account, crypto_provider)
+                    .authorize(&mut request)?;
             }
             None => {
                 add_date_and_version_headers(&mut request);
@@ -321,15 +326,18 @@ impl CredentialExt for HttpRequestBuilder {
 
 /// Generate signed key for authorization via access keys
 /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key>
-fn generate_authorization<T: CryptoProvider>(
+fn generate_authorization(
     h: &HeaderMap,
     u: &Url,
     method: &Method,
     account: &str,
     key: &AzureAccessKey,
+    crypto_provider: &dyn CryptoProvider,
 ) -> Result<String> {
     let str_to_sign = string_to_sign(h, u, method, account);
-    let auth = T::hmac_sha256(&key.0, str_to_sign.as_bytes())?;
+    let auth = crypto_provider
+        .hmac_sha256(&key.0, str_to_sign.as_bytes())
+        .map_err(|e| Error::Crypto(Box::new(e)))?;
     Ok(format!(
         "SharedKey {}:{}",
         account,

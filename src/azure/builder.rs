@@ -23,13 +23,10 @@ use crate::azure::credential::{
 use crate::azure::{AzureCredential, AzureCredentialProvider, MicrosoftAzure, STORE};
 use crate::client::{http_connector, HttpConnector, TokenCredentialProvider};
 use crate::config::ConfigValue;
-#[cfg(feature = "ring")]
-use crate::crypto::ring_crypto::RingProvider;
-use crate::crypto::CryptoProvider;
+use crate::crypto::CryptoProviderRef;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
-use std::marker::PhantomData;
 use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
@@ -91,6 +88,9 @@ enum Error {
 
     #[error("Configuration key: '{}' is not known.", key)]
     UnknownConfigurationKey { key: String },
+
+    #[error("Missing crypto provider. Please enabled the default crypto provider or configure one explicitly.")]
+    MissingCryptoProvider {},
 }
 
 impl From<Error> for crate::Error {
@@ -123,8 +123,9 @@ impl From<Error> for crate::Error {
 ///  .build();
 /// ```
 #[derive(Clone)]
-pub struct MicrosoftAzureBuilder<T> {
-    _crypto_provider: PhantomData<T>,
+pub struct MicrosoftAzureBuilder {
+    /// Crypto provider
+    crypto_provider: Option<CryptoProviderRef>,
     /// Account name
     account_name: Option<String>,
     /// Access key
@@ -185,13 +186,6 @@ pub struct MicrosoftAzureBuilder<T> {
     fabric_cluster_identifier: Option<String>,
     /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
-}
-
-#[cfg(feature = "ring")]
-impl Default for MicrosoftAzureBuilder<RingProvider> {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 /// Configuration keys for [`MicrosoftAzureBuilder`]
@@ -488,7 +482,7 @@ impl FromStr for AzureConfigKey {
     }
 }
 
-impl<T> std::fmt::Debug for MicrosoftAzureBuilder<T> {
+impl std::fmt::Debug for MicrosoftAzureBuilder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -498,11 +492,17 @@ impl<T> std::fmt::Debug for MicrosoftAzureBuilder<T> {
     }
 }
 
-impl<T: CryptoProvider> MicrosoftAzureBuilder<T> {
+impl Default for MicrosoftAzureBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MicrosoftAzureBuilder {
     /// Create a new [`MicrosoftAzureBuilder`] with default values.
     pub fn new() -> Self {
-        Self {
-            _crypto_provider: PhantomData::default(),
+        let mut b = Self {
+            crypto_provider: None,
             account_name: None,
             access_key: None,
             container_name: None,
@@ -514,25 +514,33 @@ impl<T: CryptoProvider> MicrosoftAzureBuilder<T> {
             sas_key: None,
             authority_host: None,
             url: None,
-            use_emulator: false.into(),
+            use_emulator: ConfigValue::default(),
             endpoint: None,
             msi_endpoint: None,
             object_id: None,
             msi_resource_id: None,
             federated_token_file: None,
-            use_azure_cli: false.into(),
-            retry_config: RetryConfig::default(),
-            client_options: ClientOptions::default(),
-            credentials: None,
-            skip_signature: false.into(),
-            use_fabric_endpoint: false.into(),
-            disable_tagging: false.into(),
+            use_azure_cli: ConfigValue::default(),
+            skip_signature: ConfigValue::default(),
+            use_fabric_endpoint: ConfigValue::default(),
+            disable_tagging: ConfigValue::default(),
             fabric_token_service_url: None,
             fabric_workload_host: None,
             fabric_session_token: None,
             fabric_cluster_identifier: None,
+            retry_config: RetryConfig::default(),
+            client_options: ClientOptions::default(),
+            credentials: None,
             http_connector: None,
-        }
+        };
+
+        #[cfg(feature = "ring")]
+        {
+            use crate::crypto::ring_crypto::RingProvider;
+            b = b.with_crypto(Arc::new(RingProvider::default()));
+        };
+
+        b
     }
 
     /// Create an instance of [`MicrosoftAzureBuilder`] with values pre-populated from environment variables.
@@ -568,6 +576,12 @@ impl<T: CryptoProvider> MicrosoftAzureBuilder<T> {
             self = self.with_msi_endpoint(text);
         }
 
+        self
+    }
+
+    /// TODO(jakedern): Docs
+    pub fn with_crypto(mut self, crypto_provider: CryptoProviderRef) -> Self {
+        self.crypto_provider = Some(crypto_provider);
         self
     }
 
@@ -945,7 +959,7 @@ impl<T: CryptoProvider> MicrosoftAzureBuilder<T> {
     }
 
     /// Configure a connection to container with given name on Microsoft Azure Blob store.
-    pub fn build(mut self) -> Result<MicrosoftAzure<T>> {
+    pub fn build(mut self) -> Result<MicrosoftAzure> {
         if let Some(url) = self.url.take() {
             self.parse_url(&url)?;
         }
@@ -1089,13 +1103,14 @@ impl<T: CryptoProvider> MicrosoftAzureBuilder<T> {
             credentials: auth,
         };
 
-        let http_client = http.connect(&config.client_options)?;
-        let client = Arc::new(AzureClient::new(config, http_client));
+        let crypto_provider = self
+            .crypto_provider
+            .ok_or(Error::MissingCryptoProvider {})?;
 
-        Ok(MicrosoftAzure {
-            client,
-            _crypto_provider: PhantomData::default(),
-        })
+        let http_client = http.connect(&config.client_options)?;
+        let client = Arc::new(AzureClient::new(config, http_client, crypto_provider));
+
+        Ok(MicrosoftAzure { client })
     }
 }
 
