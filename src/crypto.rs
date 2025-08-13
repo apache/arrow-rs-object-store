@@ -22,6 +22,8 @@ pub type CryptoProviderRef = Arc<dyn CryptoProvider>;
 
 /// TODO(jakedern): Docs
 pub trait CryptoProvider: Send + Sync + Debug + 'static {
+    fn digest_all_sha256(&self, payloads: &mut dyn Iterator<Item = &[u8]>)
+        -> crate::Result<Digest>;
     fn digest_sha256(&self, bytes: &[u8]) -> crate::Result<Digest>;
     fn hmac_sha256(&self, secret: &[u8], bytes: &[u8]) -> crate::Result<Tag>;
 }
@@ -71,6 +73,18 @@ pub mod ring_crypto {
     pub struct RingProvider;
 
     impl CryptoProvider for RingProvider {
+        fn digest_all_sha256(
+            &self,
+            payloads: &mut dyn Iterator<Item = &[u8]>,
+        ) -> crate::Result<Digest> {
+            let mut hasher = ring::digest::Context::new(&ring::digest::SHA256);
+            for payload in payloads {
+                hasher.update(payload);
+            }
+
+            Ok(hasher.finish().as_ref().into())
+        }
+
         fn digest_sha256(&self, bytes: &[u8]) -> crate::Result<Digest> {
             let digest = ring::digest::digest(&ring::digest::SHA256, bytes);
             Ok(digest.as_ref().into())
@@ -97,6 +111,13 @@ pub mod noop_crypto {
     pub struct NoopCrypto;
 
     impl CryptoProvider for NoopCrypto {
+        fn digest_all_sha256(
+            &self,
+            _payloads: &mut dyn Iterator<Item = &[u8]>,
+        ) -> crate::Result<Digest> {
+            Ok(Digest(vec![]))
+        }
+
         fn digest_sha256(&self, bytes: &[u8]) -> crate::Result<Digest> {
             Ok(Digest(bytes.to_vec()))
         }
@@ -112,35 +133,47 @@ pub mod noop_crypto {
     }
 }
 
-// pub mod openssl_crypto {
-//     use openssl::hash::MessageDigest;
-//     use openssl::pkey::PKey;
-//     use openssl::sign::Signer;
-//
-//     use super::{CryptoProvider, Digest, Tag};
-//
-//     #[derive(Debug, Clone, Copy)]
-//     pub struct OpenSslCrypto;
-//
-//     impl CryptoProvider for OpenSslCrypto {
-//         fn digest_sha256(&self, bytes: &[u8]) -> crate::Result<Digest> {
-//             let digest = openssl::hash::hash(MessageDigest::sha256(), bytes)?;
-//             Ok(digest.as_ref().into())
-//         }
-//
-//         fn hmac_sha256(&self, secret: &[u8], bytes: &[u8]) -> crate::Result<Tag> {
-//             let key = PKey::hmac(secret)?;
-//             let mut signer = Signer::new(MessageDigest::sha256(), &key)?;
-//             signer.update(bytes)?;
-//             let hmac = signer.sign_to_vec()?;
-//             Ok(hmac.into())
-//         }
-//     }
-//
-//     impl From<openssl::error::ErrorStack> for crate::Error {
-//         fn from(value: openssl::error::ErrorStack) -> Self {
-//             // TODO(jakedern)
-//             todo!()
-//         }
-//     }
-// }
+pub mod openssl_crypto {
+    use openssl::hash::MessageDigest;
+    use openssl::pkey::PKey;
+    use openssl::sign::Signer;
+
+    use super::{CryptoProvider, Digest, Tag};
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct OpenSslCrypto;
+
+    impl CryptoProvider for OpenSslCrypto {
+        fn digest_all_sha256(
+            &self,
+            payloads: &mut dyn Iterator<Item = &[u8]>,
+        ) -> crate::Result<Digest> {
+            let mut hasher = openssl::hash::Hasher::new(MessageDigest::sha256())?;
+            for p in payloads {
+                hasher.update(p)?;
+            }
+
+            Ok(hasher.finish()?.as_ref().into())
+        }
+
+        fn digest_sha256(&self, bytes: &[u8]) -> crate::Result<Digest> {
+            let digest = openssl::hash::hash(MessageDigest::sha256(), bytes)?;
+            Ok(digest.as_ref().into())
+        }
+
+        fn hmac_sha256(&self, secret: &[u8], bytes: &[u8]) -> crate::Result<Tag> {
+            let key = PKey::hmac(secret)?;
+            let mut signer = Signer::new(MessageDigest::sha256(), &key)?;
+            signer.update(bytes)?;
+            let hmac = signer.sign_to_vec()?;
+            Ok(hmac.into())
+        }
+    }
+
+    impl From<openssl::error::ErrorStack> for crate::Error {
+        fn from(value: openssl::error::ErrorStack) -> Self {
+            // TODO(jakedern)
+            todo!()
+        }
+    }
+}
