@@ -26,6 +26,7 @@ use crate::aws::{
 };
 use crate::client::{http_connector, HttpConnector, TokenCredentialProvider};
 use crate::config::ConfigValue;
+use crate::crypto::CryptoProviderRef;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -87,6 +88,9 @@ enum Error {
         header: &'static str,
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
+
+    #[error("Missing crypto provider. Please enabled the default crypto provider or configure one explicitly.")]
+    MissingCryptoProvider {},
 }
 
 impl From<Error> for crate::Error {
@@ -120,8 +124,10 @@ impl From<Error> for crate::Error {
 ///  .with_secret_access_key(SECRET_KEY)
 ///  .build();
 /// ```
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct AmazonS3Builder {
+    /// Crypto provider
+    crypto_provider: Option<CryptoProviderRef>,
     /// Access key id
     access_key_id: Option<String>,
     /// Secret access_key
@@ -486,10 +492,55 @@ impl FromStr for AmazonS3ConfigKey {
     }
 }
 
+impl Default for AmazonS3Builder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AmazonS3Builder {
     /// Create a new [`AmazonS3Builder`] with default values.
     pub fn new() -> Self {
-        Default::default()
+        let mut builder = Self {
+            crypto_provider: None,
+            access_key_id: None,
+            secret_access_key: None,
+            region: None,
+            bucket_name: None,
+            endpoint: None,
+            token: None,
+            url: None,
+            retry_config: RetryConfig::default(),
+            imdsv1_fallback: ConfigValue::default(),
+            virtual_hosted_style_request: ConfigValue::default(),
+            s3_express: ConfigValue::default(),
+            unsigned_payload: ConfigValue::default(),
+            checksum_algorithm: None,
+            metadata_endpoint: Some(DEFAULT_METADATA_ENDPOINT.to_string()),
+            container_credentials_relative_uri: None,
+            container_credentials_full_uri: None,
+            container_authorization_token_file: None,
+            client_options: ClientOptions::default(),
+            credentials: None,
+            skip_signature: ConfigValue::default(),
+            copy_if_not_exists: None,
+            conditional_put: ConfigValue::default(),
+            disable_tagging: ConfigValue::default(),
+            encryption_type: None,
+            encryption_kms_key_id: None,
+            encryption_bucket_key_enabled: None,
+            encryption_customer_key_base64: None,
+            request_payer: ConfigValue::default(),
+            http_connector: None,
+        };
+
+        #[cfg(feature = "ring")]
+        {
+            use crate::crypto::ring_crypto::RingProvider;
+            builder = builder.with_crypto(Arc::new(RingProvider::default()));
+        };
+
+        builder
     }
 
     /// Fill the [`AmazonS3Builder`] with regular AWS environment variables
@@ -535,6 +586,12 @@ impl AmazonS3Builder {
         }
 
         builder
+    }
+
+    /// TODO(jakedern): Docs
+    pub fn with_crypto(mut self, crypto_provider: CryptoProviderRef) -> Self {
+        self.crypto_provider = Some(crypto_provider);
+        self
     }
 
     /// Parse available connection info form a well-known storage URL.
@@ -1096,6 +1153,10 @@ impl AmazonS3Builder {
             )) as _
         };
 
+        let crypto_provider = self
+            .crypto_provider
+            .ok_or(Error::MissingCryptoProvider {})?;
+
         let (session_provider, zonal_endpoint) = match self.s3_express.get()? {
             true => {
                 let zone = parse_bucket_az(&bucket).ok_or_else(|| {
@@ -1109,6 +1170,7 @@ impl AmazonS3Builder {
                 let session = Arc::new(
                     TokenCredentialProvider::new(
                         SessionProvider {
+                            crypto_provider: crypto_provider.clone(),
                             endpoint: endpoint.clone(),
                             region: region.clone(),
                             credentials: Arc::clone(&credentials),
@@ -1148,6 +1210,7 @@ impl AmazonS3Builder {
         };
 
         let config = S3Config {
+            crypto_provider: crypto_provider.clone(),
             region,
             bucket,
             bucket_endpoint,
@@ -1166,9 +1229,12 @@ impl AmazonS3Builder {
         };
 
         let http_client = http.connect(&config.client_options)?;
-        let client = Arc::new(S3Client::new(config, http_client));
+        let client = Arc::new(S3Client::new(config, http_client, crypto_provider.clone()));
 
-        Ok(AmazonS3 { client })
+        Ok(AmazonS3 {
+            client,
+            crypto_provider,
+        })
     }
 }
 

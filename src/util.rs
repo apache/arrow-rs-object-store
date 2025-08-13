@@ -42,12 +42,6 @@ where
     Ok(chrono::TimeZone::from_utc_datetime(&chrono::Utc, &naive))
 }
 
-#[cfg(feature = "aws")]
-pub(crate) fn hmac_sha256(secret: impl AsRef<[u8]>, bytes: impl AsRef<[u8]>) -> ring::hmac::Tag {
-    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_ref());
-    ring::hmac::sign(&key, bytes.as_ref())
-}
-
 /// Collect a stream into [`Bytes`] avoiding copying in the event of a single chunk
 pub async fn collect_bytes<S, E>(mut stream: S, size_hint: Option<u64>) -> Result<Bytes, E>
 where

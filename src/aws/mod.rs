@@ -40,6 +40,7 @@ use crate::aws::client::{CompleteMultipartMode, PutPartPayload, RequestError, S3
 use crate::client::get::GetClientExt;
 use crate::client::list::{ListClient, ListClientExt};
 use crate::client::CredentialProvider;
+use crate::crypto::CryptoProviderRef;
 use crate::multipart::{MultipartStore, PartId};
 use crate::signer::Signer;
 use crate::util::STRICT_ENCODE_SET;
@@ -83,6 +84,7 @@ pub use credential::{AwsAuthorizer, AwsCredential};
 #[derive(Debug, Clone)]
 pub struct AmazonS3 {
     client: Arc<S3Client>,
+    crypto_provider: CryptoProviderRef,
 }
 
 impl std::fmt::Display for AmazonS3 {
@@ -139,8 +141,13 @@ impl Signer for AmazonS3 {
     /// ```
     async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
         let credential = self.credentials().get_credential().await?;
-        let authorizer = AwsAuthorizer::new(&credential, "s3", &self.client.config.region)
-            .with_request_payer(self.client.config.request_payer);
+        let authorizer = AwsAuthorizer::new(
+            &credential,
+            self.crypto_provider.as_ref(),
+            "s3",
+            &self.client.config.region,
+        )
+        .with_request_payer(self.client.config.request_payer);
 
         let path_url = self.path_url(path);
         let mut url = path_url.parse().map_err(|e| Error::Generic {
@@ -496,6 +503,7 @@ mod tests {
     use crate::client::get::GetClient;
     use crate::client::retry::RetryContext;
     use crate::client::SpawnedReqwestConnector;
+    use crate::crypto;
     use crate::integration::*;
     use crate::tests::*;
     use crate::ClientOptions;
@@ -596,6 +604,7 @@ mod tests {
             tagging(
                 Arc::new(AmazonS3 {
                     client: Arc::clone(&integration.client),
+                    crypto_provider: Arc::from(crypto::noop_crypto::NoopCrypto {}),
                 }),
                 !config.disable_tagging,
                 |p| {
