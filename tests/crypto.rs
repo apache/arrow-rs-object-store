@@ -45,3 +45,28 @@ fn test_azure_default_crypto() {
             .contains("Missing crypto provider."));
     }
 }
+
+#[test]
+#[cfg(feature = "aws")]
+fn test_aws_default_crypto() {
+    let builder = object_store::aws::AmazonS3Builder::default().with_bucket_name("testbucket");
+
+    #[cfg(feature = "ring")]
+    {
+        // Builder should build ok with the default crypto provider
+        builder.build().unwrap();
+    }
+
+    #[cfg(not(feature = "ring"))]
+    {
+        let res = builder.build();
+        assert!(
+            res.is_err(),
+            "Builder should fail without crypto configured"
+        );
+        assert!(res
+            .unwrap_err()
+            .to_string()
+            .contains("Missing crypto provider."));
+    }
+}
