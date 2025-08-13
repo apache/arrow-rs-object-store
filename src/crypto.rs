@@ -18,14 +18,25 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use crate::util::hex_encode;
+
 pub type CryptoProviderRef = Arc<dyn CryptoProvider>;
 
 /// TODO(jakedern): Docs
 pub trait CryptoProvider: Send + Sync + Debug + 'static {
     fn digest_all_sha256(&self, payloads: &mut dyn Iterator<Item = &[u8]>)
         -> crate::Result<Digest>;
-    fn digest_sha256(&self, bytes: &[u8]) -> crate::Result<Digest>;
+
     fn hmac_sha256(&self, secret: &[u8], bytes: &[u8]) -> crate::Result<Tag>;
+
+    fn digest_sha256(&self, bytes: &[u8]) -> crate::Result<Digest> {
+        self.digest_all_sha256(&mut [bytes].into_iter())
+    }
+
+    fn hex_digest(&self, bytes: &[u8]) -> crate::Result<String> {
+        let digest = self.digest_sha256(bytes)?;
+        Ok(hex_encode(digest.as_ref()))
+    }
 }
 
 #[derive(Debug)]
@@ -85,11 +96,6 @@ pub mod ring_crypto {
             Ok(hasher.finish().as_ref().into())
         }
 
-        fn digest_sha256(&self, bytes: &[u8]) -> crate::Result<Digest> {
-            let digest = ring::digest::digest(&ring::digest::SHA256, bytes);
-            Ok(digest.as_ref().into())
-        }
-
         fn hmac_sha256(&self, secret: &[u8], bytes: &[u8]) -> crate::Result<Tag> {
             let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret);
             let tag = ring::hmac::sign(&key, bytes);
@@ -121,6 +127,7 @@ pub mod noop_crypto {
         fn digest_sha256(&self, bytes: &[u8]) -> crate::Result<Digest> {
             Ok(Digest(bytes.to_vec()))
         }
+
         fn hmac_sha256(&self, _secret: &[u8], bytes: &[u8]) -> crate::Result<Tag> {
             Ok(Tag(bytes.to_vec()))
         }
