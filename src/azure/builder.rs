@@ -560,23 +560,23 @@ impl MicrosoftAzureBuilder {
     ///     .with_container_name("foo")
     ///     .build();
     /// ```
-    pub fn from_env(mut self) -> Self {
-        // let mut builder = Self::default();
+    pub fn from_env() -> Self {
+        let mut builder = Self::default();
         for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 if key.starts_with("AZURE_") {
                     if let Ok(config_key) = key.to_ascii_lowercase().parse() {
-                        self = self.with_config(config_key, value);
+                        builder = builder.with_config(config_key, value);
                     }
                 }
             }
         }
 
         if let Ok(text) = std::env::var(MSI_ENDPOINT_ENV_KEY) {
-            self = self.with_msi_endpoint(text);
+            builder = builder.with_msi_endpoint(text);
         }
 
-        self
+        builder
     }
 
     /// TODO(jakedern): Docs
@@ -1151,6 +1151,8 @@ fn split_sas(sas: &str) -> Result<Vec<(String, String)>, Error> {
 
 #[cfg(test)]
 mod tests {
+    use crate::crypto;
+
     use super::*;
     use std::collections::HashMap;
 
@@ -1316,5 +1318,24 @@ mod tests {
         } else {
             panic!("{key} not propagated as ClientConfigKey");
         }
+    }
+
+    #[test]
+    fn azure_test_crypto_configuration() {
+        let builder = MicrosoftAzureBuilder::default()
+            .with_container_name("testcontainer")
+            .with_account("testaccount")
+            .with_crypto(Arc::from(crypto::noop_crypto::NoopCrypto {}));
+
+        let bytes = b"hello world";
+        assert_eq!(
+            builder
+                .crypto_provider
+                .unwrap()
+                .digest_sha256(bytes)
+                .unwrap()
+                .as_ref(),
+            bytes
+        );
     }
 }

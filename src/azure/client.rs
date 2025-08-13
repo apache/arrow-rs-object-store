@@ -1256,7 +1256,6 @@ pub(crate) struct UserDelegationKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::ring_crypto::RingProvider;
     use crate::StaticCredentialProvider;
     use bytes::Bytes;
     use regex::bytes::Regex;
@@ -1452,7 +1451,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "ring")]
     async fn test_build_bulk_delete_body() {
+        use crate::crypto::ring_crypto::RingProvider;
+
         let credential_provider = Arc::new(StaticCredentialProvider::new(
             AzureCredential::BearerToken("static-token".to_string()),
         ));
