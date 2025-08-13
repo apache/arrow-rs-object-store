@@ -1419,6 +1419,8 @@ impl From<S3EncryptionHeaders> for HeaderMap {
 
 #[cfg(test)]
 mod tests {
+    use crate::crypto;
+
     use super::*;
     use std::collections::HashMap;
 
@@ -1797,6 +1799,23 @@ mod tests {
         assert!(
             debug_str.contains("TokenCredentialProvider"),
             "expected TokenCredentialProvider but got: {debug_str}"
+        )
+    }
+
+    fn aws_test_crypto_configuration() {
+        let builder = AmazonS3Builder::default()
+            .with_bucket_name("testbucket")
+            .with_crypto(Arc::from(crypto::noop_crypto::NoopCrypto {}));
+
+        let bytes = b"hello world";
+        assert_eq!(
+            builder
+                .crypto_provider
+                .unwrap()
+                .digest_sha256(bytes)
+                .unwrap()
+                .as_ref(),
+            bytes
         );
     }
 }
