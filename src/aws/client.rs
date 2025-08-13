@@ -33,6 +33,7 @@ use crate::client::s3::{
     InitiateMultipartUploadResult, ListResponse, PartMetadata,
 };
 use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpResponse};
+use crate::crypto::{CryptoProvider, CryptoProviderRef};
 use crate::list::{PaginatedListOptions, PaginatedListResult};
 use crate::multipart::PartId;
 use crate::{
@@ -191,6 +192,7 @@ impl From<DeleteError> for Error {
 
 #[derive(Debug)]
 pub(crate) struct S3Config {
+    pub crypto_provider: CryptoProviderRef,
     pub region: String,
     pub bucket: String,
     pub bucket_endpoint: String,
@@ -223,6 +225,7 @@ impl S3Config {
         };
 
         Ok(SessionCredential {
+            crypto_provider: self.crypto_provider.as_ref(),
             credential,
             session_token: self.session_provider.is_some(),
             config: self,
@@ -243,6 +246,7 @@ impl S3Config {
 }
 
 struct SessionCredential<'a> {
+    crypto_provider: &'a dyn CryptoProvider,
     credential: Option<Arc<AwsCredential>>,
     session_token: bool,
     config: &'a S3Config,
@@ -250,10 +254,14 @@ struct SessionCredential<'a> {
 
 impl SessionCredential<'_> {
     fn authorizer(&self) -> Option<AwsAuthorizer<'_>> {
-        let mut authorizer =
-            AwsAuthorizer::new(self.credential.as_deref()?, "s3", &self.config.region)
-                .with_sign_payload(self.config.sign_payload)
-                .with_request_payer(self.config.request_payer);
+        let mut authorizer = AwsAuthorizer::new(
+            self.credential.as_deref()?,
+            self.crypto_provider,
+            "s3",
+            &self.config.region,
+        )
+        .with_sign_payload(self.config.sign_payload)
+        .with_request_payer(self.config.request_payer);
 
         if self.session_token {
             let token = HeaderName::from_static("x-amz-s3session-token");
@@ -290,6 +298,7 @@ impl From<RequestError> for crate::Error {
 
 /// A builder for a request allowing customisation of the headers and query string
 pub(crate) struct Request<'a> {
+    crypto_provider: &'a dyn CryptoProvider,
     path: &'a Path,
     config: &'a S3Config,
     builder: HttpRequestBuilder,
@@ -419,6 +428,7 @@ impl Request<'_> {
         let credential = match self.use_session_creds {
             true => self.config.get_session_credential().await?,
             false => SessionCredential {
+                crypto_provider: self.crypto_provider,
                 credential: self.config.get_credential().await?,
                 session_token: false,
                 config: self.config,
@@ -454,16 +464,26 @@ impl Request<'_> {
 pub(crate) struct S3Client {
     pub config: S3Config,
     pub client: HttpClient,
+    pub crypto_provider: CryptoProviderRef,
 }
 
 impl S3Client {
-    pub(crate) fn new(config: S3Config, client: HttpClient) -> Self {
-        Self { config, client }
+    pub(crate) fn new(
+        config: S3Config,
+        client: HttpClient,
+        crypto_provider: CryptoProviderRef,
+    ) -> Self {
+        Self {
+            config,
+            client,
+            crypto_provider,
+        }
     }
 
     pub(crate) fn request<'a>(&'a self, method: Method, path: &'a Path) -> Request<'a> {
         let url = self.config.path_url(path);
         Request {
+            crypto_provider: self.crypto_provider.as_ref(),
             path,
             builder: self.client.request(method, url),
             payload: None,

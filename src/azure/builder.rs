@@ -501,7 +501,7 @@ impl Default for MicrosoftAzureBuilder {
 impl MicrosoftAzureBuilder {
     /// Create a new [`MicrosoftAzureBuilder`] with default values.
     pub fn new() -> Self {
-        let mut b = Self {
+        let mut builder = Self {
             crypto_provider: None,
             account_name: None,
             access_key: None,
@@ -537,10 +537,10 @@ impl MicrosoftAzureBuilder {
         #[cfg(feature = "ring")]
         {
             use crate::crypto::ring_crypto::RingProvider;
-            b = b.with_crypto(Arc::new(RingProvider::default()));
+            builder = builder.with_crypto(Arc::new(RingProvider::default()));
         };
 
-        b
+        builder
     }
 
     /// Create an instance of [`MicrosoftAzureBuilder`] with values pre-populated from environment variables.

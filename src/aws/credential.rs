@@ -20,7 +20,8 @@ use crate::client::builder::HttpRequestBuilder;
 use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
 use crate::client::{HttpClient, HttpError, HttpRequest, TokenProvider};
-use crate::util::{hex_digest, hex_encode, hmac_sha256};
+use crate::crypto::{CryptoProvider, CryptoProviderRef};
+use crate::util::{hex_digest, hex_encode};
 use crate::{CredentialProvider, Result, RetryConfig};
 use async_trait::async_trait;
 use bytes::Buf;
@@ -91,13 +92,24 @@ impl AwsCredential {
     /// Signs a string
     ///
     /// <https://docs.aws.amazon.com/general/latest/gr/sigv4-calculate-signature.html>
-    fn sign(&self, to_sign: &str, date: DateTime<Utc>, region: &str, service: &str) -> String {
+    fn sign(
+        &self,
+        crypto_provider: &dyn CryptoProvider,
+        to_sign: &str,
+        date: DateTime<Utc>,
+        region: &str,
+        service: &str,
+    ) -> Result<String> {
         let date_string = date.format("%Y%m%d").to_string();
-        let date_hmac = hmac_sha256(format!("AWS4{}", self.secret_key), date_string);
-        let region_hmac = hmac_sha256(date_hmac, region);
-        let service_hmac = hmac_sha256(region_hmac, service);
-        let signing_hmac = hmac_sha256(service_hmac, b"aws4_request");
-        hex_encode(hmac_sha256(signing_hmac, to_sign).as_ref())
+        let date_hmac = crypto_provider.hmac_sha256(
+            format!("AWS4{}", self.secret_key).as_bytes(),
+            date_string.as_bytes(),
+        )?;
+        let region_hmac = crypto_provider.hmac_sha256(date_hmac.as_ref(), region.as_bytes())?;
+        let service_hmac = crypto_provider.hmac_sha256(region_hmac.as_ref(), service.as_bytes())?;
+        let signing_hmac = crypto_provider.hmac_sha256(&service_hmac.as_ref(), b"aws4_request")?;
+        let signed = crypto_provider.hmac_sha256(signing_hmac.as_ref(), to_sign.as_bytes())?;
+        Ok(hex_encode(signed.as_ref()))
     }
 }
 
@@ -106,6 +118,7 @@ impl AwsCredential {
 /// [AWS SigV4]: https://docs.aws.amazon.com/general/latest/gr/sigv4-calculate-signature.html
 #[derive(Debug)]
 pub struct AwsAuthorizer<'a> {
+    crypto_provider: &'a dyn CryptoProvider,
     date: Option<DateTime<Utc>>,
     credential: &'a AwsCredential,
     service: &'a str,
@@ -124,8 +137,14 @@ const ALGORITHM: &str = "AWS4-HMAC-SHA256";
 
 impl<'a> AwsAuthorizer<'a> {
     /// Create a new [`AwsAuthorizer`]
-    pub fn new(credential: &'a AwsCredential, service: &'a str, region: &'a str) -> Self {
+    pub fn new(
+        credential: &'a AwsCredential,
+        crypto_provider: &'a dyn CryptoProvider,
+        service: &'a str,
+        region: &'a str,
+    ) -> Self {
         Self {
+            crypto_provider,
             credential,
             service,
             region,
@@ -170,7 +189,12 @@ impl<'a> AwsAuthorizer<'a> {
     /// * Otherwise it is set to the hex encoded SHA256 of the request body
     ///
     /// [AWS SigV4]: https://docs.aws.amazon.com/IAM/latest/UserGuide/create-signed-request.html
-    pub fn authorize(&self, request: &mut HttpRequest, pre_calculated_digest: Option<&[u8]>) {
+    #[must_use]
+    pub fn authorize(
+        &self,
+        request: &mut HttpRequest,
+        pre_calculated_digest: Option<&[u8]>,
+    ) -> Result<()> {
         let url = Url::parse(&request.uri().to_string()).unwrap();
 
         if let Some(ref token) = self.credential.token {
@@ -229,9 +253,13 @@ impl<'a> AwsAuthorizer<'a> {
         );
 
         // sign the string
-        let signature = self
-            .credential
-            .sign(&string_to_sign, date, self.region, self.service);
+        let signature = self.credential.sign(
+            self.crypto_provider,
+            &string_to_sign,
+            date,
+            self.region,
+            self.service,
+        )?;
 
         // build the actual auth header
         let authorisation = format!(
@@ -243,9 +271,11 @@ impl<'a> AwsAuthorizer<'a> {
         request
             .headers_mut()
             .insert(&AUTHORIZATION, authorization_val);
+
+        Ok(())
     }
 
-    pub(crate) fn sign(&self, method: Method, url: &mut Url, expires_in: Duration) {
+    pub(crate) fn sign(&self, method: Method, url: &mut Url, expires_in: Duration) -> Result<()> {
         let date = self.date.unwrap_or_else(Utc::now);
         let scope = self.scope(date);
 
@@ -294,12 +324,18 @@ impl<'a> AwsAuthorizer<'a> {
             digest,
         );
 
-        let signature = self
-            .credential
-            .sign(&string_to_sign, date, self.region, self.service);
+        let signature = self.credential.sign(
+            self.crypto_provider,
+            &string_to_sign,
+            date,
+            self.region,
+            self.service,
+        )?;
 
         url.query_pairs_mut()
             .append_pair("X-Amz-Signature", &signature);
+
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -374,7 +410,7 @@ impl CredentialExt for HttpRequestBuilder {
             Some(authorizer) => {
                 let (client, request) = self.into_parts();
                 let mut request = request.expect("request valid");
-                authorizer.authorize(&mut request, payload_sha256);
+                authorizer.authorize(&mut request, payload_sha256).unwrap();
 
                 Self::from_parts(client, request)
             }
@@ -801,6 +837,7 @@ async fn eks_credential(
 /// <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateSession.html>
 #[derive(Debug)]
 pub(crate) struct SessionProvider {
+    pub crypto_provider: CryptoProviderRef,
     pub endpoint: String,
     pub region: String,
     pub credentials: AwsCredentialProvider,
@@ -816,7 +853,8 @@ impl TokenProvider for SessionProvider {
         retry: &RetryConfig,
     ) -> Result<TemporaryToken<Arc<Self::Credential>>> {
         let creds = self.credentials.get_credential().await?;
-        let authorizer = AwsAuthorizer::new(&creds, "s3", &self.region);
+        let authorizer =
+            AwsAuthorizer::new(&creds, self.crypto_provider.as_ref(), "s3", &self.region);
 
         let bytes = client
             .get(format!("{}?session", self.endpoint))
@@ -853,12 +891,14 @@ mod tests {
     use crate::aws::{AmazonS3Builder, AmazonS3ConfigKey};
     use crate::client::mock_server::MockServer;
     use crate::client::HttpClient;
+    use crate::crypto;
     use http::Response;
     use reqwest::{Client, Method};
     use std::env;
 
     // Test generated using https://docs.aws.amazon.com/general/latest/gr/sigv4-signed-request-examples.html
     #[test]
+    #[cfg(feature = "ring")]
     fn test_sign_with_signed_payload() {
         let client = HttpClient::new(Client::new());
 
@@ -886,6 +926,7 @@ mod tests {
             .unwrap();
 
         let signer = AwsAuthorizer {
+            crypto_provider: &crypto::ring_crypto::RingProvider {},
             date: Some(date),
             credential: &credential,
             service: "ec2",
@@ -895,11 +936,12 @@ mod tests {
             request_payer: false,
         };
 
-        signer.authorize(&mut request, None);
+        signer.authorize(&mut request, None).unwrap();
         assert_eq!(request.headers().get(&AUTHORIZATION).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=a3c787a7ed37f7fdfbfd2d7056a3d7c9d85e6d52a2bfbec73793c0be6e7862d4")
     }
 
     #[test]
+    #[cfg(feature = "ring")]
     fn test_sign_with_signed_payload_request_payer() {
         let client = HttpClient::new(Client::new());
 
@@ -927,6 +969,7 @@ mod tests {
             .unwrap();
 
         let signer = AwsAuthorizer {
+            crypto_provider: &crypto::ring_crypto::RingProvider {},
             date: Some(date),
             credential: &credential,
             service: "ec2",
@@ -936,11 +979,12 @@ mod tests {
             request_payer: true,
         };
 
-        signer.authorize(&mut request, None);
+        signer.authorize(&mut request, None).unwrap();
         assert_eq!(request.headers().get(&AUTHORIZATION).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-request-payer, Signature=7030625a9e9b57ed2a40e63d749f4a4b7714b6e15004cab026152f870dd8565d")
     }
 
     #[test]
+    #[cfg(feature = "ring")]
     fn test_sign_with_unsigned_payload() {
         let client = HttpClient::new(Client::new());
 
@@ -968,6 +1012,7 @@ mod tests {
             .unwrap();
 
         let authorizer = AwsAuthorizer {
+            crypto_provider: &crypto::ring_crypto::RingProvider {},
             date: Some(date),
             credential: &credential,
             service: "ec2",
@@ -977,11 +1022,12 @@ mod tests {
             request_payer: false,
         };
 
-        authorizer.authorize(&mut request, None);
+        authorizer.authorize(&mut request, None).unwrap();
         assert_eq!(request.headers().get(&AUTHORIZATION).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=653c3d8ea261fd826207df58bc2bb69fbb5003e9eb3c0ef06e4a51f2a81d8699");
     }
 
     #[test]
+    #[cfg(feature = "ring")]
     fn signed_get_url() {
         // Values from https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html
         let credential = AwsCredential {
@@ -995,6 +1041,7 @@ mod tests {
             .with_timezone(&Utc);
 
         let authorizer = AwsAuthorizer {
+            crypto_provider: &crypto::ring_crypto::RingProvider {},
             date: Some(date),
             credential: &credential,
             service: "s3",
@@ -1005,7 +1052,9 @@ mod tests {
         };
 
         let mut url = Url::parse("https://examplebucket.s3.amazonaws.com/test.txt").unwrap();
-        authorizer.sign(Method::GET, &mut url, Duration::from_secs(86400));
+        authorizer
+            .sign(Method::GET, &mut url, Duration::from_secs(86400))
+            .unwrap();
 
         assert_eq!(
             url,
@@ -1023,6 +1072,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "ring")]
     fn signed_get_url_request_payer() {
         // Values from https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html
         let credential = AwsCredential {
@@ -1036,6 +1086,7 @@ mod tests {
             .with_timezone(&Utc);
 
         let authorizer = AwsAuthorizer {
+            crypto_provider: &crypto::ring_crypto::RingProvider {},
             date: Some(date),
             credential: &credential,
             service: "s3",
@@ -1046,7 +1097,9 @@ mod tests {
         };
 
         let mut url = Url::parse("https://examplebucket.s3.amazonaws.com/test.txt").unwrap();
-        authorizer.sign(Method::GET, &mut url, Duration::from_secs(86400));
+        authorizer
+            .sign(Method::GET, &mut url, Duration::from_secs(86400))
+            .unwrap();
 
         assert_eq!(
             url,
@@ -1065,6 +1118,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "ring")]
     fn test_sign_port() {
         let client = HttpClient::new(Client::new());
 
@@ -1091,6 +1145,7 @@ mod tests {
             .unwrap();
 
         let authorizer = AwsAuthorizer {
+            crypto_provider: &crypto::ring_crypto::RingProvider {},
             date: Some(date),
             credential: &credential,
             service: "s3",
@@ -1100,7 +1155,7 @@ mod tests {
             request_payer: false,
         };
 
-        authorizer.authorize(&mut request, None);
+        authorizer.authorize(&mut request, None).unwrap();
         assert_eq!(request.headers().get(&AUTHORIZATION).unwrap(), "AWS4-HMAC-SHA256 Credential=H20ABqCkLZID4rLe/20220809/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=9ebf2f92872066c99ac94e573b4e1b80f4dbb8a32b1e8e23178318746e7d1b4d")
     }
 

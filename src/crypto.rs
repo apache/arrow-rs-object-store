@@ -62,15 +62,6 @@ impl From<Vec<u8>> for Tag {
     }
 }
 
-pub(crate) fn hex_encode(bytes: &[u8]) -> String {
-    use std::fmt::Write;
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
-}
-
 /// TODO(jakedern): Docs
 #[cfg(feature = "ring")]
 pub mod ring_crypto {

@@ -252,6 +252,7 @@ impl<'a> AzureAuthorizer<'a> {
     }
 
     /// Authorize `request`
+    #[must_use]
     pub fn authorize(&self, request: &mut HttpRequest) -> Result<()> {
         add_date_and_version_headers(request);
 
