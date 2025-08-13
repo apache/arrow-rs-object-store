@@ -42,7 +42,7 @@ where
     Ok(chrono::TimeZone::from_utc_datetime(&chrono::Utc, &naive))
 }
 
-#[cfg(any(feature = "aws", feature = "azure"))]
+#[cfg(feature = "aws")]
 pub(crate) fn hmac_sha256(secret: impl AsRef<[u8]>, bytes: impl AsRef<[u8]>) -> ring::hmac::Tag {
     let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_ref());
     ring::hmac::sign(&key, bytes.as_ref())

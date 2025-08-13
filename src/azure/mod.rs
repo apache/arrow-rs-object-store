@@ -314,7 +314,7 @@ mod tests {
     #[tokio::test]
     async fn azure_blob_test() {
         maybe_skip_integration!();
-        let integration = MicrosoftAzureBuilder::default().from_env().build().unwrap();
+        let integration = MicrosoftAzureBuilder::from_env().build().unwrap();
 
         put_get_delete_list(&integration).await;
         get_opts(&integration).await;
