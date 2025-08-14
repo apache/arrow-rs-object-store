@@ -150,6 +150,13 @@ jobs:
       - name: Run object_store tests
         run: cargo test --features=aws,azure,gcp,http
 
+      - name: Run crypto feature tests
+        run: |
+          # With ring
+          cargo test crypto --no-default-features --features=aws,azure,gcp,ring
+          # Without ring
+          cargo test crypto --no-default-features --features=aws,azure,gcp
+
       # Don't rerun doc tests (some of them rely on features other than aws)
       - name: Run object_store tests (AWS native conditional put)
         run: cargo test --lib --tests --features=aws
