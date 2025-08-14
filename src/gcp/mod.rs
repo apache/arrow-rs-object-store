@@ -38,6 +38,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::client::CredentialProvider;
+use crate::crypto::CryptoProviderRef;
 use crate::gcp::credential::GCSAuthorizer;
 use crate::signer::Signer;
 use crate::{
@@ -75,6 +76,7 @@ pub type GcpSigningCredentialProvider =
 /// Interface for [Google Cloud Storage](https://cloud.google.com/storage/).
 #[derive(Debug, Clone)]
 pub struct GoogleCloudStorage {
+    crypto_provider: CryptoProviderRef,
     client: Arc<GoogleCloudStorageClient>,
 }
 
@@ -259,7 +261,7 @@ impl Signer for GoogleCloudStorage {
         })?;
 
         let signing_credentials = self.signing_credentials().get_credential().await?;
-        let authorizer = GCSAuthorizer::new(signing_credentials);
+        let authorizer = GCSAuthorizer::new(signing_credentials, self.crypto_provider.as_ref());
 
         authorizer
             .sign(method, &mut url, expires_in, &self.client)

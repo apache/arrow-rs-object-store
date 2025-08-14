@@ -494,13 +494,6 @@ impl std::fmt::Debug for MicrosoftAzureBuilder {
 
 impl Default for MicrosoftAzureBuilder {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl MicrosoftAzureBuilder {
-    /// Create a new [`MicrosoftAzureBuilder`] with default values.
-    pub fn new() -> Self {
         let mut builder = Self {
             crypto_provider: None,
             account_name: None,
@@ -541,6 +534,13 @@ impl MicrosoftAzureBuilder {
         };
 
         builder
+    }
+}
+
+impl MicrosoftAzureBuilder {
+    /// Create a new [`MicrosoftAzureBuilder`] with default values.
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Create an instance of [`MicrosoftAzureBuilder`] with values pre-populated from environment variables.
