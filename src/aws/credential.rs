@@ -21,7 +21,7 @@ use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
 use crate::client::{HttpClient, HttpError, HttpRequest, TokenProvider};
 use crate::crypto::{CryptoProvider, CryptoProviderRef};
-use crate::util::{hex_digest, hex_encode};
+use crate::util::hex_encode;
 use crate::{CredentialProvider, Result, RetryConfig};
 use async_trait::async_trait;
 use bytes::Buf;
@@ -219,7 +219,7 @@ impl<'a> AwsAuthorizer<'a> {
                 None => match request.body().is_empty() {
                     true => EMPTY_SHA256_HASH.to_string(),
                     false => match request.body().as_bytes() {
-                        Some(bytes) => hex_digest(bytes),
+                        Some(bytes) => self.crypto_provider.hex_digest(bytes)?,
                         None => STREAMING_PAYLOAD.to_string(),
                     },
                 },
@@ -250,7 +250,7 @@ impl<'a> AwsAuthorizer<'a> {
             &canonical_headers,
             &signed_headers,
             &digest,
-        );
+        )?;
 
         // sign the string
         let signature = self.credential.sign(
@@ -322,7 +322,7 @@ impl<'a> AwsAuthorizer<'a> {
             &canonical_headers,
             &signed_headers,
             digest,
-        );
+        )?;
 
         let signature = self.credential.sign(
             self.crypto_provider,
@@ -348,7 +348,7 @@ impl<'a> AwsAuthorizer<'a> {
         canonical_headers: &str,
         signed_headers: &str,
         digest: &str,
-    ) -> String {
+    ) -> Result<String> {
         // Each path segment must be URI-encoded twice (except for Amazon S3 which only gets
         // URI-encoded once).
         // see https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
@@ -370,15 +370,17 @@ impl<'a> AwsAuthorizer<'a> {
             digest
         );
 
-        let hashed_canonical_request = hex_digest(canonical_request.as_bytes());
+        let hashed_canonical_request = self
+            .crypto_provider
+            .hex_digest(canonical_request.as_bytes())?;
 
-        format!(
+        Ok(format!(
             "{}\n{}\n{}\n{}",
             ALGORITHM,
             date.format("%Y%m%dT%H%M%SZ"),
             scope,
             hashed_canonical_request
-        )
+        ))
     }
 
     fn scope(&self, date: DateTime<Utc>) -> String {
