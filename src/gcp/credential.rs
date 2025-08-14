@@ -20,8 +20,9 @@ use crate::client::builder::HttpRequestBuilder;
 use crate::client::retry::RetryExt;
 use crate::client::token::TemporaryToken;
 use crate::client::{HttpClient, HttpError, TokenProvider};
+use crate::crypto::CryptoProvider;
 use crate::gcp::{GcpSigningCredentialProvider, STORE};
-use crate::util::{hex_digest, hex_encode, STRICT_ENCODE_SET};
+use crate::util::{hex_encode, STRICT_ENCODE_SET};
 use crate::{RetryConfig, StaticCredentialProvider};
 use async_trait::async_trait;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
@@ -92,6 +93,9 @@ pub enum Error {
 
     #[error("Error reading pem file: {}", source)]
     ReadPem { source: std::io::Error },
+
+    #[error("Error performing cryptographic operations.")]
+    Crypto(Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl From<Error> for crate::Error {
@@ -750,15 +754,20 @@ fn trim_header_value(value: &str) -> String {
 ///
 /// [Google SigV4]: https://cloud.google.com/storage/docs/access-control/signed-urls
 #[derive(Debug)]
-pub(crate) struct GCSAuthorizer {
+pub(crate) struct GCSAuthorizer<'a> {
+    crypto_provider: &'a dyn CryptoProvider,
     date: Option<DateTime<Utc>>,
     credential: Arc<GcpSigningCredential>,
 }
 
-impl GCSAuthorizer {
+impl<'a> GCSAuthorizer<'a> {
     /// Create a new [`GCSAuthorizer`]
-    pub(crate) fn new(credential: Arc<GcpSigningCredential>) -> Self {
+    pub(crate) fn new(
+        credential: Arc<GcpSigningCredential>,
+        crypto_provider: &'a dyn CryptoProvider,
+    ) -> Self {
         Self {
+            crypto_provider,
             date: None,
             credential,
         }
@@ -788,7 +797,7 @@ impl GCSAuthorizer {
             .append_pair("X-Goog-Expires", &expires_in.as_secs().to_string())
             .append_pair("X-Goog-SignedHeaders", &signed_headers);
 
-        let string_to_sign = self.string_to_sign(date, &method, url, &headers);
+        let string_to_sign = self.string_to_sign(date, &method, url, &headers)?;
         let signature = match &self.credential.private_key {
             Some(key) => key.sign(&string_to_sign)?,
             None => client.sign_blob(&string_to_sign, email).await?,
@@ -892,18 +901,21 @@ impl GCSAuthorizer {
         request_method: &Method,
         url: &Url,
         headers: &HeaderMap,
-    ) -> String {
+    ) -> Result<String> {
         let canonical_request = Self::canonicalize_request(url, request_method, headers);
-        let hashed_canonical_req = hex_digest(canonical_request.as_bytes());
+        let hashed_canonical_req = self
+            .crypto_provider
+            .hex_digest(canonical_request.as_bytes())
+            .map_err(|e| Error::Crypto(Box::new(e)))?;
         let scope = self.scope(date);
 
-        format!(
+        Ok(format!(
             "{}\n{}\n{}\n{}",
             "GOOG4-RSA-SHA256",
             date.format("%Y%m%dT%H%M%SZ"),
             scope,
             hashed_canonical_req
-        )
+        ))
     }
 }
 

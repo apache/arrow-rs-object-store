@@ -95,7 +95,7 @@ pub enum Error {
     #[error("Generating SAS keys with SAS tokens auth is not supported")]
     SASforSASNotSupported,
 
-    #[error("Error performing cryptographic operations")]
+    #[error("Error performing cryptographic operations.")]
     Crypto(Box<dyn std::error::Error + Send + Sync>),
 }
 

@@ -17,6 +17,7 @@
 
 use crate::client::{http_connector, HttpConnector, TokenCredentialProvider};
 use crate::config::ConfigValue;
+use crate::crypto::CryptoProviderRef;
 use crate::gcp::client::{GoogleCloudStorageClient, GoogleCloudStorageConfig};
 use crate::gcp::credential::{
     ApplicationDefaultCredentials, InstanceCredentialProvider, ServiceAccountCredentials,
@@ -65,6 +66,9 @@ enum Error {
 
     #[error("GCP credential error: {}", source)]
     Credential { source: credential::Error },
+
+    #[error("Missing crypto provider. Please enabled the default crypto provider or configure one explicitly.")]
+    MissingCryptoProvider {},
 }
 
 impl From<Error> for crate::Error {
@@ -94,6 +98,8 @@ impl From<Error> for crate::Error {
 /// ```
 #[derive(Debug, Clone)]
 pub struct GoogleCloudStorageBuilder {
+    /// Crypto provider
+    crypto_provider: Option<CryptoProviderRef>,
     /// Bucket name
     bucket_name: Option<String>,
     /// Url
@@ -209,7 +215,8 @@ impl FromStr for GoogleConfigKey {
 
 impl Default for GoogleCloudStorageBuilder {
     fn default() -> Self {
-        Self {
+        let mut builder = Self {
+            crypto_provider: None,
             bucket_name: None,
             service_account_path: None,
             service_account_key: None,
@@ -221,14 +228,22 @@ impl Default for GoogleCloudStorageBuilder {
             skip_signature: Default::default(),
             signing_credentials: None,
             http_connector: None,
-        }
+        };
+
+        #[cfg(feature = "ring")]
+        {
+            use crate::crypto::ring_crypto::RingProvider;
+            builder = builder.with_crypto(Arc::new(RingProvider::default()));
+        };
+
+        builder
     }
 }
 
 impl GoogleCloudStorageBuilder {
     /// Create a new [`GoogleCloudStorageBuilder`] with default values.
     pub fn new() -> Self {
-        Default::default()
+        Self::default()
     }
 
     /// Create an instance of [`GoogleCloudStorageBuilder`] with values pre-populated from environment variables.
@@ -267,6 +282,12 @@ impl GoogleCloudStorageBuilder {
         }
 
         builder
+    }
+
+    /// TODO(jakedern): Docs
+    pub fn with_crypto(mut self, crypto_provider: CryptoProviderRef) -> Self {
+        self.crypto_provider = Some(crypto_provider);
+        self
     }
 
     /// Parse available connection info form a well-known storage URL.
@@ -577,8 +598,13 @@ impl GoogleCloudStorageBuilder {
             skip_signature: self.skip_signature.get()?,
         };
 
+        let crypto_provider = self
+            .crypto_provider
+            .ok_or(Error::MissingCryptoProvider {})?;
+
         let http_client = http.connect(&config.client_options)?;
         Ok(GoogleCloudStorage {
+            crypto_provider,
             client: Arc::new(GoogleCloudStorageClient::new(config, http_client)?),
         })
     }
