@@ -28,8 +28,9 @@ fn test_azure_default_crypto() {
 
     #[cfg(feature = "ring")]
     {
-        // Builder should build just fine with the default crypto provider
-        builder.build().unwrap();
+        builder
+            .build()
+            .expect("default crypto should be configured");
     }
 
     #[cfg(not(feature = "ring"))]
@@ -53,8 +54,36 @@ fn test_aws_default_crypto() {
 
     #[cfg(feature = "ring")]
     {
-        // Builder should build ok with the default crypto provider
-        builder.build().unwrap();
+        builder
+            .build()
+            .expect("default crypto should be configured");
+    }
+
+    #[cfg(not(feature = "ring"))]
+    {
+        let res = builder.build();
+        assert!(
+            res.is_err(),
+            "Builder should fail without crypto configured"
+        );
+        assert!(res
+            .unwrap_err()
+            .to_string()
+            .contains("Missing crypto provider."));
+    }
+}
+
+#[test]
+#[cfg(feature = "gcp")]
+fn test_gcp_default_crypto() {
+    let builder =
+        object_store::gcp::GoogleCloudStorageBuilder::default().with_bucket_name("testbucket");
+
+    #[cfg(feature = "ring")]
+    {
+        builder
+            .build()
+            .expect("default crypto should be configured");
     }
 
     #[cfg(not(feature = "ring"))]
