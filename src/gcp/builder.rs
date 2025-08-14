@@ -612,6 +612,8 @@ impl GoogleCloudStorageBuilder {
 
 #[cfg(test)]
 mod tests {
+    use crate::crypto;
+
     use super::*;
     use std::collections::HashMap;
     use std::io::Write;
@@ -763,5 +765,23 @@ mod tests {
         } else {
             panic!("{key} not propagated as ClientConfigKey");
         }
+    }
+
+    #[test]
+    fn gcp_test_crypto_configuration() {
+        let builder = GoogleCloudStorageBuilder::default()
+            .with_bucket_name("testbucket")
+            .with_crypto(Arc::from(crypto::noop_crypto::NoopCrypto {}));
+
+        let bytes = b"hello world";
+        assert_eq!(
+            builder
+                .crypto_provider
+                .unwrap()
+                .digest_sha256(bytes)
+                .unwrap()
+                .as_ref(),
+            bytes
+        );
     }
 }
