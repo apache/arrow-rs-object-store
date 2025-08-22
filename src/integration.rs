@@ -36,6 +36,7 @@ use futures::stream::FuturesUnordered;
 use futures::{StreamExt, TryStreamExt};
 use rand::{rng, Rng};
 use std::collections::HashSet;
+use std::slice;
 
 pub(crate) async fn flatten_list_stream(
     storage: &DynObjectStore,
@@ -67,11 +68,11 @@ pub async fn put_get_delete_list(storage: &DynObjectStore) {
 
     // List everything
     let content_list = flatten_list_stream(storage, None).await.unwrap();
-    assert_eq!(content_list, &[location.clone()]);
+    assert_eq!(content_list, slice::from_ref(&location));
 
     // Should behave the same as no prefix
     let content_list = flatten_list_stream(storage, Some(&root)).await.unwrap();
-    assert_eq!(content_list, &[location.clone()]);
+    assert_eq!(content_list, slice::from_ref(&location));
 
     // List with delimiter
     let result = storage.list_with_delimiter(None).await.unwrap();
@@ -96,7 +97,7 @@ pub async fn put_get_delete_list(storage: &DynObjectStore) {
     // List everything starting with a prefix that should return results
     let prefix = Path::from("test_dir");
     let content_list = flatten_list_stream(storage, Some(&prefix)).await.unwrap();
-    assert_eq!(content_list, &[location.clone()]);
+    assert_eq!(content_list, slice::from_ref(&location));
 
     // List everything starting with a prefix that shouldn't return results
     let prefix = Path::from("something");
@@ -855,7 +856,7 @@ pub async fn list_uses_directories_correctly(storage: &DynObjectStore) {
 
     let prefix = Path::from("foo");
     let content_list = flatten_list_stream(storage, Some(&prefix)).await.unwrap();
-    assert_eq!(content_list, &[location1.clone()]);
+    assert_eq!(content_list, slice::from_ref(&location1));
 
     let result = storage.list_with_delimiter(Some(&prefix)).await.unwrap();
     assert_eq!(result.objects.len(), 1);
