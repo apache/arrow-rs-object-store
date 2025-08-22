@@ -195,7 +195,9 @@ impl FromStr for GoogleConfigKey {
             | "service_account_path" => Ok(Self::ServiceAccount),
             "google_service_account_key" | "service_account_key" => Ok(Self::ServiceAccountKey),
             "google_bucket" | "google_bucket_name" | "bucket" | "bucket_name" => Ok(Self::Bucket),
-            "google_application_credentials" => Ok(Self::ApplicationCredentials),
+            "google_application_credentials" | "application_credentials" => {
+                Ok(Self::ApplicationCredentials)
+            }
             "google_skip_signature" | "skip_signature" => Ok(Self::SkipSignature),
             _ => match s.strip_prefix("google_").unwrap_or(s).parse() {
                 Ok(key) => Ok(Self::Client(key)),
