@@ -108,19 +108,30 @@ impl RetryContext {
 /// The reason a request failed
 #[derive(Debug, thiserror::Error)]
 pub enum RequestError {
+    /// Received redirect without LOCATION, this normally indicates an incorrectly configured region
     #[error("Received redirect without LOCATION, this normally indicates an incorrectly configured region"
     )]
     BareRedirect,
 
+    /// Server returned non-2xx status code
     #[error("Server returned non-2xx status code: {status}: {}", body.as_deref().unwrap_or(""))]
     Status {
+        /// The status code returned by the server
         status: StatusCode,
+        /// The body of the response
         body: Option<String>,
     },
 
+    /// Server returned error response
     #[error("Server returned error response: {body}")]
-    Response { status: StatusCode, body: String },
+    Response {
+        /// The status code returned by the server
+        status: StatusCode,
+        /// The body of the response
+        body: String,
+    },
 
+    /// Server returned a generic HTTP error
     #[error(transparent)]
     Http(#[from] HttpError),
 }
@@ -150,6 +161,7 @@ impl RetryError {
         }
     }
 
+    /// Convert the retry error to a [`crate::Error`]
     pub fn error(self, store: &'static str, path: String) -> crate::Error {
         match self.status() {
             Some(StatusCode::NOT_FOUND) => crate::Error::NotFound {
