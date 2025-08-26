@@ -224,6 +224,8 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod tests {
+    use std::slice;
+
     use super::*;
     use crate::integration::*;
     use crate::local::LocalFileSystem;
@@ -259,11 +261,11 @@ mod tests {
         let location_prefix = Path::from("test_file.json");
 
         let content_list = flatten_list_stream(&prefix, None).await.unwrap();
-        assert_eq!(content_list, &[location_prefix.clone()]);
+        assert_eq!(content_list, slice::from_ref(&location_prefix));
 
         let root = Path::from("/");
         let content_list = flatten_list_stream(&prefix, Some(&root)).await.unwrap();
-        assert_eq!(content_list, &[location_prefix.clone()]);
+        assert_eq!(content_list, slice::from_ref(&location_prefix));
 
         let read_data = prefix
             .get(&location_prefix)

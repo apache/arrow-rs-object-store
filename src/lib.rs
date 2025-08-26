@@ -128,7 +128,7 @@
 //! to support a wide variety of user-defined store configurations, with minimal additional
 //! application complexity.
 //!
-//! ```no_run
+//! ```no_run,ignore-wasm32
 //! # #[cfg(feature = "aws")] {
 //! # use url::Url;
 //! # use object_store::{parse_url, parse_url_opts};
@@ -163,7 +163,7 @@
 //! Use the [`ObjectStore::list`] method to iterate over objects in
 //! remote storage or files in the local filesystem:
 //!
-//! ```
+//! ```ignore-wasm32
 //! # use object_store::local::LocalFileSystem;
 //! # use std::sync::Arc;
 //! # use object_store::{path::Path, ObjectStore};
@@ -207,7 +207,7 @@
 //! Use the [`ObjectStore::get`] method to fetch the data bytes
 //! from remote storage or files in the local filesystem as a stream.
 //!
-//! ```
+//! ```ignore-wasm32
 //! # use futures::TryStreamExt;
 //! # use object_store::local::LocalFileSystem;
 //! # use std::sync::Arc;
@@ -254,7 +254,7 @@
 //!
 //! Use the [`ObjectStore::put`] method to atomically write data.
 //!
-//! ```
+//! ```ignore-wasm32
 //! # use object_store::local::LocalFileSystem;
 //! # use object_store::{ObjectStore, PutPayload};
 //! # use std::sync::Arc;
@@ -275,7 +275,7 @@
 //!
 //! Use the [`ObjectStore::put_multipart`] method to atomically write a large amount of data
 //!
-//! ```
+//! ```ignore-wasm32
 //! # use object_store::local::LocalFileSystem;
 //! # use object_store::{ObjectStore, WriteMultipart};
 //! # use std::sync::Arc;
@@ -304,7 +304,7 @@
 //! [`ObjectStore::get_ranges`] provides an efficient way to perform such vectored IO, and will
 //! automatically coalesce adjacent ranges into an appropriate number of parallel requests.
 //!
-//! ```
+//! ```ignore-wasm32
 //! # use object_store::local::LocalFileSystem;
 //! # use object_store::ObjectStore;
 //! # use std::sync::Arc;
@@ -336,7 +336,7 @@
 //! possible to instead allocate memory in chunks and avoid bump allocating. [`PutPayloadMut`]
 //! encapsulates this approach
 //!
-//! ```
+//! ```ignore-wasm32
 //! # use object_store::local::LocalFileSystem;
 //! # use object_store::{ObjectStore, PutPayloadMut};
 //! # use std::sync::Arc;
@@ -693,7 +693,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// filesystems, GCP, and Azure return an error, while S3 and in-memory will
     /// return Ok. If it is an error, it will be [`Error::NotFound`].
     ///
-    /// ```
+    /// ```ignore-wasm32
     /// # use futures::{StreamExt, TryStreamExt};
     /// # use object_store::local::LocalFileSystem;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
