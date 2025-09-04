@@ -47,7 +47,11 @@ pub enum Attribute {
     CacheControl,
     /// Specifies the storage class of the object.
     ///
-    /// See [AWS](https://aws.amazon.com/s3/storage-classes/) and [GCP](https://cloud.google.com/storage/docs/storage-classes).
+    /// See [AWS](https://aws.amazon.com/s3/storage-classes/),
+    /// [GCP](https://cloud.google.com/storage/docs/storage-classes), and
+    /// [Azure](https://learn.microsoft.com/en-us/rest/api/storageservices/set-blob-tier).  
+    /// `StorageClass` is used as the name for this attribute because 2 of the 3 storage providers
+    /// use that name
     StorageClass,
     /// Specifies a user-defined metadata field for the object
     ///
