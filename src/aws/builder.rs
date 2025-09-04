@@ -965,7 +965,8 @@ impl AmazonS3Builder {
             let session_name = std::env::var("AWS_ROLE_SESSION_NAME")
                 .unwrap_or_else(|_| "WebIdentitySession".to_string());
 
-            let endpoint = format!("https://sts.{region}.amazonaws.com");
+            let endpoint = std::env::var("AWS_ENDPOINT_URL_STS")
+                .unwrap_or_else(|_| format!("https://sts.{region}.amazonaws.com"));
 
             // Disallow non-HTTPs requests
             let options = self.client_options.clone().with_allow_http(false);
