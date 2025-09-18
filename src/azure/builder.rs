@@ -23,6 +23,7 @@ use crate::azure::credential::{
 use crate::azure::{AzureCredential, AzureCredentialProvider, MicrosoftAzure, STORE};
 use crate::client::{http_connector, HttpConnector, TokenCredentialProvider};
 use crate::config::ConfigValue;
+use crate::crypto::CryptoProviderRef;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
@@ -87,6 +88,9 @@ enum Error {
 
     #[error("Configuration key: '{}' is not known.", key)]
     UnknownConfigurationKey { key: String },
+
+    #[error("Missing crypto provider. Please enabled the default crypto provider or configure one explicitly.")]
+    MissingCryptoProvider {},
 }
 
 impl From<Error> for crate::Error {
@@ -118,8 +122,10 @@ impl From<Error> for crate::Error {
 ///  .with_container_name(BUCKET_NAME)
 ///  .build();
 /// ```
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct MicrosoftAzureBuilder {
+    /// Crypto provider
+    crypto_provider: Option<CryptoProviderRef>,
     /// Account name
     account_name: Option<String>,
     /// Access key
@@ -486,10 +492,55 @@ impl std::fmt::Debug for MicrosoftAzureBuilder {
     }
 }
 
+impl Default for MicrosoftAzureBuilder {
+    fn default() -> Self {
+        let mut builder = Self {
+            crypto_provider: None,
+            account_name: None,
+            access_key: None,
+            container_name: None,
+            bearer_token: None,
+            client_id: None,
+            client_secret: None,
+            tenant_id: None,
+            sas_query_pairs: None,
+            sas_key: None,
+            authority_host: None,
+            url: None,
+            use_emulator: ConfigValue::default(),
+            endpoint: None,
+            msi_endpoint: None,
+            object_id: None,
+            msi_resource_id: None,
+            federated_token_file: None,
+            use_azure_cli: ConfigValue::default(),
+            skip_signature: ConfigValue::default(),
+            use_fabric_endpoint: ConfigValue::default(),
+            disable_tagging: ConfigValue::default(),
+            fabric_token_service_url: None,
+            fabric_workload_host: None,
+            fabric_session_token: None,
+            fabric_cluster_identifier: None,
+            retry_config: RetryConfig::default(),
+            client_options: ClientOptions::default(),
+            credentials: None,
+            http_connector: None,
+        };
+
+        #[cfg(feature = "ring")]
+        {
+            use crate::crypto::ring_crypto::RingProvider;
+            builder = builder.with_crypto(Arc::new(RingProvider::default()));
+        };
+
+        builder
+    }
+}
+
 impl MicrosoftAzureBuilder {
     /// Create a new [`MicrosoftAzureBuilder`] with default values.
     pub fn new() -> Self {
-        Default::default()
+        Self::default()
     }
 
     /// Create an instance of [`MicrosoftAzureBuilder`] with values pre-populated from environment variables.
@@ -526,6 +577,12 @@ impl MicrosoftAzureBuilder {
         }
 
         builder
+    }
+
+    /// TODO(jakedern): Docs
+    pub fn with_crypto(mut self, crypto_provider: CryptoProviderRef) -> Self {
+        self.crypto_provider = Some(crypto_provider);
+        self
     }
 
     /// Parse available connection info form a well-known storage URL.
@@ -1046,8 +1103,12 @@ impl MicrosoftAzureBuilder {
             credentials: auth,
         };
 
+        let crypto_provider = self
+            .crypto_provider
+            .ok_or(Error::MissingCryptoProvider {})?;
+
         let http_client = http.connect(&config.client_options)?;
-        let client = Arc::new(AzureClient::new(config, http_client));
+        let client = Arc::new(AzureClient::new(config, http_client, crypto_provider));
 
         Ok(MicrosoftAzure { client })
     }
@@ -1090,12 +1151,14 @@ fn split_sas(sas: &str) -> Result<Vec<(String, String)>, Error> {
 
 #[cfg(test)]
 mod tests {
+    use crate::crypto;
+
     use super::*;
     use std::collections::HashMap;
 
     #[test]
     fn azure_blob_test_urls() {
-        let mut builder = MicrosoftAzureBuilder::new();
+        let mut builder = MicrosoftAzureBuilder::default();
         builder
             .parse_url("abfss://file_system@account.dfs.core.windows.net/")
             .unwrap();
@@ -1103,7 +1166,7 @@ mod tests {
         assert_eq!(builder.container_name, Some("file_system".to_string()));
         assert!(!builder.use_fabric_endpoint.get().unwrap());
 
-        let mut builder = MicrosoftAzureBuilder::new();
+        let mut builder = MicrosoftAzureBuilder::default();
         builder
             .parse_url("az://container@account.dfs.core.windows.net/path-part/file")
             .unwrap();
@@ -1111,7 +1174,7 @@ mod tests {
         assert_eq!(builder.container_name, Some("container".to_string()));
         assert!(!builder.use_fabric_endpoint.get().unwrap());
 
-        let mut builder = MicrosoftAzureBuilder::new();
+        let mut builder = MicrosoftAzureBuilder::default();
         builder
             .parse_url("abfss://file_system@account.dfs.fabric.microsoft.com/")
             .unwrap();
@@ -1119,19 +1182,19 @@ mod tests {
         assert_eq!(builder.container_name, Some("file_system".to_string()));
         assert!(builder.use_fabric_endpoint.get().unwrap());
 
-        let mut builder = MicrosoftAzureBuilder::new();
+        let mut builder = MicrosoftAzureBuilder::default();
         builder.parse_url("abfs://container/path").unwrap();
         assert_eq!(builder.container_name, Some("container".to_string()));
 
-        let mut builder = MicrosoftAzureBuilder::new();
+        let mut builder = MicrosoftAzureBuilder::default();
         builder.parse_url("az://container").unwrap();
         assert_eq!(builder.container_name, Some("container".to_string()));
 
-        let mut builder = MicrosoftAzureBuilder::new();
+        let mut builder = MicrosoftAzureBuilder::default();
         builder.parse_url("az://container/path").unwrap();
         assert_eq!(builder.container_name, Some("container".to_string()));
 
-        let mut builder = MicrosoftAzureBuilder::new();
+        let mut builder = MicrosoftAzureBuilder::default();
         builder
             .parse_url("https://account.dfs.core.windows.net/")
             .unwrap();
@@ -1139,7 +1202,7 @@ mod tests {
         assert!(!builder.use_fabric_endpoint.get().unwrap());
 
         let mut builder =
-            MicrosoftAzureBuilder::new().with_container_name("explicit_container_name");
+            MicrosoftAzureBuilder::default().with_container_name("explicit_container_name");
         builder
             .parse_url("https://account.blob.core.windows.net/")
             .unwrap();
@@ -1150,7 +1213,7 @@ mod tests {
         );
         assert!(!builder.use_fabric_endpoint.get().unwrap());
 
-        let mut builder = MicrosoftAzureBuilder::new();
+        let mut builder = MicrosoftAzureBuilder::default();
         builder
             .parse_url("https://account.blob.core.windows.net/container")
             .unwrap();
@@ -1158,7 +1221,7 @@ mod tests {
         assert_eq!(builder.container_name, Some("container".to_string()));
         assert!(!builder.use_fabric_endpoint.get().unwrap());
 
-        let mut builder = MicrosoftAzureBuilder::new();
+        let mut builder = MicrosoftAzureBuilder::default();
         builder
             .parse_url("https://account.dfs.fabric.microsoft.com/")
             .unwrap();
@@ -1166,7 +1229,7 @@ mod tests {
         assert_eq!(builder.container_name, None);
         assert!(builder.use_fabric_endpoint.get().unwrap());
 
-        let mut builder = MicrosoftAzureBuilder::new();
+        let mut builder = MicrosoftAzureBuilder::default();
         builder
             .parse_url("https://account.dfs.fabric.microsoft.com/container")
             .unwrap();
@@ -1174,7 +1237,7 @@ mod tests {
         assert_eq!(builder.container_name.as_deref(), Some("container"));
         assert!(builder.use_fabric_endpoint.get().unwrap());
 
-        let mut builder = MicrosoftAzureBuilder::new();
+        let mut builder = MicrosoftAzureBuilder::default();
         builder
             .parse_url("https://account.blob.fabric.microsoft.com/")
             .unwrap();
@@ -1182,7 +1245,7 @@ mod tests {
         assert_eq!(builder.container_name, None);
         assert!(builder.use_fabric_endpoint.get().unwrap());
 
-        let mut builder = MicrosoftAzureBuilder::new();
+        let mut builder = MicrosoftAzureBuilder::default();
         builder
             .parse_url("https://account.blob.fabric.microsoft.com/container")
             .unwrap();
@@ -1199,7 +1262,7 @@ mod tests {
             "https://blob.mydomain/",
             "https://blob.foo.dfs.core.windows.net/",
         ];
-        let mut builder = MicrosoftAzureBuilder::new();
+        let mut builder = MicrosoftAzureBuilder::default();
         for case in err_cases {
             builder.parse_url(case).unwrap_err();
         }
@@ -1218,7 +1281,7 @@ mod tests {
 
         let builder = options
             .into_iter()
-            .fold(MicrosoftAzureBuilder::new(), |builder, (key, value)| {
+            .fold(MicrosoftAzureBuilder::default(), |builder, (key, value)| {
                 builder.with_config(key.parse().unwrap(), value)
             });
         assert_eq!(builder.client_id.unwrap(), azure_client_id);
@@ -1255,5 +1318,24 @@ mod tests {
         } else {
             panic!("{key} not propagated as ClientConfigKey");
         }
+    }
+
+    #[test]
+    fn azure_test_crypto_configuration() {
+        let builder = MicrosoftAzureBuilder::default()
+            .with_container_name("testcontainer")
+            .with_account("testaccount")
+            .with_crypto(Arc::from(crypto::noop_crypto::NoopCrypto {}));
+
+        let bytes = b"hello world";
+        assert_eq!(
+            builder
+                .crypto_provider
+                .unwrap()
+                .digest_sha256(bytes)
+                .unwrap()
+                .as_ref(),
+            bytes
+        );
     }
 }
