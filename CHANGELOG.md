@@ -33,6 +33,7 @@
 - Release object store  `0.12.3` \(non breaking API\) Release July 2025 [\#428](https://github.com/apache/arrow-rs-object-store/issues/428)
 - LocalFileSystem: offset for `list_with_offset` can't be identified  / List results \*must\* be sorted [\#388](https://github.com/apache/arrow-rs-object-store/issues/388)
 - Support setting storage class when objects are written [\#330](https://github.com/apache/arrow-rs-object-store/issues/330)
+- Support auth using AssumeRoleWithWebIdentity for non-AWS S3-compatible implementations [\#283](https://github.com/apache/arrow-rs-object-store/issues/283)
 - Types from http through request leak into object\_store public interfaces but aren't re-exported [\#263](https://github.com/apache/arrow-rs-object-store/issues/263)
 
 **Fixed bugs:**
@@ -56,8 +57,10 @@
 
 **Merged pull requests:**
 
+- Fix for clippy 1.90 [\#492](https://github.com/apache/arrow-rs-object-store/pull/492) ([alamb](https://github.com/alamb))
 - Add version 0.12.4 release plan to README [\#490](https://github.com/apache/arrow-rs-object-store/pull/490) ([alamb](https://github.com/alamb))
 - chore\(client/retry\): include error info in logs when retry occurs [\#487](https://github.com/apache/arrow-rs-object-store/pull/487) ([philjb](https://github.com/philjb))
+- AWS S3: Support STS endpoint, WebIdentity, RoleArn, RoleSession configuration [\#480](https://github.com/apache/arrow-rs-object-store/pull/480) ([Friede80](https://github.com/Friede80))
 - build\(deps\): bump actions/github-script from 7 to 8 [\#478](https://github.com/apache/arrow-rs-object-store/pull/478) ([dependabot[bot]](https://github.com/apps/dependabot))
 - build\(deps\): bump actions/setup-node from 4 to 5 [\#477](https://github.com/apache/arrow-rs-object-store/pull/477) ([dependabot[bot]](https://github.com/apps/dependabot))
 - build\(deps\): bump actions/setup-python from 5 to 6 [\#476](https://github.com/apache/arrow-rs-object-store/pull/476) ([dependabot[bot]](https://github.com/apps/dependabot))
