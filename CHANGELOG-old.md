@@ -20,6 +20,43 @@
 # Historical Changelog
 
 
+## [v0.12.3](https://github.com/apache/arrow-rs-object-store/tree/v0.12.3) (2025-07-11)
+
+[Full Changelog](https://github.com/apache/arrow-rs-object-store/compare/v0.12.2...v0.12.3)
+
+**Implemented enhancements:**
+
+- S3 store fails without retrying [\#425](https://github.com/apache/arrow-rs-object-store/issues/425)
+- Deprecate and Remove DynamoCommit [\#373](https://github.com/apache/arrow-rs-object-store/issues/373)
+- Move payload helpers from `GetResult` to `GetResultPayload` [\#352](https://github.com/apache/arrow-rs-object-store/issues/352)
+- Retry on 429s and equivalents [\#309](https://github.com/apache/arrow-rs-object-store/issues/309)
+- object\_store: Support `container@account.dfs.core.windows.net/path` URL style for `az` protocol [\#285](https://github.com/apache/arrow-rs-object-store/issues/285)
+- Rename `PutMultiPartOpts` to `PutMultiPartOptions`, the old name is deprecated and will be removed in the next major release [\#406](https://github.com/apache/arrow-rs-object-store/pull/406)
+
+**Fixed bugs:**
+
+- Builder panics on malformed GCS private key instead of returning error [\#419](https://github.com/apache/arrow-rs-object-store/issues/419)
+- `cargo check --no-default-features --features=aws,azure,gcp,http` fails [\#411](https://github.com/apache/arrow-rs-object-store/issues/411)
+- Incorrect prefix in `ObjectStoreScheme::parse` for Azure HTTP urls [\#398](https://github.com/apache/arrow-rs-object-store/issues/398)
+
+**Closed issues:**
+
+- `PutMode::Update` support for `LocalFileSystem`? [\#423](https://github.com/apache/arrow-rs-object-store/issues/423)
+
+**Merged pull requests:**
+
+- feat: retry on 408 [\#426](https://github.com/apache/arrow-rs-object-store/pull/426) ([criccomini](https://github.com/criccomini))
+- fix: expose source of `RetryError` [\#422](https://github.com/apache/arrow-rs-object-store/pull/422) ([crepererum](https://github.com/crepererum))
+- fix\(gcp\): throw error instead of panicking if read pem fails [\#421](https://github.com/apache/arrow-rs-object-store/pull/421) ([HugoCasa](https://github.com/HugoCasa))
+- chore: fix clippy 1.88 warnings [\#418](https://github.com/apache/arrow-rs-object-store/pull/418) ([mbrobbel](https://github.com/mbrobbel))
+- Bump quick-xml to version 0.38.0 [\#417](https://github.com/apache/arrow-rs-object-store/pull/417) ([raimannma](https://github.com/raimannma))
+- Prevent compilation error with all cloud features but fs turned on [\#412](https://github.com/apache/arrow-rs-object-store/pull/412) ([jder](https://github.com/jder))
+- Retry requests when status code is 429 [\#410](https://github.com/apache/arrow-rs-object-store/pull/410) ([paraseba](https://github.com/paraseba))
+- minor: Pin `tracing-attributes`, `tracing-core` to fix CI [\#404](https://github.com/apache/arrow-rs-object-store/pull/404) ([kylebarron](https://github.com/kylebarron))
+- feat \(azure\): support for account in `az://` URLs [\#403](https://github.com/apache/arrow-rs-object-store/pull/403) ([ByteBaker](https://github.com/ByteBaker))
+- Fix azure path parsing [\#399](https://github.com/apache/arrow-rs-object-store/pull/399) ([kylebarron](https://github.com/kylebarron))
+
+
 ## [v0.12.2](https://github.com/apache/arrow-rs-object-store/tree/v0.12.2) (2025-06-06)
 
 [Full Changelog](https://github.com/apache/arrow-rs-object-store/compare/v0.12.1...v0.12.2)
