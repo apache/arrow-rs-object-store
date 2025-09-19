@@ -507,7 +507,7 @@ fn string_to_sign(h: &HeaderMap, u: &Url, method: &Method, account: &str) -> Str
 fn canonicalize_header(headers: &HeaderMap) -> String {
     let mut names = headers
         .iter()
-        .filter(|&(k, _)| (k.as_str().starts_with("x-ms")))
+        .filter(|&(k, _)| k.as_str().starts_with("x-ms"))
         // TODO remove unwraps
         .map(|(k, _)| (k.as_str(), headers.get(k).unwrap().to_str().unwrap()))
         .collect::<Vec<_>>();
