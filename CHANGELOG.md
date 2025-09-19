@@ -23,10 +23,6 @@
 
 [Full Changelog](https://github.com/apache/arrow-rs-object-store/compare/v0.12.3...v0.12.4)
 
-**Breaking changes:**
-
-- refactor: remove AWS dynamo integration [\#407](https://github.com/apache/arrow-rs-object-store/pull/407) ([crepererum](https://github.com/crepererum))
-
 **Implemented enhancements:**
 
 - Allow flagging `PUT` operations as idempotent. [\#464](https://github.com/apache/arrow-rs-object-store/issues/464)
@@ -57,6 +53,7 @@
 
 **Merged pull requests:**
 
+- Revert "refactor: remove AWS dynamo integration \(\#407\)" [\#493](https://github.com/apache/arrow-rs-object-store/pull/493) ([alamb](https://github.com/alamb))
 - Fix for clippy 1.90 [\#492](https://github.com/apache/arrow-rs-object-store/pull/492) ([alamb](https://github.com/alamb))
 - Add version 0.12.4 release plan to README [\#490](https://github.com/apache/arrow-rs-object-store/pull/490) ([alamb](https://github.com/alamb))
 - chore\(client/retry\): include error info in logs when retry occurs [\#487](https://github.com/apache/arrow-rs-object-store/pull/487) ([philjb](https://github.com/philjb))
@@ -82,6 +79,7 @@
 - Bump quick-xml to version 0.38.0 [\#417](https://github.com/apache/arrow-rs-object-store/pull/417) ([raimannma](https://github.com/raimannma))
 - Prevent compilation error with all cloud features but fs turned on [\#412](https://github.com/apache/arrow-rs-object-store/pull/412) ([jder](https://github.com/jder))
 - Retry requests when status code is 429 [\#410](https://github.com/apache/arrow-rs-object-store/pull/410) ([paraseba](https://github.com/paraseba))
+- refactor: remove AWS dynamo integration [\#407](https://github.com/apache/arrow-rs-object-store/pull/407) ([crepererum](https://github.com/crepererum))
 - refactor: `PutMultiPartOpts` =\> `PutMultiPartOptions` [\#406](https://github.com/apache/arrow-rs-object-store/pull/406) ([crepererum](https://github.com/crepererum))
 - minor: Pin `tracing-attributes`, `tracing-core` to fix CI [\#404](https://github.com/apache/arrow-rs-object-store/pull/404) ([kylebarron](https://github.com/kylebarron))
 - feat \(azure\): support for account in `az://` URLs [\#403](https://github.com/apache/arrow-rs-object-store/pull/403) ([ByteBaker](https://github.com/ByteBaker))
