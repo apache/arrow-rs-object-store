@@ -1149,7 +1149,6 @@ impl AmazonS3Builder {
 
         let config = S3Config {
             region,
-            endpoint: self.endpoint,
             bucket,
             bucket_endpoint,
             credentials,

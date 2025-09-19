@@ -16,7 +16,6 @@
 # under the License.
 
 ---
-
 name: CI
 
 concurrency:
@@ -100,8 +99,8 @@ jobs:
       AWS_SECRET_ACCESS_KEY: test
       AWS_ENDPOINT: http://localhost:4566
       AWS_ALLOW_HTTP: true
-      AWS_COPY_IF_NOT_EXISTS: dynamo:test-table:2000
-      AWS_CONDITIONAL_PUT: dynamo:test-table:2000
+      AWS_COPY_IF_NOT_EXISTS: multipart
+      AWS_CONDITIONAL_PUT: etag
       AWS_SERVER_SIDE_ENCRYPTION: aws:kms
       HTTP_URL: "http://localhost:8080"
       GOOGLE_BUCKET: test-bucket
@@ -132,7 +131,6 @@ jobs:
           aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-for-spawn
           aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-for-checksum
           aws --endpoint-url=http://localhost:4566 s3api create-bucket --bucket test-object-lock --object-lock-enabled-for-bucket
-          aws --endpoint-url=http://localhost:4566 dynamodb create-table --table-name test-table --key-schema AttributeName=path,KeyType=HASH AttributeName=etag,KeyType=RANGE --attribute-definitions AttributeName=path,AttributeType=S AttributeName=etag,AttributeType=S --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
 
           KMS_KEY=$(aws --endpoint-url=http://localhost:4566 kms create-key --description "test key")
           echo "AWS_SSE_KMS_KEY_ID=$(echo $KMS_KEY | jq -r .KeyMetadata.KeyId)" >> $GITHUB_ENV
