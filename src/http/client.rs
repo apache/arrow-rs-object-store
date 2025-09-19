@@ -196,6 +196,10 @@ impl Client {
                         has_content_type = true;
                         builder.header(CONTENT_TYPE, v.as_ref())
                     }
+                    Attribute::StorageClass => {
+                        tracing::warn!("StorageClass attribute not supported on HTTP client as header key is unknown");
+                        builder
+                    }
                     // Ignore metadata attributes
                     Attribute::Metadata(_) => builder,
                 };

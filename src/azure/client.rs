@@ -48,6 +48,7 @@ use std::time::Duration;
 use url::Url;
 
 const VERSION_HEADER: &str = "x-ms-version-id";
+const ACCESS_TIER_HEADER: &str = "x-ms-access-tier";
 const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-ms-meta-";
 static MS_CACHE_CONTROL: HeaderName = HeaderName::from_static("x-ms-blob-cache-control");
 static MS_CONTENT_TYPE: HeaderName = HeaderName::from_static("x-ms-blob-content-type");
@@ -242,6 +243,7 @@ impl PutRequest<'_> {
                     has_content_type = true;
                     builder.header(&MS_CONTENT_TYPE, v.as_ref())
                 }
+                Attribute::StorageClass => builder.header(ACCESS_TIER_HEADER, v.as_ref()),
                 Attribute::Metadata(k_suffix) => builder.header(
                     &format!("{USER_DEFINED_METADATA_HEADER_PREFIX}{k_suffix}"),
                     v.as_ref(),

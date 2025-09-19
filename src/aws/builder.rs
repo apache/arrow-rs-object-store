@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::info;
+use tracing::debug;
 use url::Url;
 
 /// Default metadata endpoint
@@ -1009,7 +1009,7 @@ impl AmazonS3Builder {
         } else if self.access_key_id.is_some() || self.secret_access_key.is_some() {
             match (self.access_key_id, self.secret_access_key, self.token) {
                 (Some(key_id), Some(secret_key), token) => {
-                    info!("Using Static credential provider");
+                    debug!("Using Static credential provider");
                     let credential = AwsCredential {
                         key_id,
                         secret_key,
@@ -1021,10 +1021,11 @@ impl AmazonS3Builder {
                 (Some(_), None, _) => return Err(Error::MissingSecretAccessKey.into()),
                 (None, None, _) => unreachable!(),
             }
-        } else if let (Some(token_path), Some(role_arn)) =
-            (&self.web_identity_token_file, &self.role_arn)
-        {
-            info!("Using WebIdentity credential provider");
+        } else if let (Ok(token_path), Ok(role_arn)) = (
+            std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE"),
+            std::env::var("AWS_ROLE_ARN"),
+        ) {
+            debug!("Using WebIdentity credential provider");
 
             let session_name = self
                 .role_session_name
@@ -1052,7 +1053,7 @@ impl AmazonS3Builder {
                 self.retry_config.clone(),
             )) as _
         } else if let Some(uri) = self.container_credentials_relative_uri {
-            info!("Using Task credential provider");
+            debug!("Using Task credential provider");
 
             let options = self.client_options.clone().with_allow_http(true);
 
@@ -1067,7 +1068,7 @@ impl AmazonS3Builder {
             self.container_credentials_full_uri,
             self.container_authorization_token_file,
         ) {
-            info!("Using EKS Pod Identity credential provider");
+            debug!("Using EKS Pod Identity credential provider");
 
             let options = self.client_options.clone().with_allow_http(true);
 
@@ -1079,7 +1080,7 @@ impl AmazonS3Builder {
                 cache: Default::default(),
             }) as _
         } else {
-            info!("Using Instance credential provider");
+            debug!("Using Instance credential provider");
 
             let token = InstanceCredentialProvider {
                 imdsv1_fallback: self.imdsv1_fallback.get()?,
