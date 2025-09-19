@@ -56,6 +56,7 @@ mod builder;
 mod checksum;
 mod client;
 mod credential;
+mod dynamo;
 mod precondition;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -63,6 +64,7 @@ mod resolve;
 
 pub use builder::{AmazonS3Builder, AmazonS3ConfigKey};
 pub use checksum::Checksum;
+pub use dynamo::DynamoCommit;
 pub use precondition::{S3ConditionalPut, S3CopyIfNotExists};
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -195,6 +197,11 @@ impl ObjectStore for AmazonS3 {
                     r => r,
                 }
             }
+            #[allow(deprecated)]
+            (PutMode::Create, S3ConditionalPut::Dynamo(d)) => {
+                d.conditional_op(&self.client, location, None, move || request.do_put())
+                    .await
+            }
             (PutMode::Update(v), put) => {
                 let etag = v.e_tag.ok_or_else(|| Error::Generic {
                     store: STORE,
@@ -221,6 +228,13 @@ impl ObjectStore for AmazonS3 {
                             }
                             r => r,
                         }
+                    }
+                    #[allow(deprecated)]
+                    S3ConditionalPut::Dynamo(d) => {
+                        d.conditional_op(&self.client, location, Some(&etag), move || {
+                            request.do_put()
+                        })
+                        .await
                     }
                     S3ConditionalPut::Disabled => Err(Error::NotImplemented),
                 }
@@ -354,6 +368,10 @@ impl ObjectStore for AmazonS3 {
                 }
 
                 return res;
+            }
+            #[allow(deprecated)]
+            Some(S3CopyIfNotExists::Dynamo(lock)) => {
+                return lock.copy_if_not_exists(&self.client, from, to).await
             }
             None => {
                 return Err(Error::NotSupported {
@@ -622,6 +640,12 @@ mod tests {
         let builder = AmazonS3Builder::from_env().with_checksum_algorithm(Checksum::SHA256);
         let integration = builder.build().unwrap();
         put_get_delete_list(&integration).await;
+
+        match &integration.client.config.copy_if_not_exists {
+            #[allow(deprecated)]
+            Some(S3CopyIfNotExists::Dynamo(d)) => dynamo::integration_test(&integration, d).await,
+            _ => eprintln!("Skipping dynamo integration test - dynamo not configured"),
+        };
     }
 
     #[tokio::test]

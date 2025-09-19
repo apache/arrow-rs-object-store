@@ -165,7 +165,7 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(feature = "gcp")]
+    #[cfg(any(feature = "aws", feature = "gcp"))]
     pub(crate) fn json<S: serde::Serialize>(mut self, s: S) -> Self {
         match (serde_json::to_vec(&s), &mut self.request) {
             (Ok(json), Ok(request)) => {
