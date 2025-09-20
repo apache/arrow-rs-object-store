@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::aws::dynamo::DynamoCommit;
 use crate::config::Parse;
 
 use itertools::Itertools;
@@ -61,16 +60,6 @@ pub enum S3CopyIfNotExists {
     ///
     /// Encoded as `multipart` ignoring whitespace.
     Multipart,
-    /// The name of a DynamoDB table to use for coordination
-    ///
-    /// Encoded as either `dynamo:<TABLE_NAME>` or `dynamo:<TABLE_NAME>:<TIMEOUT_MILLIS>`
-    /// ignoring whitespace. The default timeout is used if not specified
-    ///
-    /// See [`DynamoCommit`] for more information
-    ///
-    /// This will use the same region, credentials and endpoint as configured for S3
-    #[deprecated(note = "Use S3CopyIfNotExists::Multipart")]
-    Dynamo(DynamoCommit),
 }
 
 impl std::fmt::Display for S3CopyIfNotExists {
@@ -81,8 +70,6 @@ impl std::fmt::Display for S3CopyIfNotExists {
                 write!(f, "header-with-status: {k}: {v}: {}", code.as_u16())
             }
             Self::Multipart => f.write_str("multipart"),
-            #[allow(deprecated)]
-            Self::Dynamo(lock) => write!(f, "dynamo: {}", lock.table_name()),
         }
     }
 }
@@ -110,8 +97,6 @@ impl S3CopyIfNotExists {
                     code,
                 ))
             }
-            #[allow(deprecated)]
-            "dynamo" => Some(Self::Dynamo(DynamoCommit::from_str(value)?)),
             _ => None,
         }
     }
@@ -142,17 +127,6 @@ pub enum S3ConditionalPut {
     #[default]
     ETagMatch,
 
-    /// The name of a DynamoDB table to use for coordination
-    ///
-    /// Encoded as either `dynamo:<TABLE_NAME>` or `dynamo:<TABLE_NAME>:<TIMEOUT_MILLIS>`
-    /// ignoring whitespace. The default timeout is used if not specified
-    ///
-    /// See [`DynamoCommit`] for more information
-    ///
-    /// This will use the same region, credentials and endpoint as configured for S3
-    #[deprecated(note = "Use S3ConditionalPut::ETagMatch")]
-    Dynamo(DynamoCommit),
-
     /// Disable `conditional put`
     Disabled,
 }
@@ -161,8 +135,6 @@ impl std::fmt::Display for S3ConditionalPut {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ETagMatch => write!(f, "etag"),
-            #[allow(deprecated)]
-            Self::Dynamo(lock) => write!(f, "dynamo: {}", lock.table_name()),
             Self::Disabled => write!(f, "disabled"),
         }
     }
@@ -173,11 +145,7 @@ impl S3ConditionalPut {
         match s.trim() {
             "etag" => Some(Self::ETagMatch),
             "disabled" => Some(Self::Disabled),
-            trimmed => match trimmed.split_once(':')? {
-                #[allow(deprecated)]
-                ("dynamo", s) => Some(Self::Dynamo(DynamoCommit::from_str(s)?)),
-                _ => None,
-            },
+            _ => None,
         }
     }
 }
@@ -194,7 +162,6 @@ impl Parse for S3ConditionalPut {
 #[cfg(test)]
 mod tests {
     use super::S3CopyIfNotExists;
-    use crate::aws::{DynamoCommit, S3ConditionalPut};
 
     #[test]
     fn parse_s3_copy_if_not_exists_header() {
@@ -217,26 +184,6 @@ mod tests {
         ));
 
         assert_eq!(expected, S3CopyIfNotExists::from_str(input));
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn parse_s3_copy_if_not_exists_dynamo() {
-        let input = "dynamo: table:100";
-        let expected = Some(S3CopyIfNotExists::Dynamo(
-            DynamoCommit::new("table".into()).with_timeout(100),
-        ));
-        assert_eq!(expected, S3CopyIfNotExists::from_str(input));
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn parse_s3_condition_put_dynamo() {
-        let input = "dynamo: table:1300";
-        let expected = Some(S3ConditionalPut::Dynamo(
-            DynamoCommit::new("table".into()).with_timeout(1300),
-        ));
-        assert_eq!(expected, S3ConditionalPut::from_str(input));
     }
 
     #[test]
