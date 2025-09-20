@@ -133,6 +133,37 @@ impl From<Error> for super::Error {
     }
 }
 
+#[cfg(target_os = "android")]
+fn rename_noreplace<
+    P1: ?Sized + nix::NixPath,
+    P2: ?Sized + nix::NixPath,
+>(
+    old_path: &P1,
+    new_path: &P2,
+) -> std::result::Result<(), std::io::Error> {
+    use nix::errno::Errno;
+    use nix::libc::AT_FDCWD;
+
+    const RENAME_NOREPLACE: std::ffi::c_uint = 1;
+
+    let res = old_path.with_nix_path(|old_cstr| {
+        new_path.with_nix_path(|new_cstr| unsafe {
+            nix::libc::syscall(
+                nix::libc::SYS_renameat2,
+                AT_FDCWD,
+                old_cstr.as_ptr(),
+                AT_FDCWD,
+                new_cstr.as_ptr(),
+                RENAME_NOREPLACE,
+            )
+        })
+    })??;
+
+    Errno::result(res)
+        .map(std::mem::drop)
+        .map_err(|e| std::io::Error::from_raw_os_error(e as i32))
+}
+
 /// Local filesystem storage providing an [`ObjectStore`] interface to files on
 /// local disk. Can optionally be created with a directory prefix
 ///
@@ -351,22 +382,35 @@ impl ObjectStore for LocalFileSystem {
                             std::mem::drop(file);
                             match std::fs::rename(&staging_path, &path) {
                                 Ok(_) => None,
-                                Err(source) => Some(Error::UnableToRenameFile { source }),
+                                Err(source) => {
+                                    let _ = std::fs::remove_file(&staging_path);
+                                    Some(Error::UnableToRenameFile { source })
+                                }
                             }
                         }
-                        PutMode::Create => match std::fs::hard_link(&staging_path, &path) {
-                            Ok(_) => {
-                                let _ = std::fs::remove_file(&staging_path); // Attempt to cleanup
-                                None
+                        PutMode::Create => {
+                            #[cfg(not(target_os = "android"))]
+                            let create_result = std::fs::hard_link(&staging_path, &path);
+
+                            #[cfg(target_os = "android")]
+                            let create_result = rename_noreplace(
+                                &staging_path,
+                                &path,
+                            );
+
+                            let _ = std::fs::remove_file(&staging_path); // Attempt to cleanup
+
+                            match create_result {
+                                Ok(_) => None,
+                                Err(source) => match source.kind() {
+                                    ErrorKind::AlreadyExists => Some(Error::AlreadyExists {
+                                        path: path.to_str().unwrap().to_string(),
+                                        source,
+                                    }),
+                                    _ => Some(Error::UnableToRenameFile { source }),
+                                },
                             }
-                            Err(source) => match source.kind() {
-                                ErrorKind::AlreadyExists => Some(Error::AlreadyExists {
-                                    path: path.to_str().unwrap().to_string(),
-                                    source,
-                                }),
-                                _ => Some(Error::UnableToRenameFile { source }),
-                            },
-                        },
+                        }
                         PutMode::Update(_) => unreachable!(),
                     }
                 }
@@ -558,7 +602,14 @@ impl ObjectStore for LocalFileSystem {
         // This is necessary because hard_link returns an error if the destination already exists
         maybe_spawn_blocking(move || loop {
             let staged = staged_upload_path(&to, &id.to_string());
-            match std::fs::hard_link(&from, &staged) {
+
+            #[cfg(not(target_os = "android"))]
+            let stage_result = std::fs::hard_link(&from, &staged);
+
+            #[cfg(target_os = "android")]
+            let stage_result = std::fs::copy(&from, &staged);
+
+            match stage_result {
                 Ok(_) => {
                     return std::fs::rename(&staged, &to).map_err(|source| {
                         let _ = std::fs::remove_file(&staged); // Attempt to clean up
@@ -596,6 +647,7 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
+    #[cfg(not(target_os = "android"))]
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
         let from = self.path_to_filesystem(from)?;
         let to = self.path_to_filesystem(to)?;
@@ -611,6 +663,51 @@ impl ObjectStore for LocalFileSystem {
                         }
                         .into())
                     }
+                    ErrorKind::NotFound => match from.exists() {
+                        true => create_parent_dirs(&to, source)?,
+                        false => return Err(Error::NotFound { path: from, source }.into()),
+                    },
+                    _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
+                },
+            }
+        })
+        .await
+    }
+
+    #[cfg(target_os = "android")]
+    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<(), super::Error> {
+        let from = self.path_to_filesystem(from)?;
+        let to = self.path_to_filesystem(to)?;
+        let mut id = 0;
+        // In order to make this atomic we:
+        //
+        // - stage to a temporary file
+        // - atomically rename this temporary file into place only if to does not exist
+        //
+        // This is necessary because hard_link is EACCESS on Android.
+        maybe_spawn_blocking(move || loop {
+            let staged = staged_upload_path(&to, &id.to_string());
+
+            match std::fs::copy(&from, &staged) {
+                Ok(_) => {
+                    let rename_result = rename_noreplace(
+                        &staged,
+                        &to,
+                    );
+                    let _ = std::fs::remove_file(&staged); // Attempt to clean up
+                    return rename_result.map_err(|source| {
+                        if source.kind() == ErrorKind::NotFound {
+                            Error::AlreadyExists {
+                                path: to.to_str().unwrap().to_string(),
+                                source,
+                            }
+                        } else {
+                            Error::UnableToCopyFile { from, to, source }
+                        }.into()
+                    });
+                }
+                Err(source) => match source.kind() {
+                    ErrorKind::AlreadyExists => id += 1,
                     ErrorKind::NotFound => match from.exists() {
                         true => create_parent_dirs(&to, source)?,
                         false => return Err(Error::NotFound { path: from, source }.into()),
