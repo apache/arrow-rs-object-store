@@ -655,6 +655,7 @@ impl S3Client {
             .with_attributes(attributes)
             .with_tags(tags)
             .with_extensions(extensions)
+            .header(CONTENT_LENGTH, "0")
             .idempotent(true)
             .send()
             .await?
