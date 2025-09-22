@@ -654,6 +654,7 @@ impl S3Client {
             .with_attributes(attributes)
             .with_tags(tags)
             .with_extensions(extensions)
+            .header(CONTENT_LENGTH, "0")
             .idempotent(true)
             .send()
             .await?
@@ -947,4 +948,61 @@ impl ListClient for Arc<S3Client> {
 
 fn encode_path(path: &Path) -> PercentEncode<'_> {
     utf8_percent_encode(path.as_ref(), &STRICT_PATH_ENCODE_SET)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::mock_server::MockServer;
+    use crate::client::HttpClient;
+    use http::header::CONTENT_LENGTH;
+    use http::Response;
+
+    #[tokio::test]
+    async fn test_create_multipart_has_content_length() {
+        let mock = MockServer::new().await;
+
+        mock.push_fn(|req| {
+            // Verify Content-Length header is present and set to 0
+            assert_eq!(req.headers().get(CONTENT_LENGTH).unwrap(), "0");
+            assert!(req.uri().query().unwrap_or("").contains("uploads"));
+
+            Response::builder()
+                .status(200)
+                .body("<InitiateMultipartUploadResult><UploadId>test-upload-id</UploadId></InitiateMultipartUploadResult>".to_string())
+                .unwrap()
+        });
+
+        let credential = AwsCredential {
+            key_id: "key".to_string(),
+            secret_key: "secret".to_string(),
+            token: None,
+        };
+
+        let config = S3Config {
+            bucket_endpoint: mock.url().to_string(),
+            bucket: "test-bucket".to_string(),
+            region: "us-east-1".to_string(),
+            credentials: Arc::new(crate::StaticCredentialProvider::new(credential)),
+            client_options: ClientOptions::new().with_allow_http(true),
+            skip_signature: true,
+            session_provider: None,
+            retry_config: Default::default(),
+            sign_payload: false,
+            disable_tagging: false,
+            checksum: None,
+            copy_if_not_exists: None,
+            conditional_put: Default::default(),
+            encryption_headers: Default::default(),
+            request_payer: false,
+        };
+
+        let client = S3Client::new(config, HttpClient::new(reqwest::Client::new()));
+        let result = client
+            .create_multipart(&Path::from("test"), PutMultipartOptions::default())
+            .await;
+
+        assert_eq!(result.unwrap(), "test-upload-id");
+        mock.shutdown().await;
+    }
 }
