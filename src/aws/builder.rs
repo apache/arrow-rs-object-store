@@ -315,16 +315,25 @@ pub enum AmazonS3ConfigKey {
     /// Set the container credentials relative URI when used in ECS
     ///
     /// <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
+    ///
+    /// Supported keys:
+    /// - `aws_container_credentials_relative_uri`
     ContainerCredentialsRelativeUri,
 
     /// Set the container credentials full URI when used in EKS
     ///
     /// <https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html>
+    ///
+    /// Supported keys:
+    /// - `aws_container_credentials_full_uri`
     ContainerCredentialsFullUri,
 
     /// Set the authorization token in plain text when used in EKS to authenticate with ContainerCredentialsFullUri
     ///
     /// <https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html>
+    ///
+    /// Supported keys:
+    /// - `aws_container_authorization_token_file`
     ContainerAuthorizationTokenFile,
 
     /// Web identity token file path for AssumeRoleWithWebIdentity
@@ -358,14 +367,26 @@ pub enum AmazonS3ConfigKey {
     /// Configure how to provide `copy_if_not_exists`
     ///
     /// See [`S3CopyIfNotExists`]
+    ///
+    /// Supported keys:
+    /// - `aws_copy_if_not_exists`
+    /// - `copy_if_not_exists`
     CopyIfNotExists,
 
     /// Configure how to provide conditional put operations
     ///
     /// See [`S3ConditionalPut`]
+    ///
+    /// Supported keys:
+    /// - `aws_conditional_put`
+    /// - `conditional_put`
     ConditionalPut,
 
     /// Skip signing request
+    ///
+    /// Supported keys:
+    /// - `aws_skip_signature`
+    /// - `skip_signature`
     SkipSignature,
 
     /// Disable tagging objects
@@ -1191,17 +1212,37 @@ fn parse_bucket_az(bucket: &str) -> Option<&str> {
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Copy, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum S3EncryptionConfigKey {
-    /// Type of encryption to use. If set, must be one of "AES256" (SSE-S3), "aws:kms" (SSE-KMS), "aws:kms:dsse" (DSSE-KMS) or "sse-c".
+    /// Type of encryption to use.
+    ///
+    /// If set, must be one of
+    /// - "AES256" (SSE-S3),
+    /// - "aws:kms" (SSE-KMS),
+    /// - "aws:kms:dsse" (DSSE-KMS) or
+    /// - "sse-c"
+    ///
+    /// Supported keys:
+    /// - `aws_server_side_encryption`
     ServerSideEncryption,
-    /// The KMS key ID to use for server-side encryption. If set, ServerSideEncryption
-    /// must be "aws:kms" or "aws:kms:dsse".
+    /// The KMS key ID to use for server-side encryption.
+    /// 
+    /// If set, [ServerSideEncryption](Self::ServerSideEncryption) must be "aws:kms" or "aws:kms:dsse".
+    ///
+    /// Supported keys:
+    /// - `aws_sse_kms_key_id`
     KmsKeyId,
     /// If set to true, will use the bucket's default KMS key for server-side encryption.
     /// If set to false, will disable the use of the bucket's default KMS key for server-side encryption.
+    ///
+    /// Supported keys:
+    /// - `aws_sse_bucket_key_enabled`
     BucketKeyEnabled,
 
     /// The base64 encoded, 256-bit customer encryption key to use for server-side encryption.
-    /// If set, ServerSideEncryption must be "sse-c".
+    ///
+    /// If set, [ServerSideEncryption](Self::ServerSideEncryption) must be "sse-c".
+    ///
+    /// Supported keys:
+    /// - `aws_sse_customer_key_base64`
     CustomerEncryptionKey,
 }
 
