@@ -1224,7 +1224,7 @@ pub enum S3EncryptionConfigKey {
     /// - `aws_server_side_encryption`
     ServerSideEncryption,
     /// The KMS key ID to use for server-side encryption.
-    /// 
+    ///
     /// If set, [ServerSideEncryption](Self::ServerSideEncryption) must be "aws:kms" or "aws:kms:dsse".
     ///
     /// Supported keys:
