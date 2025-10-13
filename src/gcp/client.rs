@@ -118,6 +118,19 @@ enum Error {
 
     #[error("Got invalid signing blob signature: {}", source)]
     InvalidSignBlobSignature { source: base64::DecodeError },
+
+    #[error("Missing Location header for resumable initiate response")]
+    MissingResumableLocation,
+
+    #[error("Error performing resumable put request: {}", source)]
+    ResumablePutRequest {
+        source: crate::client::retry::RetryError,
+    },
+
+    #[error("Error performing resumable abort request: {}", source)]
+    ResumableAbortRequest {
+        source: crate::client::retry::RetryError,
+    },
 }
 
 impl From<Error> for crate::Error {
@@ -360,6 +373,90 @@ impl GoogleCloudStorageClient {
             "{}/{}/{}",
             self.config.base_url, self.bucket_name_encoded, encoded
         )
+    }
+
+    /// Initiate a resumable upload (XML API)
+    /// Returns the session URI from the Location header
+    pub(crate) async fn resumable_initiate(
+        &self,
+        path: &Path,
+        attributes: Attributes,
+        extensions: ::http::Extensions,
+    ) -> Result<String> {
+        let response = self
+            .request(Method::POST, path)
+            .with_attributes(attributes)
+            .with_extensions(extensions)
+            .header(&HeaderName::from_static("x-goog-resumable"), "start")
+            .header(&CONTENT_LENGTH, "0")
+            .send()
+            .await?;
+
+        let session_uri = response
+            .headers()
+            .get(http::header::LOCATION)
+            .and_then(|v| v.to_str().ok())
+            .ok_or(Error::MissingResumableLocation)?
+            .to_string();
+
+        Ok(session_uri)
+    }
+
+    /// Upload a chunk to a resumable upload session
+    /// Returns Ok(Some(PutResult)) when the upload is finalized, Ok(None) for 308 Resume Incomplete
+    pub(crate) async fn resumable_put(
+        &self,
+        session_uri: &str,
+        start: u64,
+        payload: PutPayload,
+        total: Option<u64>,
+    ) -> Result<Option<PutResult>> {
+        let len = payload.content_length() as u64;
+        let end = start.saturating_add(len.saturating_sub(1));
+        let total_str = total
+            .map(|t| t.to_string())
+            .unwrap_or_else(|| "*".to_string());
+        let content_range = format!("bytes {}-{}/{}", start, end, total_str);
+
+        let credential = self.get_credential().await?;
+
+        let response = self
+            .client
+            .request(Method::PUT, session_uri.to_string())
+            .with_bearer_auth(credential.as_deref())
+            .header(&HeaderName::from_static("content-range"), &content_range)
+            .header(CONTENT_LENGTH, payload.content_length().to_string())
+            .body(payload)
+            .retryable(&self.config.retry_config)
+            .idempotent(true)
+            .send()
+            .await
+            .map_err(|source| Error::ResumablePutRequest { source })?;
+
+        match response.status() {
+            StatusCode::PERMANENT_REDIRECT => Ok(None),
+            _ => {
+                let headers = response.headers();
+                let put_result = get_put_result(headers, VERSION_HEADER)
+                    .map_err(|source| Error::Metadata { source })?;
+                Ok(Some(put_result))
+            }
+        }
+    }
+
+    /// Abort a resumable upload session
+    pub(crate) async fn resumable_abort(&self, session_uri: &str) -> Result<()> {
+        let credential = self.get_credential().await?;
+        self.client
+            .request(Method::DELETE, session_uri.to_string())
+            .with_bearer_auth(credential.as_deref())
+            .header(CONTENT_LENGTH, 0)
+            .retryable(&self.config.retry_config)
+            .idempotent(true)
+            .send()
+            .await
+            .map_err(|source| Error::ResumableAbortRequest { source })?;
+        Ok(())
     }
 
     /// Perform a put request <https://cloud.google.com/storage/docs/xml-api/put-object-upload>
