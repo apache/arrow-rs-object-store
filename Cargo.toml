@@ -25,6 +25,7 @@ description = "A generic object store interface for uniformly interacting with A
 keywords = ["object", "storage", "cloud"]
 repository = "https://github.com/apache/arrow-rs-object-store"
 rust-version = "1.64.0"
+include = ["src/**/*.rs", "README.md", "LICENSE.txt", "NOTICE.txt", "Cargo.toml"]
 
 [package.metadata.docs.rs]
 all-features = true
