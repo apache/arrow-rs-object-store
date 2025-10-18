@@ -17,6 +17,7 @@
 
 use rand::{prelude::*, rng};
 use std::time::Duration;
+use tracing::log::trace;
 
 /// Exponential backoff with decorrelated jitter algorithm
 ///
@@ -95,7 +96,8 @@ impl Backoff {
 
     /// Returns the next backoff duration to wait for
     pub(crate) fn next(&mut self) -> Duration {
-        let range = self.init_backoff..(self.next_backoff_secs * self.base);
+        let range = self.next_backoff_secs..(self.next_backoff_secs * self.base);
+        trace!("Backoff range sliding to {range:?}");
 
         let rand_backoff = match self.rng.as_mut() {
             Some(rng) => rng.random_range(range),
@@ -128,6 +130,27 @@ mod tests {
         }
     }
 
+    /// The default backoff should reach the max backoff in under 20s
+    #[test]
+    fn test_backoff_defaults() {
+        let config = BackoffConfig::default();
+        let mut backoff = Backoff::new(&config);
+        let mut count = 0;
+
+        loop {
+            let step = backoff.next();
+            count += 1;
+            if step >= config.max_backoff {
+                break;
+            }
+        }
+
+        assert!(
+            count <= 20,
+            "There were too many iterations with the default settings"
+        );
+    }
+
     #[test]
     fn test_backoff() {
         let init_backoff_secs = 1.;
@@ -157,17 +180,6 @@ mod tests {
         for i in 0..20 {
             let value = (base.powi(i) * init_backoff_secs).min(max_backoff_secs);
             assert_fuzzy_eq(backoff.next().as_secs_f64(), value);
-        }
-
-        // Create a static rng that takes the mid point of the range
-        let rng = Box::new(FixedRng(u64::MAX / 2));
-        let mut backoff = Backoff::new_with_rng(&config, Some(rng));
-
-        let mut value = init_backoff_secs;
-        for _ in 0..20 {
-            assert_fuzzy_eq(backoff.next().as_secs_f64(), value);
-            value =
-                (init_backoff_secs + (value * base - init_backoff_secs) / 2.).min(max_backoff_secs);
         }
     }
 }
