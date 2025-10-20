@@ -414,7 +414,7 @@ fn canonicalize_query(url: &Url) -> String {
     encoded
 }
 
-fn append_normalized_whitespace_value<'a>(headers: &'a mut String, input: &str) {
+fn append_normalized_whitespace_value(headers: &'_ mut String, input: &str) {
     let mut iter = input.split_whitespace();
 
     if let Some(first) = iter.next() {
