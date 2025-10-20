@@ -414,6 +414,18 @@ fn canonicalize_query(url: &Url) -> String {
     encoded
 }
 
+fn append_normalized_whitespace_value<'a>(headers: &'a mut String, input: &str) {
+    let mut iter = input.split_whitespace();
+
+    if let Some(first) = iter.next() {
+        headers.push_str(first);
+        for word in iter {
+            headers.push(' ');
+            headers.push_str(word);
+        }
+    }
+}
+
 /// Canonicalizes headers into the AWS Canonical Form.
 ///
 /// <https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html>
@@ -452,7 +464,7 @@ fn canonicalize_headers(header_map: &HeaderMap) -> (String, String) {
             if value_idx != 0 {
                 canonical_headers.push(',');
             }
-            canonical_headers.push_str(value.trim());
+            append_normalized_whitespace_value(&mut canonical_headers, value.trim());
         }
         canonical_headers.push('\n');
     }
@@ -1292,5 +1304,61 @@ mod tests {
 
         assert!(!debug_output.contains("super_secret"));
         assert!(!debug_output.contains("temp_token"));
+    }
+
+    #[test]
+    fn test_normalize_whitespace() {
+        // test cases from minio: https://github.com/minio/minio/blob/05e569960ac584c8927a9af76755708d20f16129/cmd/signature-v4-utils_test.go#L307-L324
+        let test_cases = vec![
+            // input, expected
+            ("本語", "本語"),
+            (" abc ", "abc"),
+            (" a b ", "a b"),
+            ("a b ", "a b"),
+            ("a  b", "a b"),
+            ("a   b", "a b"),
+            ("   a   b  c   ", "a b c"),
+            ("a \t b  c   ", "a b c"),
+            ("\"a \t b  c   ", "\"a b c"),
+            (" \t\n\u{000b}\r\u{000c}a \t\n\u{000b}\r\u{000c} b \t\n\u{000b}\r\u{000c} c \t\n\u{000b}\r\u{000c}", "a b c"),
+        ];
+
+        for (input, expected) in test_cases {
+            let mut headers = String::new();
+
+            append_normalized_whitespace_value(&mut headers, input);
+            assert_eq!(headers, expected);
+        }
+    }
+
+    #[test]
+    fn test_canonicalize_headers_whitespace_normalization() {
+        use http::header::HeaderMap;
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-amz-meta-example", "  foo   bar  ".parse().unwrap());
+        headers.insert(
+            "x-amz-meta-another",
+            "  multiple                  spaces here  ".parse().unwrap(),
+        );
+        headers.insert(
+            "x-amz-meta-and-another-one",
+            "foo\t\t\t bar".parse().unwrap(),
+        );
+        // ignored headers
+        headers.insert("authorization", "SHOULD_BE_IGNORED".parse().unwrap());
+        headers.insert("content-length", "1337".parse().unwrap());
+
+        let (signed_headers, canonical_headers) = super::canonicalize_headers(&headers);
+
+        assert_eq!(
+            signed_headers,
+            "x-amz-meta-and-another-one;x-amz-meta-another;x-amz-meta-example"
+        );
+
+        let expected_canonical_headers = "x-amz-meta-and-another-one:foo bar\n\
+            x-amz-meta-another:multiple spaces here\n\
+            x-amz-meta-example:foo bar\n";
+        assert_eq!(canonical_headers, expected_canonical_headers);
     }
 }

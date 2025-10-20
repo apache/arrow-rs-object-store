@@ -483,6 +483,10 @@ pub async fn put_get_attributes(integration: &dyn ObjectStore) {
         (Attribute::ContentLanguage, "en-US"),
         (Attribute::ContentType, "text/html; charset=utf-8"),
         (Attribute::Metadata("test_key".into()), "test_value"),
+        (
+            Attribute::Metadata("key_with_spaces".into()),
+            "hello   world",
+        ),
     ]);
 
     let path = Path::from("attributes");
