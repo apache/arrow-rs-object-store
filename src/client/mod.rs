@@ -20,6 +20,7 @@
 //! [`ObjectStore`]: crate::ObjectStore
 
 pub(crate) mod backoff;
+pub(crate) mod sleep;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod dns;
