@@ -18,7 +18,7 @@
 //! Map object URLs to [`ObjectStore`]
 
 use crate::path::{InvalidPart, Path, PathPart};
-use crate::{parse_url_opts, ObjectStore};
+use crate::{ObjectStore, parse_url_opts};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -274,9 +274,11 @@ mod tests {
 
         // Should not replace store
         let banana = Arc::new(PrefixStore::new(InMemory::new(), "banana")) as Arc<dyn ObjectStore>;
-        assert!(registry
-            .register(banana_url.clone(), Arc::clone(&banana))
-            .is_none());
+        assert!(
+            registry
+                .register(banana_url.clone(), Arc::clone(&banana))
+                .is_none()
+        );
 
         // Should resolve to banana store
         let (resolved, path) = registry.resolve(&banana_url).unwrap();
@@ -317,9 +319,11 @@ mod tests {
 
         let nested_url2 = Url::parse("memory:///1/2/3").unwrap();
         let nested2 = Arc::new(PrefixStore::new(InMemory::new(), "1/2/3")) as Arc<dyn ObjectStore>;
-        assert!(registry
-            .register(nested_url2, Arc::clone(&nested2))
-            .is_none());
+        assert!(
+            registry
+                .register(nested_url2, Arc::clone(&nested2))
+                .is_none()
+        );
 
         let to_resolve = Url::parse("memory:///1/2/3/4/5/6").unwrap();
         let (resolved, path) = registry.resolve(&to_resolve).unwrap();
@@ -328,9 +332,11 @@ mod tests {
 
         let custom_scheme_url = Url::parse("custom:///").unwrap();
         let custom_scheme = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-        assert!(registry
-            .register(custom_scheme_url, Arc::clone(&custom_scheme))
-            .is_none());
+        assert!(
+            registry
+                .register(custom_scheme_url, Arc::clone(&custom_scheme))
+                .is_none()
+        );
 
         let to_resolve = Url::parse("custom:///6/7").unwrap();
         let (resolved, path) = registry.resolve(&to_resolve).unwrap();

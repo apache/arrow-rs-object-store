@@ -20,25 +20,25 @@ use crate::azure::credential::*;
 use crate::azure::{AzureCredentialProvider, STORE};
 use crate::client::builder::HttpRequestBuilder;
 use crate::client::get::GetClient;
-use crate::client::header::{get_put_result, HeaderConfig};
+use crate::client::header::{HeaderConfig, get_put_result};
 use crate::client::list::ListClient;
 use crate::client::retry::{RetryContext, RetryExt};
 use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpRequest, HttpResponse};
 use crate::list::{PaginatedListOptions, PaginatedListResult};
 use crate::multipart::PartId;
-use crate::util::{deserialize_rfc1123, GetRange};
+use crate::util::{GetRange, deserialize_rfc1123};
 use crate::{
     Attribute, Attributes, ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode,
     PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, RetryConfig, TagSet,
 };
 use async_trait::async_trait;
-use base64::prelude::{BASE64_STANDARD, BASE64_STANDARD_NO_PAD};
 use base64::Engine;
+use base64::prelude::{BASE64_STANDARD, BASE64_STANDARD_NO_PAD};
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use http::{
-    header::{HeaderMap, HeaderValue, CONTENT_LENGTH, CONTENT_TYPE, IF_MATCH, IF_NONE_MATCH},
     HeaderName, Method,
+    header::{CONTENT_LENGTH, CONTENT_TYPE, HeaderMap, HeaderValue, IF_MATCH, IF_NONE_MATCH},
 };
 use rand::Rng as _;
 use serde::{Deserialize, Serialize};
@@ -497,7 +497,7 @@ async fn parse_blob_batch_delete_body(
                     code: code.to_string(),
                     reason: part_response.reason.unwrap_or_default().to_string(),
                 }
-                .into())
+                .into());
             }
             _ => return Err(invalid_response("missing part response status code").into()),
         }

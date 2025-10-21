@@ -23,8 +23,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 
 use crate::path::Path;
 use crate::{
@@ -120,7 +120,7 @@ impl ObjectStore for ChunkedStore {
                                             source: Box::new(e),
                                         }),
                                         (stream, buffer, exhausted, chunk_size),
-                                    ))
+                                    ));
                                 }
                             };
                         }

@@ -24,11 +24,11 @@ use crate::aws::{
     AmazonS3, AwsCredential, AwsCredentialProvider, Checksum, S3ConditionalPut, S3CopyIfNotExists,
     STORE,
 };
-use crate::client::{http_connector, HttpConnector, TokenCredentialProvider};
+use crate::client::{HttpConnector, TokenCredentialProvider, http_connector};
 use crate::config::ConfigValue;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
-use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
 use itertools::Itertools;
 use md5::{Digest, Md5};
 use reqwest::header::{HeaderMap, HeaderValue};
@@ -75,7 +75,10 @@ enum Error {
     #[error("Invalid Zone suffix for bucket '{bucket}'")]
     ZoneSuffix { bucket: String },
 
-    #[error("Invalid encryption type: {}. Valid values are \"AES256\", \"sse:kms\", \"sse:kms:dsse\" and \"sse-c\".", passed)]
+    #[error(
+        "Invalid encryption type: {}. Valid values are \"AES256\", \"sse:kms\", \"sse:kms:dsse\" and \"sse-c\".",
+        passed
+    )]
     InvalidEncryptionType { passed: String },
 
     #[error(

@@ -23,15 +23,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{stream::BoxStream, StreamExt};
+use futures::{StreamExt, stream::BoxStream};
 use parking_lot::RwLock;
 
 use crate::multipart::{MultipartStore, PartId};
 use crate::util::InvalidGetRange;
 use crate::{
-    path::Path, Attributes, GetRange, GetResult, GetResultPayload, ListResult, MultipartId,
-    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutResult,
-    Result, UpdateVersion, UploadPart,
+    Attributes, GetRange, GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload,
+    ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutResult, Result,
+    UpdateVersion, UploadPart, path::Path,
 };
 use crate::{GetOptions, PutPayload};
 

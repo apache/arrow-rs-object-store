@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::ClientOptions;
 use crate::client::builder::{HttpRequestBuilder, RequestBuilderError};
 use crate::client::{HttpRequest, HttpResponse, HttpResponseBody};
-use crate::ClientOptions;
 use async_trait::async_trait;
 use http::{Method, Uri};
 use http_body_util::BodyExt;
@@ -232,8 +232,8 @@ impl HttpService for reqwest::Client {
 impl HttpService for reqwest::Client {
     async fn call(&self, req: HttpRequest) -> Result<HttpResponse, HttpError> {
         use futures::{
-            channel::{mpsc, oneshot},
             SinkExt, StreamExt, TryStreamExt,
+            channel::{mpsc, oneshot},
         };
         use http_body_util::{Empty, StreamBody};
         use wasm_bindgen_futures::spawn_local;

@@ -276,10 +276,10 @@ impl MultipartUpload for LimitUpload {
 
 #[cfg(test)]
 mod tests {
+    use crate::ObjectStore;
     use crate::integration::*;
     use crate::limit::LimitStore;
     use crate::memory::InMemory;
-    use crate::ObjectStore;
     use futures::stream::StreamExt;
     use std::pin::Pin;
     use std::time::Duration;
