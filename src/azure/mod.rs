@@ -357,7 +357,7 @@ mod tests {
         let client_id = std::env::var("AZURE_CLIENT_ID").unwrap();
         let client_secret = std::env::var("AZURE_CLIENT_SECRET").unwrap();
         let tenant_id = std::env::var("AZURE_TENANT_ID").unwrap();
-        let integration = MicrosoftAzureBuilder::new()
+        let integration = MicrosoftAzureBuilder::default()
             .with_account(account)
             .with_container_name(container)
             .with_client_id(client_id)
@@ -386,7 +386,7 @@ mod tests {
         let azure_client_id = "object_store:fake_access_key_id".to_string();
         let azure_storage_account_name = "object_store:fake_secret_key".to_string();
         let azure_storage_token = "object_store:fake_default_region".to_string();
-        let builder = MicrosoftAzureBuilder::new()
+        let builder = MicrosoftAzureBuilder::default()
             .with_config(AzureConfigKey::ClientId, &azure_client_id)
             .with_config(AzureConfigKey::AccountName, &azure_storage_account_name)
             .with_config(AzureConfigKey::Token, &azure_storage_token);

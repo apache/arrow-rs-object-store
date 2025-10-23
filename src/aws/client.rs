@@ -33,6 +33,7 @@ use crate::client::s3::{
     InitiateMultipartUploadResult, ListResponse, PartMetadata,
 };
 use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpResponse};
+use crate::crypto::{self, CryptoProvider, CryptoProviderRef};
 use crate::list::{PaginatedListOptions, PaginatedListResult};
 use crate::multipart::PartId;
 use crate::{
@@ -52,8 +53,6 @@ use itertools::Itertools;
 use md5::{Digest, Md5};
 use percent_encoding::{utf8_percent_encode, PercentEncode};
 use quick_xml::events::{self as xml_events};
-use ring::digest;
-use ring::digest::Context;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -192,6 +191,7 @@ impl From<DeleteError> for Error {
 
 #[derive(Debug)]
 pub(crate) struct S3Config {
+    pub crypto_provider: CryptoProviderRef,
     pub region: String,
     pub bucket: String,
     pub bucket_endpoint: String,
@@ -224,6 +224,7 @@ impl S3Config {
         };
 
         Ok(SessionCredential {
+            crypto_provider: self.crypto_provider.as_ref(),
             credential,
             session_token: self.session_provider.is_some(),
             config: self,
@@ -244,6 +245,7 @@ impl S3Config {
 }
 
 struct SessionCredential<'a> {
+    crypto_provider: &'a dyn CryptoProvider,
     credential: Option<Arc<AwsCredential>>,
     session_token: bool,
     config: &'a S3Config,
@@ -251,10 +253,14 @@ struct SessionCredential<'a> {
 
 impl SessionCredential<'_> {
     fn authorizer(&self) -> Option<AwsAuthorizer<'_>> {
-        let mut authorizer =
-            AwsAuthorizer::new(self.credential.as_deref()?, "s3", &self.config.region)
-                .with_sign_payload(self.config.sign_payload)
-                .with_request_payer(self.config.request_payer);
+        let mut authorizer = AwsAuthorizer::new(
+            self.credential.as_deref()?,
+            self.crypto_provider,
+            "s3",
+            &self.config.region,
+        )
+        .with_sign_payload(self.config.sign_payload)
+        .with_request_payer(self.config.request_payer);
 
         if self.session_token {
             let token = HeaderName::from_static("x-amz-s3session-token");
@@ -291,10 +297,11 @@ impl From<RequestError> for crate::Error {
 
 /// A builder for a request allowing customisation of the headers and query string
 pub(crate) struct Request<'a> {
+    crypto_provider: &'a dyn CryptoProvider,
     path: &'a Path,
     config: &'a S3Config,
     builder: HttpRequestBuilder,
-    payload_sha256: Option<digest::Digest>,
+    payload_sha256: Option<crypto::Digest>,
     payload: Option<PutPayload>,
     use_session_creds: bool,
     idempotent: bool,
@@ -395,18 +402,18 @@ impl Request<'_> {
         Self { builder, ..self }
     }
 
-    pub(crate) fn with_payload(mut self, payload: PutPayload) -> Self {
+    pub(crate) fn with_payload(mut self, payload: PutPayload) -> Result<Self> {
         if (!self.config.skip_signature && self.config.sign_payload)
             || self.config.checksum.is_some()
         {
-            let mut sha256 = Context::new(&digest::SHA256);
-            payload.iter().for_each(|x| sha256.update(x));
-            let payload_sha256 = sha256.finish();
+            let payload_sha256 = self
+                .crypto_provider
+                .digest_all_sha256(&mut payload.iter().map(|p| p.as_ref()))?;
 
             if let Some(Checksum::SHA256) = self.config.checksum {
                 self.builder = self
                     .builder
-                    .header(SHA256_CHECKSUM, BASE64_STANDARD.encode(payload_sha256));
+                    .header(SHA256_CHECKSUM, BASE64_STANDARD.encode(&payload_sha256));
             }
             self.payload_sha256 = Some(payload_sha256);
         }
@@ -414,13 +421,14 @@ impl Request<'_> {
         let content_length = payload.content_length();
         self.builder = self.builder.header(CONTENT_LENGTH, content_length);
         self.payload = Some(payload);
-        self
+        Ok(self)
     }
 
     pub(crate) async fn send(self) -> Result<HttpResponse, RequestError> {
         let credential = match self.use_session_creds {
             true => self.config.get_session_credential().await?,
             false => SessionCredential {
+                crypto_provider: self.crypto_provider,
                 credential: self.config.get_credential().await?,
                 session_token: false,
                 config: self.config,
@@ -456,16 +464,26 @@ impl Request<'_> {
 pub(crate) struct S3Client {
     pub config: S3Config,
     pub client: HttpClient,
+    pub crypto_provider: CryptoProviderRef,
 }
 
 impl S3Client {
-    pub(crate) fn new(config: S3Config, client: HttpClient) -> Self {
-        Self { config, client }
+    pub(crate) fn new(
+        config: S3Config,
+        client: HttpClient,
+        crypto_provider: CryptoProviderRef,
+    ) -> Self {
+        Self {
+            config,
+            client,
+            crypto_provider,
+        }
     }
 
     pub(crate) fn request<'a>(&'a self, method: Method, path: &'a Path) -> Request<'a> {
         let url = self.config.path_url(path);
         Request {
+            crypto_provider: self.crypto_provider.as_ref(),
             path,
             builder: self.client.request(method, url),
             payload: None,
@@ -534,8 +552,8 @@ impl S3Client {
 
         let mut builder = self.client.request(Method::POST, url);
 
-        let digest = digest::digest(&digest::SHA256, &body);
-        builder = builder.header(SHA256_CHECKSUM, BASE64_STANDARD.encode(digest));
+        let digest = self.crypto_provider.digest_sha256(&body)?;
+        builder = builder.header(SHA256_CHECKSUM, BASE64_STANDARD.encode(digest.as_ref()));
 
         // S3 *requires* DeleteObjects to include a Content-MD5 header:
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
@@ -685,7 +703,7 @@ impl S3Client {
             .idempotent(true);
 
         request = match data {
-            PutPartPayload::Part(payload) => request.with_payload(payload),
+            PutPartPayload::Part(payload) => request.with_payload(payload)?,
             PutPartPayload::Copy(path) => request.header(
                 "x-amz-copy-source",
                 &format!("{}/{}", self.config.bucket, encode_path(path)),
