@@ -61,6 +61,10 @@ jobs:
           cargo update -p once_cell --precise 1.20.3
           cargo update -p tracing-core --precise 0.1.33
           cargo update -p tracing-attributes --precise 0.1.28
+          cargo update -p parking_lot --precise 0.12.4
+          cargo update -p parking_lot_core --precise 0.9.11
+          cargo update -p lock_api --precise 0.4.13
+          cargo update -p syn --precise 2.0.106
       - name: Check
         run: |
           # run `cargo msrv verify` to see problems
