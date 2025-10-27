@@ -34,6 +34,7 @@
 //! enabled by setting [crate::ClientConfigKey::Http1Only] to false.
 //!
 //! [lifecycle rule]: https://cloud.google.com/storage/docs/lifecycle#abort-mpu
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -114,6 +115,127 @@ struct UploadState {
     parts: Parts,
 }
 
+#[derive(Debug)]
+struct ResumableState {
+    client: Arc<GoogleCloudStorageClient>,
+    session_uri: String,
+    in_flight: AtomicUsize,
+    next_offset: AtomicU64,
+    closed: AtomicBool,
+}
+
+#[derive(Debug)]
+struct GCSResumableUpload {
+    state: Arc<ResumableState>,
+}
+
+impl GCSResumableUpload {
+    fn new(client: Arc<GoogleCloudStorageClient>, _path: Path, session_uri: String) -> Self {
+        let state = Arc::new(ResumableState {
+            client,
+            session_uri,
+            in_flight: AtomicUsize::new(0),
+            next_offset: AtomicU64::new(0),
+            closed: AtomicBool::new(false),
+        });
+        Self { state }
+    }
+}
+
+#[async_trait]
+impl MultipartUpload for GCSResumableUpload {
+    fn put_part(&mut self, payload: PutPayload) -> UploadPart {
+        let state = Arc::clone(&self.state);
+
+        Box::pin(async move {
+            if state.closed.load(Ordering::SeqCst) {
+                return Err(crate::Error::Generic {
+                    store: STORE,
+                    source: "Upload already completed or aborted".into(),
+                });
+            }
+
+            if state
+                .in_flight
+                .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                return Err(crate::Error::Generic {
+                    store: STORE,
+                    source: "ConcurrentPartUpload".into(),
+                });
+            }
+
+            let start = state.next_offset.load(Ordering::SeqCst);
+            let len = payload.content_length() as u64;
+
+            let result = state
+                .client
+                .resumable_put(&state.session_uri, start, payload, None)
+                .await;
+
+            state.in_flight.store(0, Ordering::SeqCst);
+
+            match result {
+                Ok(Some(_put)) => {
+                    // Finalized on this chunk; set closed and advance offset
+                    state.next_offset.store(start + len, Ordering::SeqCst);
+                    state.closed.store(true, Ordering::SeqCst);
+                    Ok(())
+                }
+                Ok(None) => {
+                    // 308, advance offset
+                    state.next_offset.store(start + len, Ordering::SeqCst);
+                    Ok(())
+                }
+                Err(e) => Err(e.into()),
+            }
+        })
+    }
+
+    async fn complete(&mut self) -> Result<PutResult> {
+        if self.state.in_flight.load(Ordering::SeqCst) != 0 {
+            return Err(crate::Error::Generic {
+                store: STORE,
+                source: "Upload in-flight".into(),
+            });
+        }
+        if self.state.closed.swap(true, Ordering::SeqCst) {
+            return Err(crate::Error::Generic {
+                store: STORE,
+                source: "Upload already closed".into(),
+            });
+        }
+
+        // Send a zero-length finalization if nothing has been sent, or the last chunk didn't finalize
+        let start = self.state.next_offset.load(Ordering::SeqCst);
+        let payload = PutPayload::new();
+        match self
+            .state
+            .client
+            .resumable_put(&self.state.session_uri, start, payload, Some(start))
+            .await
+        {
+            Ok(Some(r)) => Ok(r),
+            Ok(None) => Err(crate::Error::Generic {
+                store: STORE,
+                source: "Unexpected 308 on finalize".into(),
+            }),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    async fn abort(&mut self) -> Result<()> {
+        if self.state.closed.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+        self.state
+            .client
+            .resumable_abort(&self.state.session_uri)
+            .await
+    }
+}
+
 #[async_trait]
 impl MultipartUpload for GCSMultipartUpload {
     fn put_part(&mut self, payload: PutPayload) -> UploadPart {
@@ -163,17 +285,24 @@ impl ObjectStore for GoogleCloudStorage {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
-        let upload_id = self.client.multipart_initiate(location, opts).await?;
+        // Minimal switch to resumable uploads by default
+        let PutMultipartOpts {
+            // not supported by GCP
+            tags: _,
+            attributes,
+            extensions,
+        } = opts;
 
-        Ok(Box::new(GCSMultipartUpload {
-            part_idx: 0,
-            state: Arc::new(UploadState {
-                client: Arc::clone(&self.client),
-                path: location.clone(),
-                multipart_id: upload_id.clone(),
-                parts: Default::default(),
-            }),
-        }))
+        let session_uri = self
+            .client
+            .resumable_initiate(location, attributes, extensions)
+            .await?;
+
+        Ok(Box::new(GCSResumableUpload::new(
+            Arc::clone(&self.client),
+            location.clone(),
+            session_uri,
+        )))
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
