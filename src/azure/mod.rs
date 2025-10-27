@@ -26,8 +26,8 @@ use crate::{
     multipart::{MultipartStore, PartId},
     path::Path,
     signer::Signer,
-    GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart,
+    DeleteOptions, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
+    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 use async_trait::async_trait;
 use futures::stream::{BoxStream, StreamExt, TryStreamExt};
@@ -118,6 +118,12 @@ impl ObjectStore for MicrosoftAzure {
 
     async fn delete(&self, location: &Path) -> Result<()> {
         self.client.delete_request(location, &()).await
+    }
+
+    async fn delete_opts(&self, location: &Path, opts: DeleteOptions) -> Result<()> {
+        // Azure delete_request accepts a query parameter, but we need to handle DeleteOptions differently
+        // We'll need to update the client to have a specific method for conditional deletes
+        self.client.delete_request_with_opts(location, opts).await
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
@@ -324,6 +330,8 @@ mod tests {
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;
         put_opts(&integration, true).await;
+        delete_opts(&integration, true).await;
+        delete_opts_race_condition(&integration, true).await;
         multipart(&integration, &integration).await;
         multipart_race_condition(&integration, false).await;
         multipart_out_of_order(&integration).await;
