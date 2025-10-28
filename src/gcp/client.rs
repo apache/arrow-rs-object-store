@@ -17,7 +17,7 @@
 
 use crate::client::builder::HttpRequestBuilder;
 use crate::client::get::GetClient;
-use crate::client::header::{get_put_result, get_version, HeaderConfig};
+use crate::client::header::{HeaderConfig, get_put_result, get_version};
 use crate::client::list::ListClient;
 use crate::client::retry::{RetryContext, RetryExt};
 use crate::client::s3::{
@@ -36,15 +36,15 @@ use crate::{
     PutOptions, PutPayload, PutResult, Result, RetryConfig,
 };
 use async_trait::async_trait;
-use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
 use bytes::Buf;
 use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH,
     CONTENT_TYPE,
 };
 use http::{HeaderName, Method, StatusCode};
-use percent_encoding::{percent_encode, utf8_percent_encode, NON_ALPHANUMERIC};
+use percent_encoding::{NON_ALPHANUMERIC, percent_encode, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 

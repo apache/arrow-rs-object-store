@@ -20,7 +20,7 @@ use crate::client::get::GetClient;
 use crate::client::header::HeaderConfig;
 use crate::client::retry::{self, RetryConfig, RetryContext, RetryExt};
 use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpResponse};
-use crate::path::{Path, DELIMITER};
+use crate::path::{DELIMITER, Path};
 use crate::util::deserialize_rfc1123;
 use crate::{Attribute, Attributes, ClientOptions, GetOptions, ObjectMeta, PutPayload, Result};
 use async_trait::async_trait;
@@ -197,7 +197,9 @@ impl Client {
                         builder.header(CONTENT_TYPE, v.as_ref())
                     }
                     Attribute::StorageClass => {
-                        tracing::warn!("StorageClass attribute not supported on HTTP client as header key is unknown");
+                        tracing::warn!(
+                            "StorageClass attribute not supported on HTTP client as header key is unknown"
+                        );
                         builder
                     }
                     // Ignore metadata attributes
@@ -232,7 +234,7 @@ impl Client {
                             source,
                             path: location.to_string(),
                         }
-                        .into())
+                        .into());
                     }
                 },
             }
@@ -280,7 +282,7 @@ impl Client {
                     source,
                     path: location.map(|x| x.to_string()).unwrap_or_default(),
                 }
-                .into())
+                .into());
             }
         };
 

@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::ObjectStore;
 #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 use crate::local::LocalFileSystem;
 use crate::memory::InMemory;
 use crate::path::Path;
-use crate::ObjectStore;
 use url::Url;
 
 #[derive(Debug, thiserror::Error)]
@@ -230,7 +230,7 @@ where
             return Err(super::Error::Generic {
                 store: "parse_url",
                 source: format!("feature for {s:?} not enabled").into(),
-            })
+            });
         }
     };
 
@@ -402,7 +402,7 @@ mod tests {
     #[cfg(all(feature = "http", not(target_arch = "wasm32")))]
     async fn test_url_http() {
         use crate::client::mock_server::MockServer;
-        use http::{header::USER_AGENT, Response};
+        use http::{Response, header::USER_AGENT};
 
         let server = MockServer::new().await;
 

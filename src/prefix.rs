@@ -17,7 +17,7 @@
 
 //! An object store wrapper handling a constant path prefix
 use bytes::Bytes;
-use futures::{stream::BoxStream, StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt, stream::BoxStream};
 use std::ops::Range;
 
 use crate::path::Path;

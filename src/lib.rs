@@ -557,8 +557,8 @@ pub mod client;
 
 #[cfg(feature = "cloud")]
 pub use client::{
-    backoff::BackoffConfig, retry::RetryConfig, ClientConfigKey, ClientOptions, CredentialProvider,
-    StaticCredentialProvider,
+    ClientConfigKey, ClientOptions, CredentialProvider, StaticCredentialProvider,
+    backoff::BackoffConfig, retry::RetryConfig,
 };
 
 #[cfg(all(feature = "cloud", not(target_arch = "wasm32")))]
@@ -585,10 +585,10 @@ pub mod integration;
 
 pub use attributes::*;
 
-pub use parse::{parse_url, parse_url_opts, ObjectStoreScheme};
+pub use parse::{ObjectStoreScheme, parse_url, parse_url_opts};
 pub use payload::*;
 pub use upload::*;
-pub use util::{coalesce_ranges, collect_bytes, GetRange, OBJECT_STORE_COALESCE_DEFAULT};
+pub use util::{GetRange, OBJECT_STORE_COALESCE_DEFAULT, coalesce_ranges, collect_bytes};
 
 // Re-export HTTP types used in public API
 pub use ::http::{Extensions, HeaderMap, HeaderValue};
@@ -599,7 +599,7 @@ use crate::util::maybe_spawn_blocking;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{stream::BoxStream, StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt, stream::BoxStream};
 use std::fmt::{Debug, Formatter};
 #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 use std::io::{Read, Seek, SeekFrom};

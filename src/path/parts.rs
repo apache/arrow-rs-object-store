@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use percent_encoding::{percent_encode, AsciiSet, CONTROLS};
+use percent_encoding::{AsciiSet, CONTROLS, percent_encode};
 use std::borrow::Cow;
 
 use crate::path::DELIMITER_BYTE;

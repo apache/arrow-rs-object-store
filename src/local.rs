@@ -16,7 +16,7 @@
 // under the License.
 
 //! An object store implementation for a local filesystem
-use std::fs::{metadata, symlink_metadata, File, Metadata, OpenOptions};
+use std::fs::{File, Metadata, OpenOptions, metadata, symlink_metadata};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::sync::Arc;
@@ -27,19 +27,18 @@ use std::{collections::VecDeque, path::PathBuf};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{stream::BoxStream, StreamExt};
 use futures::{FutureExt, TryStreamExt};
+use futures::{StreamExt, stream::BoxStream};
 use parking_lot::Mutex;
 use url::Url;
 use walkdir::{DirEntry, WalkDir};
 
 use crate::{
-    maybe_spawn_blocking,
-    path::{absolute_path_to_url, Path},
-    util::InvalidGetRange,
     Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
     ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
-    UploadPart,
+    UploadPart, maybe_spawn_blocking,
+    path::{Path, absolute_path_to_url},
+    util::InvalidGetRange,
 };
 
 /// A specialized `Error` for filesystem object store-related errors
@@ -556,23 +555,25 @@ impl ObjectStore for LocalFileSystem {
         // - atomically rename this temporary file into place
         //
         // This is necessary because hard_link returns an error if the destination already exists
-        maybe_spawn_blocking(move || loop {
-            let staged = staged_upload_path(&to, &id.to_string());
-            match std::fs::hard_link(&from, &staged) {
-                Ok(_) => {
-                    return std::fs::rename(&staged, &to).map_err(|source| {
-                        let _ = std::fs::remove_file(&staged); // Attempt to clean up
-                        Error::UnableToCopyFile { from, to, source }.into()
-                    });
-                }
-                Err(source) => match source.kind() {
-                    ErrorKind::AlreadyExists => id += 1,
-                    ErrorKind::NotFound => match from.exists() {
-                        true => create_parent_dirs(&to, source)?,
-                        false => return Err(Error::NotFound { path: from, source }.into()),
+        maybe_spawn_blocking(move || {
+            loop {
+                let staged = staged_upload_path(&to, &id.to_string());
+                match std::fs::hard_link(&from, &staged) {
+                    Ok(_) => {
+                        return std::fs::rename(&staged, &to).map_err(|source| {
+                            let _ = std::fs::remove_file(&staged); // Attempt to clean up
+                            Error::UnableToCopyFile { from, to, source }.into()
+                        });
+                    }
+                    Err(source) => match source.kind() {
+                        ErrorKind::AlreadyExists => id += 1,
+                        ErrorKind::NotFound => match from.exists() {
+                            true => create_parent_dirs(&to, source)?,
+                            false => return Err(Error::NotFound { path: from, source }.into()),
+                        },
+                        _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
                     },
-                    _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
-                },
+                }
             }
         })
         .await
@@ -581,16 +582,18 @@ impl ObjectStore for LocalFileSystem {
     async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
         let from = self.path_to_filesystem(from)?;
         let to = self.path_to_filesystem(to)?;
-        maybe_spawn_blocking(move || loop {
-            match std::fs::rename(&from, &to) {
-                Ok(_) => return Ok(()),
-                Err(source) => match source.kind() {
-                    ErrorKind::NotFound => match from.exists() {
-                        true => create_parent_dirs(&to, source)?,
-                        false => return Err(Error::NotFound { path: from, source }.into()),
+        maybe_spawn_blocking(move || {
+            loop {
+                match std::fs::rename(&from, &to) {
+                    Ok(_) => return Ok(()),
+                    Err(source) => match source.kind() {
+                        ErrorKind::NotFound => match from.exists() {
+                            true => create_parent_dirs(&to, source)?,
+                            false => return Err(Error::NotFound { path: from, source }.into()),
+                        },
+                        _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
                     },
-                    _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
-                },
+                }
             }
         })
         .await
@@ -600,23 +603,25 @@ impl ObjectStore for LocalFileSystem {
         let from = self.path_to_filesystem(from)?;
         let to = self.path_to_filesystem(to)?;
 
-        maybe_spawn_blocking(move || loop {
-            match std::fs::hard_link(&from, &to) {
-                Ok(_) => return Ok(()),
-                Err(source) => match source.kind() {
-                    ErrorKind::AlreadyExists => {
-                        return Err(Error::AlreadyExists {
-                            path: to.to_str().unwrap().to_string(),
-                            source,
+        maybe_spawn_blocking(move || {
+            loop {
+                match std::fs::hard_link(&from, &to) {
+                    Ok(_) => return Ok(()),
+                    Err(source) => match source.kind() {
+                        ErrorKind::AlreadyExists => {
+                            return Err(Error::AlreadyExists {
+                                path: to.to_str().unwrap().to_string(),
+                                source,
+                            }
+                            .into());
                         }
-                        .into())
-                    }
-                    ErrorKind::NotFound => match from.exists() {
-                        true => create_parent_dirs(&to, source)?,
-                        false => return Err(Error::NotFound { path: from, source }.into()),
+                        ErrorKind::NotFound => match from.exists() {
+                            true => create_parent_dirs(&to, source)?,
+                            false => return Err(Error::NotFound { path: from, source }.into()),
+                        },
+                        _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
                     },
-                    _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
-                },
+                }
             }
         })
         .await
@@ -1614,7 +1619,10 @@ mod tests {
 
         let b = Path::parse("bar#123").unwrap();
         let err = integration.get(&b).await.unwrap_err().to_string();
-        assert_eq!(err, "Generic LocalFileSystem error: Filenames containing trailing '/#\\d+/' are not supported: bar#123");
+        assert_eq!(
+            err,
+            "Generic LocalFileSystem error: Filenames containing trailing '/#\\d+/' are not supported: bar#123"
+        );
 
         let c = Path::parse("foo#123.txt").unwrap();
         integration.put(&c, "test".into()).await.unwrap();

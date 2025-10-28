@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::header::{get_etag, header_meta, HeaderConfig};
+use crate::client::header::{HeaderConfig, get_etag, header_meta};
 use crate::client::retry::RetryContext;
 use crate::client::{HttpResponse, HttpResponseBody};
 use crate::path::Path;
@@ -25,13 +25,13 @@ use crate::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
+use http::StatusCode;
 use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_RANGE,
     CONTENT_TYPE,
 };
-use http::StatusCode;
 use http_body_util::BodyExt;
 use reqwest::header::ToStrError;
 use std::ops::Range;
@@ -494,7 +494,7 @@ mod http_tests {
     use http::{Response, StatusCode};
     use hyper::body::Frame;
     use std::pin::Pin;
-    use std::task::{ready, Context, Poll};
+    use std::task::{Context, Poll, ready};
     use std::time::Duration;
 
     #[derive(Debug, thiserror::Error)]

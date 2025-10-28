@@ -34,7 +34,7 @@ use crate::{
 use bytes::Bytes;
 use futures::stream::FuturesUnordered;
 use futures::{StreamExt, TryStreamExt};
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use std::collections::HashSet;
 use std::slice;
 
@@ -1156,15 +1156,9 @@ pub async fn multipart_out_of_order(storage: &dyn ObjectStore) {
     let path = Path::from("test_multipart_out_of_order");
     let mut multipart_upload = storage.put_multipart(&path).await.unwrap();
 
-    let part1 = std::iter::repeat(b'1')
-        .take(5 * 1024 * 1024)
-        .collect::<Bytes>();
-    let part2 = std::iter::repeat(b'2')
-        .take(5 * 1024 * 1024)
-        .collect::<Bytes>();
-    let part3 = std::iter::repeat(b'3')
-        .take(5 * 1024 * 1024)
-        .collect::<Bytes>();
+    let part1 = std::iter::repeat_n(b'1', 5 * 1024 * 1024).collect::<Bytes>();
+    let part2 = std::iter::repeat_n(b'2', 5 * 1024 * 1024).collect::<Bytes>();
+    let part3 = std::iter::repeat_n(b'3', 5 * 1024 * 1024).collect::<Bytes>();
     let full = [part1.as_ref(), part2.as_ref(), part3.as_ref()].concat();
 
     let fut1 = multipart_upload.put_part(part1.into());

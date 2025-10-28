@@ -18,7 +18,7 @@
 //! Tests the HTTP store implementation
 
 #[cfg(feature = "http")]
-use object_store::{http::HttpBuilder, path::Path, GetOptions, GetRange, ObjectStore};
+use object_store::{GetOptions, GetRange, ObjectStore, http::HttpBuilder, path::Path};
 
 #[cfg(all(feature = "http", target_arch = "wasm32", target_os = "unknown"))]
 use wasm_bindgen_test::*;

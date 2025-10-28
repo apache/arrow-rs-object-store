@@ -21,7 +21,7 @@ use crate::azure::credential::{
     ImdsManagedIdentityProvider, WorkloadIdentityOAuthProvider,
 };
 use crate::azure::{AzureCredential, AzureCredentialProvider, MicrosoftAzure, STORE};
-use crate::client::{http_connector, HttpConnector, TokenCredentialProvider};
+use crate::client::{HttpConnector, TokenCredentialProvider, http_connector};
 use crate::config::ConfigValue;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use percent_encoding::percent_decode_str;

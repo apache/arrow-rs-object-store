@@ -17,14 +17,14 @@
 
 //! [`RetryConfig`] connection retry policy
 
+use crate::PutPayload;
 use crate::client::backoff::{Backoff, BackoffConfig};
 use crate::client::builder::HttpRequestBuilder;
 use crate::client::{HttpClient, HttpError, HttpErrorKind, HttpRequest, HttpResponse};
-use crate::PutPayload;
 use futures::future::BoxFuture;
 use http::{Method, Uri};
-use reqwest::header::LOCATION;
 use reqwest::StatusCode;
+use reqwest::header::LOCATION;
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use std::time::{Duration, Instant};
 use tracing::info;
@@ -108,7 +108,8 @@ impl RetryContext {
 /// The reason a request failed
 #[derive(Debug, thiserror::Error)]
 pub enum RequestError {
-    #[error("Received redirect without LOCATION, this normally indicates an incorrectly configured region"
+    #[error(
+        "Received redirect without LOCATION, this normally indicates an incorrectly configured region"
     )]
     BareRedirect,
 
@@ -507,15 +508,15 @@ impl RetryExt for HttpRequestBuilder {
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod tests {
-    use crate::client::mock_server::MockServer;
-    use crate::client::retry::{body_contains_error, RequestError, RetryContext, RetryExt};
-    use crate::client::{HttpClient, HttpResponse};
     use crate::RetryConfig;
+    use crate::client::mock_server::MockServer;
+    use crate::client::retry::{RequestError, RetryContext, RetryExt, body_contains_error};
+    use crate::client::{HttpClient, HttpResponse};
     use http::StatusCode;
+    use hyper::Response;
     use hyper::header::LOCATION;
     use hyper::server::conn::http1;
     use hyper::service::service_fn;
-    use hyper::Response;
     use hyper_util::rt::TokioIo;
     use reqwest::{Client, Method};
     use std::convert::Infallible;
@@ -685,7 +686,10 @@ mod tests {
 
         let e = do_request().await.unwrap_err();
         assert!(matches!(e.inner(), RequestError::BareRedirect));
-        assert_eq!(e.inner().to_string(), "Received redirect without LOCATION, this normally indicates an incorrectly configured region");
+        assert_eq!(
+            e.inner().to_string(),
+            "Received redirect without LOCATION, this normally indicates an incorrectly configured region"
+        );
 
         // Gives up after the retrying the specified number of times
         for _ in 0..=retry.max_retries {
