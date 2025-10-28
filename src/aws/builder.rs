@@ -329,6 +329,7 @@ pub enum AmazonS3ConfigKey {
     ///
     /// Supported keys:
     /// - `aws_container_credentials_full_uri`
+    /// - `container_credentials_full_uri`
     ContainerCredentialsFullUri,
 
     /// Set the authorization token in plain text when used in EKS to authenticate with ContainerCredentialsFullUri
