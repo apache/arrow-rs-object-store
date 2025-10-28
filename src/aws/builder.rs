@@ -1250,6 +1250,7 @@ pub enum S3EncryptionConfigKey {
     ///
     /// Supported keys:
     /// - `aws_sse_bucket_key_enabled`
+    /// - `sse_bucket_key_enabled`
     BucketKeyEnabled,
 
     /// The base64 encoded, 256-bit customer encryption key to use for server-side encryption.
