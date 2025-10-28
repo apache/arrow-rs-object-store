@@ -1244,6 +1244,7 @@ pub enum S3EncryptionConfigKey {
     ///
     /// Supported keys:
     /// - `aws_sse_kms_key_id`
+    /// - `sse_kms_key_id`
     KmsKeyId,
     /// If set to true, will use the bucket's default KMS key for server-side encryption.
     /// If set to false, will disable the use of the bucket's default KMS key for server-side encryption.
