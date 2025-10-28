@@ -98,5 +98,5 @@ Planned Release Schedule
 |------------------|----------|--------------------------------|:-------------------------------------------------------------------|
 | July 2025        | `0.12.3` | Minor, NO breaking API changes | [#428](https://github.com/apache/arrow-rs-object-store/issues/428) |
 | Sep 2025         | `0.12.4` | Minor, NO breaking API changes | [#498](https://github.com/apache/arrow-rs-object-store/issues/489) |
-| TBD              | `0.13.0` | Major, breaking API changes    | [#367](https://github.com/apache/arrow-rs-object-store/issues/367) |
+| Nov 2025         | `0.13.0` | Major, breaking API changes    | [#367](https://github.com/apache/arrow-rs-object-store/issues/367) |
 | TBD              | `0.13.1` | Minor, NO breaking API changes | [#393](https://github.com/apache/arrow-rs-object-store/issues/393) |
