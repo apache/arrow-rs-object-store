@@ -339,6 +339,7 @@ pub enum AmazonS3ConfigKey {
     ///
     /// Supported keys:
     /// - `aws_container_authorization_token_file`
+    /// - `container_authorization_token_file`
     ContainerAuthorizationTokenFile,
 
     /// Web identity token file path for AssumeRoleWithWebIdentity
