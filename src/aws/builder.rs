@@ -321,6 +321,7 @@ pub enum AmazonS3ConfigKey {
     ///
     /// Supported keys:
     /// - `aws_container_credentials_relative_uri`
+    /// - `container_credentials_relative_uri`
     ContainerCredentialsRelativeUri,
 
     /// Set the container credentials full URI when used in EKS
