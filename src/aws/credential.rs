@@ -1332,7 +1332,10 @@ mod tests {
             ("   a   b  c   ", "a b c"),
             ("a \t b  c   ", "a b c"),
             ("\"a \t b  c   ", "\"a b c"),
-            (" \t\n\u{000b}\r\u{000c}a \t\n\u{000b}\r\u{000c} b \t\n\u{000b}\r\u{000c} c \t\n\u{000b}\r\u{000c}", "a b c"),
+            (
+                " \t\n\u{000b}\r\u{000c}a \t\n\u{000b}\r\u{000c} b \t\n\u{000b}\r\u{000c} c \t\n\u{000b}\r\u{000c}",
+                "a b c",
+            ),
         ];
 
         for (input, expected) in test_cases {
