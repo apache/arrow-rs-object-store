@@ -24,11 +24,11 @@ use crate::aws::{
     AmazonS3, AwsCredential, AwsCredentialProvider, Checksum, S3ConditionalPut, S3CopyIfNotExists,
     STORE,
 };
-use crate::client::{http_connector, HttpConnector, TokenCredentialProvider};
+use crate::client::{HttpConnector, TokenCredentialProvider, http_connector};
 use crate::config::ConfigValue;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
-use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
 use itertools::Itertools;
 use md5::{Digest, Md5};
 use reqwest::header::{HeaderMap, HeaderValue};
@@ -75,7 +75,10 @@ enum Error {
     #[error("Invalid Zone suffix for bucket '{bucket}'")]
     ZoneSuffix { bucket: String },
 
-    #[error("Invalid encryption type: {}. Valid values are \"AES256\", \"sse:kms\", \"sse:kms:dsse\" and \"sse-c\".", passed)]
+    #[error(
+        "Invalid encryption type: {}. Valid values are \"AES256\", \"sse:kms\", \"sse:kms:dsse\" and \"sse-c\".",
+        passed
+    )]
     InvalidEncryptionType { passed: String },
 
     #[error(
@@ -473,9 +476,15 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_metadata_endpoint" | "metadata_endpoint" => Ok(Self::MetadataEndpoint),
             "aws_unsigned_payload" | "unsigned_payload" => Ok(Self::UnsignedPayload),
             "aws_checksum_algorithm" | "checksum_algorithm" => Ok(Self::Checksum),
-            "aws_container_credentials_relative_uri" => Ok(Self::ContainerCredentialsRelativeUri),
-            "aws_container_credentials_full_uri" => Ok(Self::ContainerCredentialsFullUri),
-            "aws_container_authorization_token_file" => Ok(Self::ContainerAuthorizationTokenFile),
+            "aws_container_credentials_relative_uri" | "container_credentials_relative_uri" => {
+                Ok(Self::ContainerCredentialsRelativeUri)
+            }
+            "aws_container_credentials_full_uri" | "container_credentials_full_uri" => {
+                Ok(Self::ContainerCredentialsFullUri)
+            }
+            "aws_container_authorization_token_file" | "container_authorization_token_file" => {
+                Ok(Self::ContainerAuthorizationTokenFile)
+            }
             "aws_web_identity_token_file" | "web_identity_token_file" => {
                 Ok(Self::WebIdentityTokenFile)
             }
@@ -489,14 +498,16 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_request_payer" | "request_payer" => Ok(Self::RequestPayer),
             // Backwards compatibility
             "aws_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
-            "aws_server_side_encryption" => Ok(Self::Encryption(
+            "aws_server_side_encryption" | "server_side_encryption" => Ok(Self::Encryption(
                 S3EncryptionConfigKey::ServerSideEncryption,
             )),
-            "aws_sse_kms_key_id" => Ok(Self::Encryption(S3EncryptionConfigKey::KmsKeyId)),
-            "aws_sse_bucket_key_enabled" => {
+            "aws_sse_kms_key_id" | "sse_kms_key_id" => {
+                Ok(Self::Encryption(S3EncryptionConfigKey::KmsKeyId))
+            }
+            "aws_sse_bucket_key_enabled" | "sse_bucket_key_enabled" => {
                 Ok(Self::Encryption(S3EncryptionConfigKey::BucketKeyEnabled))
             }
-            "aws_sse_customer_key_base64" => Ok(Self::Encryption(
+            "aws_sse_customer_key_base64" | "sse_customer_key_base64" => Ok(Self::Encryption(
                 S3EncryptionConfigKey::CustomerEncryptionKey,
             )),
             _ => match s.strip_prefix("aws_").unwrap_or(s).parse() {

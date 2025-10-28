@@ -23,11 +23,11 @@
 //!
 //! Unused blocks will automatically be dropped after 7 days.
 use crate::{
+    GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart,
     multipart::{MultipartStore, PartId},
     path::Path,
     signer::Signer,
-    GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 use async_trait::async_trait;
 use futures::stream::{BoxStream, StreamExt, TryStreamExt};
@@ -37,10 +37,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
 
+use crate::client::CredentialProvider;
 use crate::client::get::GetClientExt;
 use crate::client::list::{ListClient, ListClientExt};
-use crate::client::CredentialProvider;
-pub use credential::{authority_hosts, AzureAccessKey, AzureAuthorizer};
+pub use credential::{AzureAccessKey, AzureAuthorizer, authority_hosts};
 
 mod builder;
 mod client;

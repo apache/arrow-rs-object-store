@@ -37,9 +37,9 @@ use std::{sync::Arc, time::Duration};
 use url::Url;
 
 use crate::aws::client::{CompleteMultipartMode, PutPartPayload, RequestError, S3Client};
+use crate::client::CredentialProvider;
 use crate::client::get::GetClientExt;
 use crate::client::list::{ListClient, ListClientExt};
-use crate::client::CredentialProvider;
 use crate::multipart::{MultipartStore, PartId};
 use crate::signer::Signer;
 use crate::util::STRICT_ENCODE_SET;
@@ -358,7 +358,7 @@ impl ObjectStore for AmazonS3 {
             None => {
                 return Err(Error::NotSupported {
                     source: "S3 does not support copy-if-not-exists".to_string().into(),
-                })
+                });
             }
         };
 
@@ -493,14 +493,14 @@ impl PaginatedListStore for AmazonS3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ClientOptions;
+    use crate::client::SpawnedReqwestConnector;
     use crate::client::get::GetClient;
     use crate::client::retry::RetryContext;
-    use crate::client::SpawnedReqwestConnector;
     use crate::integration::*;
     use crate::tests::*;
-    use crate::ClientOptions;
-    use base64::prelude::BASE64_STANDARD;
     use base64::Engine;
+    use base64::prelude::BASE64_STANDARD;
     use http::HeaderMap;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";

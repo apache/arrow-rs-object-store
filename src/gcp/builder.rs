@@ -15,16 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::{http_connector, HttpConnector, TokenCredentialProvider};
+use crate::client::{HttpConnector, TokenCredentialProvider, http_connector};
 use crate::config::ConfigValue;
 use crate::gcp::client::{GoogleCloudStorageClient, GoogleCloudStorageConfig};
 use crate::gcp::credential::{
-    ApplicationDefaultCredentials, InstanceCredentialProvider, ServiceAccountCredentials,
-    DEFAULT_GCS_BASE_URL,
+    ApplicationDefaultCredentials, DEFAULT_GCS_BASE_URL, InstanceCredentialProvider,
+    ServiceAccountCredentials,
 };
 use crate::gcp::{
-    credential, GcpCredential, GcpCredentialProvider, GcpSigningCredential,
-    GcpSigningCredentialProvider, GoogleCloudStorage, STORE,
+    GcpCredential, GcpCredentialProvider, GcpSigningCredential, GcpSigningCredentialProvider,
+    GoogleCloudStorage, STORE, credential,
 };
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use serde::{Deserialize, Serialize};

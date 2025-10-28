@@ -64,7 +64,7 @@ use std::time::Duration;
 #[cfg(not(target_arch = "wasm32"))]
 use reqwest::{NoProxy, Proxy};
 
-use crate::config::{fmt_duration, ConfigValue};
+use crate::config::{ConfigValue, fmt_duration};
 use crate::path::Path;
 use crate::{GetOptions, Result};
 
@@ -895,8 +895,8 @@ where
 #[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
 mod cloud {
     use super::*;
-    use crate::client::token::{TemporaryToken, TokenCache};
     use crate::RetryConfig;
+    use crate::client::token::{TemporaryToken, TokenCache};
 
     /// A [`CredentialProvider`] that uses [`HttpClient`] to fetch temporary tokens
     #[derive(Debug)]

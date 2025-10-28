@@ -21,14 +21,14 @@ use std::ops::Range;
 use std::{convert::TryInto, sync::Arc};
 
 use crate::multipart::{MultipartStore, PartId};
-use crate::{
-    path::Path, GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
-};
 use crate::{GetOptions, UploadPart};
+use crate::{
+    GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, path::Path,
+};
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{stream::BoxStream, FutureExt, StreamExt};
+use futures::{FutureExt, StreamExt, stream::BoxStream};
 use std::time::Duration;
 
 /// Configuration settings for throttled store
@@ -559,7 +559,7 @@ mod tests {
         let path = Path::from("foo");
 
         if let Some(n_bytes) = n_bytes {
-            let data: Vec<_> = std::iter::repeat(1u8).take(n_bytes).collect();
+            let data: Vec<_> = std::iter::repeat_n(1u8, n_bytes).collect();
             store.put(&path, data.into()).await.unwrap();
         } else {
             // ensure object is absent
@@ -651,7 +651,7 @@ mod tests {
     }
 
     async fn measure_put(store: &ThrottledStore<InMemory>, n_bytes: usize) -> Duration {
-        let data: Vec<_> = std::iter::repeat(1u8).take(n_bytes).collect();
+        let data: Vec<_> = std::iter::repeat_n(1u8, n_bytes).collect();
 
         let t0 = Instant::now();
         store.put(&Path::from("foo"), data.into()).await.unwrap();

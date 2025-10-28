@@ -129,10 +129,10 @@ impl Body for SpawnBody {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RetryConfig;
+    use crate::client::HttpClient;
     use crate::client::mock_server::MockServer;
     use crate::client::retry::RetryExt;
-    use crate::client::HttpClient;
-    use crate::RetryConfig;
 
     async fn test_client(client: HttpClient) {
         let (send, recv) = tokio::sync::oneshot::channel();

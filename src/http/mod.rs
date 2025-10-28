@@ -41,7 +41,7 @@ use url::Url;
 
 use crate::client::get::GetClientExt;
 use crate::client::header::get_etag;
-use crate::client::{http_connector, HttpConnector};
+use crate::client::{HttpConnector, http_connector};
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{

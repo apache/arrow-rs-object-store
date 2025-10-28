@@ -324,6 +324,32 @@
 //! # }
 //! ```
 //!
+//! To retrieve ranges from a versioned object, use [`ObjectStore::get_opts`] by specifying the range in the [`GetOptions`].
+//!
+//! ```ignore-wasm32
+//! # use object_store::local::LocalFileSystem;
+//! # use object_store::ObjectStore;
+//! # use object_store::GetOptions;
+//! # use std::sync::Arc;
+//! # use bytes::Bytes;
+//! # use tokio::io::AsyncWriteExt;
+//! # use object_store::path::Path;
+//! # fn get_object_store() -> Arc<dyn ObjectStore> {
+//! #   Arc::new(LocalFileSystem::new())
+//! # }
+//! # async fn get_range_with_options() {
+//! #
+//! let object_store: Arc<dyn ObjectStore> = get_object_store();
+//! let path = Path::from("data/large_file");
+//! let ranges = vec![90..100, 400..600, 0..10];
+//! for range in ranges {
+//!     let opts = GetOptions::default().with_range(Some(range));
+//!     let data = object_store.get_opts(&path, opts).await.unwrap();
+//!     // Do something with the data
+//! }
+//! # }
+//! ``````
+//!
 //! # Vectored Write
 //!
 //! When writing data it is often the case that the size of the output is not known ahead of time.
@@ -403,10 +429,7 @@
 //!             Some(e) => match e.refreshed_at.elapsed() < Duration::from_secs(10) {
 //!                 true => e.data.clone(), // Return cached data
 //!                 false => { // Check if remote version has changed
-//!                     let opts = GetOptions {
-//!                         if_none_match: Some(e.e_tag.clone()),
-//!                         ..GetOptions::default()
-//!                     };
+//!                     let opts = GetOptions::new().with_if_none_match(Some(e.e_tag.clone()));
 //!                     match self.store.get_opts(&path, opts).await {
 //!                         Ok(d) => e.data = d.bytes().await?,
 //!                         Err(Error::NotModified { .. }) => {} // Data has not changed
@@ -534,8 +557,8 @@ pub mod client;
 
 #[cfg(feature = "cloud")]
 pub use client::{
-    backoff::BackoffConfig, retry::RetryConfig, ClientConfigKey, ClientOptions, CredentialProvider,
-    StaticCredentialProvider,
+    ClientConfigKey, ClientOptions, CredentialProvider, StaticCredentialProvider,
+    backoff::BackoffConfig, retry::RetryConfig,
 };
 
 #[cfg(all(feature = "cloud", not(target_arch = "wasm32")))]
@@ -562,10 +585,10 @@ pub mod integration;
 
 pub use attributes::*;
 
-pub use parse::{parse_url, parse_url_opts, ObjectStoreScheme};
+pub use parse::{ObjectStoreScheme, parse_url, parse_url_opts};
 pub use payload::*;
 pub use upload::*;
-pub use util::{coalesce_ranges, collect_bytes, GetRange, OBJECT_STORE_COALESCE_DEFAULT};
+pub use util::{GetRange, OBJECT_STORE_COALESCE_DEFAULT, coalesce_ranges, collect_bytes};
 
 // Re-export HTTP types used in public API
 pub use ::http::{Extensions, HeaderMap, HeaderValue};
@@ -576,7 +599,7 @@ use crate::util::maybe_spawn_blocking;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{stream::BoxStream, StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt, stream::BoxStream};
 use std::fmt::{Debug, Formatter};
 #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 use std::io::{Read, Seek, SeekFrom};
@@ -634,22 +657,196 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ) -> Result<Box<dyn MultipartUpload>>;
 
     /// Return the bytes that are stored at the specified location.
+    ///
+    /// ## Example
+    ///
+    /// This example uses a basic local filesystem object store to get an object.
+    ///
+    /// ```ignore-wasm32
+    /// # use object_store::local::LocalFileSystem;
+    /// # use tempfile::tempdir;
+    /// # use object_store::{path::Path, ObjectStore};
+    /// async fn get_example() {
+    ///     let tmp = tempdir().unwrap();
+    ///     let store = LocalFileSystem::new_with_prefix(tmp.path()).unwrap();
+    ///     let location = Path::from("example.txt");
+    ///     let content = b"Hello, Object Store!";
+    ///
+    ///     // Put the object into the store
+    ///     store
+    ///         .put(&location, content.as_ref().into())
+    ///         .await
+    ///         .expect("Failed to put object");
+    ///
+    ///     // Get the object from the store
+    ///     let get_result = store.get(&location).await.expect("Failed to get object");
+    ///     let bytes = get_result.bytes().await.expect("Failed to read bytes");
+    ///     println!("Retrieved content: {}", String::from_utf8_lossy(&bytes));
+    /// }
+    /// ```
     async fn get(&self, location: &Path) -> Result<GetResult> {
         self.get_opts(location, GetOptions::default()).await
     }
 
     /// Perform a get request with options
+    ///
+    /// ## Example
+    ///
+    /// This example uses a basic local filesystem object store to get an object with a specific etag.
+    /// On the local filesystem, supplying an invalid etag will error.
+    /// Versioned object stores will return the specified object version, if it exists.
+    ///
+    /// ```ignore-wasm32
+    /// # use object_store::local::LocalFileSystem;
+    /// # use tempfile::tempdir;
+    /// # use object_store::{path::Path, ObjectStore, GetOptions};
+    /// async fn get_opts_example() {
+    ///     let tmp = tempdir().unwrap();
+    ///     let store = LocalFileSystem::new_with_prefix(tmp.path()).unwrap();
+    ///     let location = Path::from("example.txt");
+    ///     let content = b"Hello, Object Store!";
+    ///
+    ///     // Put the object into the store
+    ///     store
+    ///         .put(&location, content.as_ref().into())
+    ///         .await
+    ///         .expect("Failed to put object");
+    ///
+    ///     // Get the object from the store to figure out the right etag
+    ///     let result: object_store::GetResult = store.get(&location).await.expect("Failed to get object");
+    ///
+    ///     let etag = result.meta.e_tag.expect("ETag should be present");
+    ///
+    ///     // Get the object from the store with range and etag
+    ///     let bytes = store
+    ///         .get_opts(
+    ///             &location,
+    ///             GetOptions::new()
+    ///                 .with_if_match(Some(etag.clone())),
+    ///         )
+    ///         .await
+    ///         .expect("Failed to get object with range and etag")
+    ///         .bytes()
+    ///         .await
+    ///         .expect("Failed to read bytes");
+    ///
+    ///     println!(
+    ///         "Retrieved with ETag {}: {}",
+    ///         etag,
+    ///         String::from_utf8_lossy(&bytes)
+    ///     );
+    ///
+    ///     // Show that if the etag does not match, we get an error
+    ///     let wrong_etag = "wrong-etag".to_string();
+    ///     match store
+    ///         .get_opts(
+    ///             &location,
+    ///             GetOptions::new().with_if_match(Some(wrong_etag))
+    ///         )
+    ///         .await
+    ///     {
+    ///         Ok(_) => println!("Unexpectedly succeeded with wrong ETag"),
+    ///         Err(e) => println!("On a non-versioned object store, getting an invalid ETag ('wrong-etag') results in an error as expected: {}", e),
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// To retrieve a range of bytes from a versioned object, specify the range in the [`GetOptions`] supplied to this method.
+    ///
+    /// ```ignore-wasm32
+    /// # use object_store::local::LocalFileSystem;
+    /// # use tempfile::tempdir;
+    /// # use object_store::{path::Path, ObjectStore, GetOptions};
+    /// async fn get_opts_range_example() {
+    ///     let tmp = tempdir().unwrap();
+    ///     let store = LocalFileSystem::new_with_prefix(tmp.path()).unwrap();
+    ///     let location = Path::from("example.txt");
+    ///     let content = b"Hello, Object Store!";
+    ///
+    ///     // Put the object into the store
+    ///     store
+    ///         .put(&location, content.as_ref().into())
+    ///         .await
+    ///         .expect("Failed to put object");
+    ///
+    ///     // Get the object from the store to figure out the right etag
+    ///     let result: object_store::GetResult = store.get(&location).await.expect("Failed to get object");
+    ///
+    ///     let etag = result.meta.e_tag.expect("ETag should be present");
+    ///
+    ///     // Get the object from the store with range and etag
+    ///     let bytes = store
+    ///         .get_opts(
+    ///             &location,
+    ///             GetOptions::new()
+    ///                 .with_range(Some(0..5))
+    ///                 .with_if_match(Some(etag.clone())),
+    ///         )
+    ///         .await
+    ///         .expect("Failed to get object with range and etag")
+    ///         .bytes()
+    ///         .await
+    ///         .expect("Failed to read bytes");
+    ///
+    ///     println!(
+    ///         "Retrieved range [0-5] with ETag {}: {}",
+    ///         etag,
+    ///         String::from_utf8_lossy(&bytes)
+    ///     );
+    ///
+    ///     // Show that if the etag does not match, we get an error
+    ///     let wrong_etag = "wrong-etag".to_string();
+    ///     match store
+    ///         .get_opts(
+    ///             &location,
+    ///             GetOptions::new().with_range(Some(0..5)).with_if_match(Some(wrong_etag))
+    ///         )
+    ///         .await
+    ///     {
+    ///         Ok(_) => println!("Unexpectedly succeeded with wrong ETag"),
+    ///         Err(e) => println!("On a non-versioned object store, getting an invalid ETag ('wrong-etag') results in an error as expected: {}", e),
+    ///     }
+    /// }
+    /// ```
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult>;
 
     /// Return the bytes that are stored at the specified location
     /// in the given byte range.
     ///
-    /// See [`GetRange::Bounded`] for more details on how `range` gets interpreted
+    /// See [`GetRange::Bounded`] for more details on how `range` gets interpreted.
+    ///
+    /// To retrieve a range of bytes from a versioned object, use [`ObjectStore::get_opts`] by specifying the range in the [`GetOptions`].
+    ///
+    /// ## Examples
+    ///
+    /// This example uses a basic local filesystem object store to get a byte range from an object.
+    ///
+    /// ```ignore-wasm32
+    /// # use object_store::local::LocalFileSystem;
+    /// # use tempfile::tempdir;
+    /// # use object_store::{path::Path, ObjectStore};
+    /// async fn get_range_example() {
+    ///     let tmp = tempdir().unwrap();
+    ///     let store = LocalFileSystem::new_with_prefix(tmp.path()).unwrap();
+    ///     let location = Path::from("example.txt");
+    ///     let content = b"Hello, Object Store!";
+    ///
+    ///     // Put the object into the store
+    ///     store
+    ///         .put(&location, content.as_ref().into())
+    ///         .await
+    ///         .expect("Failed to put object");
+    ///
+    ///     // Get the object from the store
+    ///     let bytes = store
+    ///         .get_range(&location, 0..5)
+    ///         .await
+    ///         .expect("Failed to get object");
+    ///     println!("Retrieved range [0-5]: {}", String::from_utf8_lossy(&bytes));
+    /// }
+    /// ```
     async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
-        let options = GetOptions {
-            range: Some(range.into()),
-            ..Default::default()
-        };
+        let options = GetOptions::new().with_range(Some(range));
         self.get_opts(location, options).await?.bytes().await
     }
 
@@ -666,10 +863,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
 
     /// Return the metadata for the specified location
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        let options = GetOptions {
-            head: true,
-            ..Default::default()
-        };
+        let options = GetOptions::new().with_head(true);
         Ok(self.get_opts(location, options).await?.meta)
     }
 
@@ -1034,6 +1228,83 @@ impl GetOptions {
             }
         }
         Ok(())
+    }
+
+    /// Create a new [`GetOptions`]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the `if_match` condition.
+    ///
+    /// See [`GetOptions::if_match`]
+    #[must_use]
+    pub fn with_if_match(mut self, etag: Option<impl Into<String>>) -> Self {
+        self.if_match = etag.map(Into::into);
+        self
+    }
+
+    /// Sets the `if_none_match` condition.
+    ///
+    /// See [`GetOptions::if_none_match`]
+    #[must_use]
+    pub fn with_if_none_match(mut self, etag: Option<impl Into<String>>) -> Self {
+        self.if_none_match = etag.map(Into::into);
+        self
+    }
+
+    /// Sets the `if_modified_since` condition.
+    ///
+    /// See [`GetOptions::if_modified_since`]
+    #[must_use]
+    pub fn with_if_modified_since(mut self, dt: Option<impl Into<DateTime<Utc>>>) -> Self {
+        self.if_modified_since = dt.map(Into::into);
+        self
+    }
+
+    /// Sets the `if_unmodified_since` condition.
+    ///
+    /// See [`GetOptions::if_unmodified_since`]
+    #[must_use]
+    pub fn with_if_unmodified_since(mut self, dt: Option<impl Into<DateTime<Utc>>>) -> Self {
+        self.if_unmodified_since = dt.map(Into::into);
+        self
+    }
+
+    /// Sets the `range` condition.
+    ///
+    /// See [`GetOptions::range`]
+    #[must_use]
+    pub fn with_range(mut self, range: Option<impl Into<GetRange>>) -> Self {
+        self.range = range.map(Into::into);
+        self
+    }
+
+    /// Sets the `version` condition.
+    ///
+    /// See [`GetOptions::version`]
+    #[must_use]
+    pub fn with_version(mut self, version: Option<impl Into<String>>) -> Self {
+        self.version = version.map(Into::into);
+        self
+    }
+
+    /// Sets the `head` condition.
+    ///
+    /// See [`GetOptions::head`]
+    #[must_use]
+    pub fn with_head(mut self, head: impl Into<bool>) -> Self {
+        self.head = head.into();
+        self
+    }
+
+    /// Sets the `extensions` condition.
+    ///
+    /// See [`GetOptions::extensions`]
+    #[must_use]
+    pub fn with_extensions(mut self, extensions: Extensions) -> Self {
+        self.extensions = extensions;
+        self
     }
 }
 
@@ -1669,5 +1940,42 @@ mod tests {
         let mut extensions = Extensions::new();
         extensions.insert("test-key");
         assert!(extensions.get::<&str>().is_some());
+    }
+
+    #[test]
+    fn test_get_options_builder() {
+        let dt = Utc::now();
+        let extensions = Extensions::new();
+
+        let options = GetOptions::new();
+
+        // assert defaults
+        assert_eq!(options.if_match, None);
+        assert_eq!(options.if_none_match, None);
+        assert_eq!(options.if_modified_since, None);
+        assert_eq!(options.if_unmodified_since, None);
+        assert_eq!(options.range, None);
+        assert_eq!(options.version, None);
+        assert!(!options.head);
+        assert!(options.extensions.get::<&str>().is_none());
+
+        let options = options
+            .with_if_match(Some("etag-match"))
+            .with_if_none_match(Some("etag-none-match"))
+            .with_if_modified_since(Some(dt))
+            .with_if_unmodified_since(Some(dt))
+            .with_range(Some(0..100))
+            .with_version(Some("version-1"))
+            .with_head(true)
+            .with_extensions(extensions.clone());
+
+        assert_eq!(options.if_match, Some("etag-match".to_string()));
+        assert_eq!(options.if_none_match, Some("etag-none-match".to_string()));
+        assert_eq!(options.if_modified_since, Some(dt));
+        assert_eq!(options.if_unmodified_since, Some(dt));
+        assert_eq!(options.range, Some(GetRange::Bounded(0..100)));
+        assert_eq!(options.version, Some("version-1".to_string()));
+        assert!(options.head);
+        assert_eq!(options.extensions.get::<&str>(), extensions.get::<&str>());
     }
 }

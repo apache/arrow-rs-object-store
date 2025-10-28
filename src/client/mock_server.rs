@@ -16,8 +16,8 @@
 // under the License.
 
 use crate::client::{HttpResponse, HttpResponseBody};
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;

@@ -17,7 +17,7 @@
 
 //! Abstraction of signed URL generation for those object store implementations that support it
 
-use crate::{path::Path, Result};
+use crate::{Result, path::Path};
 use async_trait::async_trait;
 use reqwest::Method;
 use std::{fmt, time::Duration};

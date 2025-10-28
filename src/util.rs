@@ -23,7 +23,7 @@ use std::{
 
 use super::Result;
 use bytes::Bytes;
-use futures::{stream::StreamExt, Stream, TryStreamExt};
+use futures::{Stream, TryStreamExt, stream::StreamExt};
 
 #[cfg(any(feature = "azure", feature = "http"))]
 pub(crate) static RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
@@ -331,7 +331,7 @@ mod tests {
     use crate::Error;
 
     use super::*;
-    use rand::{rng, Rng};
+    use rand::{Rng, rng};
     use std::ops::Range;
 
     /// Calls coalesce_ranges and validates the returned data is correct

@@ -18,7 +18,7 @@
 //! Tests the HTTP store implementation
 
 #[cfg(feature = "http")]
-use object_store::{http::HttpBuilder, path::Path, GetOptions, GetRange, ObjectStore};
+use object_store::{GetOptions, GetRange, ObjectStore, http::HttpBuilder, path::Path};
 
 #[cfg(all(feature = "http", target_arch = "wasm32", target_os = "unknown"))]
 use wasm_bindgen_test::*;
@@ -36,10 +36,7 @@ async fn test_http_store_gzip() {
     let _ = http_store
         .get_opts(
             &Path::parse("LICENSE.txt").unwrap(),
-            GetOptions {
-                range: Some(GetRange::Bounded(0..100)),
-                ..Default::default()
-            },
+            GetOptions::new().with_range(Some(GetRange::Bounded(0..100))),
         )
         .await
         .unwrap();
@@ -56,10 +53,7 @@ async fn basic_wasm_get() {
     let _ = http_store
         .get_opts(
             &Path::parse("LICENSE.txt").unwrap(),
-            GetOptions {
-                range: Some(GetRange::Bounded(0..100)),
-                ..Default::default()
-            },
+            GetOptions::new().with_range(Some(GetRange::Bounded(0..100))),
         )
         .await
         .unwrap();

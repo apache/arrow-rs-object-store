@@ -52,15 +52,6 @@ jobs:
       - uses: actions/checkout@v5
       - name: Install cargo-msrv
         run: cargo install cargo-msrv
-      - name: Downgrade object_store dependencies
-        # Necessary because tokio 1.30.0 updates MSRV to 1.63
-        # and url 2.5.1, updates to 1.67
-        run: |
-          cargo update -p tokio --precise 1.29.1
-          cargo update -p url --precise 2.5.0
-          cargo update -p once_cell --precise 1.20.3
-          cargo update -p tracing-core --precise 0.1.33
-          cargo update -p tracing-attributes --precise 0.1.28
       - name: Check
         run: |
           # run `cargo msrv verify` to see problems

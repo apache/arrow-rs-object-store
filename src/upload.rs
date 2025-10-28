@@ -248,10 +248,10 @@ mod tests {
     use rand::prelude::StdRng;
     use rand::{Rng, SeedableRng};
 
+    use crate::ObjectStore;
     use crate::memory::InMemory;
     use crate::path::Path;
     use crate::throttle::{ThrottleConfig, ThrottledStore};
-    use crate::ObjectStore;
 
     use super::*;
 

@@ -590,13 +590,7 @@ mod tests {
         writer.write_all(&[0; 5]).await.unwrap();
         writer.shutdown().await.unwrap();
         let response = store
-            .get_opts(
-                &path,
-                GetOptions {
-                    head: true,
-                    ..Default::default()
-                },
-            )
+            .get_opts(&path, GetOptions::new().with_head(true))
             .await
             .unwrap();
         assert_eq!(response.meta.size, 25);
@@ -610,13 +604,7 @@ mod tests {
         writer.write_all(&[0; 20]).await.unwrap();
         writer.shutdown().await.unwrap();
         let response = store
-            .get_opts(
-                &path,
-                GetOptions {
-                    head: true,
-                    ..Default::default()
-                },
-            )
+            .get_opts(&path, GetOptions::new().with_head(true))
             .await
             .unwrap();
         assert_eq!(response.meta.size, 40);
@@ -640,13 +628,7 @@ mod tests {
             .unwrap();
         writer.shutdown().await.unwrap();
         let response = store
-            .get_opts(
-                &path,
-                GetOptions {
-                    head: true,
-                    ..Default::default()
-                },
-            )
+            .get_opts(&path, GetOptions::new().with_head(true))
             .await
             .unwrap();
         assert_eq!(response.meta.size, 25);
@@ -664,13 +646,7 @@ mod tests {
             .unwrap();
         writer.shutdown().await.unwrap();
         let response = store
-            .get_opts(
-                &path,
-                GetOptions {
-                    head: true,
-                    ..Default::default()
-                },
-            )
+            .get_opts(&path, GetOptions::new().with_head(true))
             .await
             .unwrap();
         assert_eq!(response.meta.size, 40);
