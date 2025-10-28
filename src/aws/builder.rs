@@ -1257,6 +1257,7 @@ pub enum S3EncryptionConfigKey {
     ///
     /// Supported keys:
     /// - `aws_sse_customer_key_base64`
+    /// - `sse_customer_key_base64`
     CustomerEncryptionKey,
 }
 
