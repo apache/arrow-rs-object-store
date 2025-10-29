@@ -736,6 +736,10 @@ impl AmazonS3Builder {
                         self.bucket_name = Some(bucket.into());
                     }
                 }
+                Some((bucket, "s3", "amazonaws", "com")) => {
+                    self.bucket_name = Some(bucket.to_string());
+                    self.virtual_hosted_style_request = true.into();
+                }
                 Some((bucket, "s3", region, "amazonaws.com")) => {
                     self.bucket_name = Some(bucket.to_string());
                     self.region = Some(region.to_string());
@@ -1552,6 +1556,13 @@ mod tests {
             .unwrap();
         assert_eq!(builder.region, Some("region".to_string()));
         assert_eq!(builder.bucket_name, Some("bucket.with.dot".to_string()));
+
+        let mut builder = AmazonS3Builder::new();
+        builder
+            .parse_url("https://bucket.s3.amazonaws.com")
+            .unwrap();
+        assert_eq!(builder.bucket_name, Some("bucket".to_string()));
+        assert!(builder.virtual_hosted_style_request.get().unwrap());
 
         let mut builder = AmazonS3Builder::new();
         builder
