@@ -873,9 +873,25 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Delete all the objects at the specified locations
     ///
     /// When supported, this method will use bulk operations that delete more
-    /// than one object per a request. The default implementation will call
-    /// the single object delete method for each location, but with up to 10
-    /// concurrent requests.
+    /// than one object per a request. Otherwise, the implementation may call
+    /// the single object delete method for each location. For example, the
+    /// following implementation deletes each object with up to 10 concurrent
+    /// requests:
+    ///
+    /// ```ignore
+    /// let client = Arc::clone(&self.client);
+    /// locations
+    ///     .map(move |location| {
+    ///         let client = Arc::clone(&client);
+    ///         async move {
+    ///             let location = location?;
+    ///             client.delete(&location).await?;
+    ///             Ok(location)
+    ///         }
+    ///     })
+    ///     .buffered(10)
+    ///     .boxed()
+    /// ```
     ///
     /// The returned stream yields the results of the delete operations in the
     /// same order as the input locations. However, some errors will be from
@@ -911,19 +927,10 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// # let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
     /// # rt.block_on(example()).unwrap();
     /// ```
-    fn delete_stream<'a>(
-        &'a self,
-        locations: BoxStream<'a, Result<Path>>,
-    ) -> BoxStream<'a, Result<Path>> {
-        locations
-            .map(|location| async {
-                let location = location?;
-                self.delete(&location).await?;
-                Ok(location)
-            })
-            .buffered(10)
-            .boxed()
-    }
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>>;
 
     /// List all the objects with the given prefix.
     ///
@@ -1053,10 +1060,10 @@ macro_rules! as_ref_impl {
                 self.as_ref().delete(location).await
             }
 
-            fn delete_stream<'a>(
-                &'a self,
-                locations: BoxStream<'a, Result<Path>>,
-            ) -> BoxStream<'a, Result<Path>> {
+            fn delete_stream(
+                &self,
+                locations: BoxStream<'static, Result<Path>>,
+            ) -> BoxStream<'static, Result<Path>> {
                 self.as_ref().delete_stream(locations)
             }
 

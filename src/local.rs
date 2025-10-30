@@ -247,28 +247,7 @@ impl LocalFileSystem {
 
     /// Return an absolute filesystem path of the given file location
     pub fn path_to_filesystem(&self, location: &Path) -> Result<PathBuf> {
-        if !is_valid_file_path(location) {
-            let path = location.as_ref().into();
-            let error = Error::InvalidPath { path };
-            return Err(error.into());
-        }
-
-        let path = self.config.prefix_to_filesystem(location)?;
-
-        #[cfg(target_os = "windows")]
-        let path = {
-            let path = path.to_string_lossy();
-
-            // Assume the first char is the drive letter and the next is a colon.
-            let mut out = String::new();
-            let drive = &path[..2]; // The drive letter and colon (e.g., "C:")
-            let filepath = &path[2..].replace(':', "%3A"); // Replace subsequent colons
-            out.push_str(drive);
-            out.push_str(filepath);
-            PathBuf::from(out)
-        };
-
-        Ok(path)
+        self.config.path_to_filesystem(location)
     }
 
     /// Enable automatic cleanup of empty directories when deleting files
@@ -291,6 +270,32 @@ impl Config {
 
         url.to_file_path()
             .map_err(|_| Error::InvalidUrl { url }.into())
+    }
+
+    /// Return an absolute filesystem path of the given file location
+    fn path_to_filesystem(&self, location: &Path) -> Result<PathBuf> {
+        if !is_valid_file_path(location) {
+            let path = location.as_ref().into();
+            let error = Error::InvalidPath { path };
+            return Err(error.into());
+        }
+
+        let path = self.prefix_to_filesystem(location)?;
+
+        #[cfg(target_os = "windows")]
+        let path = {
+            let path = path.to_string_lossy();
+
+            // Assume the first char is the drive letter and the next is a colon.
+            let mut out = String::new();
+            let drive = &path[..2]; // The drive letter and colon (e.g., "C:")
+            let filepath = &path[2..].replace(':', "%3A"); // Replace subsequent colons
+            out.push_str(drive);
+            out.push_str(filepath);
+            PathBuf::from(out)
+        };
+
+        Ok(path)
     }
 
     /// Resolves the provided absolute filesystem path to a [`Path`] prefix
@@ -449,41 +454,33 @@ impl ObjectStore for LocalFileSystem {
 
     async fn delete(&self, location: &Path) -> Result<()> {
         let config = Arc::clone(&self.config);
-        let path = self.path_to_filesystem(location)?;
-        let automactic_cleanup = self.automatic_cleanup;
-        maybe_spawn_blocking(move || {
-            if let Err(e) = std::fs::remove_file(&path) {
-                Err(match e.kind() {
-                    ErrorKind::NotFound => Error::NotFound { path, source: e }.into(),
-                    _ => Error::UnableToDeleteFile { path, source: e }.into(),
+        let automatic_cleanup = self.automatic_cleanup;
+        let location = location.clone();
+        maybe_spawn_blocking(move || Self::delete_location(config, automatic_cleanup, &location))
+            .await
+    }
+
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
+        let config = Arc::clone(&self.config);
+        let automatic_cleanup = self.automatic_cleanup;
+        locations
+            .map(move |location| {
+                let config = Arc::clone(&config);
+                maybe_spawn_blocking(move || {
+                    let location = location?;
+                    Self::delete_location(config, automatic_cleanup, &location)?;
+                    Ok(location)
                 })
-            } else if automactic_cleanup {
-                let root = &config.root;
-                let root = root
-                    .to_file_path()
-                    .map_err(|_| Error::InvalidUrl { url: root.clone() })?;
-
-                // here we will try to traverse up and delete an empty dir if possible until we reach the root or get an error
-                let mut parent = path.parent();
-
-                while let Some(loc) = parent {
-                    if loc != root && std::fs::remove_dir(loc).is_ok() {
-                        parent = loc.parent();
-                    } else {
-                        break;
-                    }
-                }
-
-                Ok(())
-            } else {
-                Ok(())
-            }
-        })
-        .await
+            })
+            .buffered(10)
+            .boxed()
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.list_with_maybe_offset(prefix, None)
+        Self::list_with_maybe_offset(Arc::clone(&self.config), prefix, None)
     }
 
     fn list_with_offset(
@@ -491,7 +488,7 @@ impl ObjectStore for LocalFileSystem {
         prefix: Option<&Path>,
         offset: &Path,
     ) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.list_with_maybe_offset(prefix, Some(offset))
+        Self::list_with_maybe_offset(Arc::clone(&self.config), prefix, Some(offset))
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
@@ -629,13 +626,45 @@ impl ObjectStore for LocalFileSystem {
 }
 
 impl LocalFileSystem {
+    fn delete_location(
+        config: Arc<Config>,
+        automatic_cleanup: bool,
+        location: &Path,
+    ) -> Result<()> {
+        let path = config.path_to_filesystem(location)?;
+        if let Err(e) = std::fs::remove_file(&path) {
+            Err(match e.kind() {
+                ErrorKind::NotFound => Error::NotFound { path, source: e }.into(),
+                _ => Error::UnableToDeleteFile { path, source: e }.into(),
+            })
+        } else if automatic_cleanup {
+            let root = &config.root;
+            let root = root
+                .to_file_path()
+                .map_err(|_| Error::InvalidUrl { url: root.clone() })?;
+
+            // here we will try to traverse up and delete an empty dir if possible until we reach the root or get an error
+            let mut parent = path.parent();
+
+            while let Some(loc) = parent {
+                if loc != root && std::fs::remove_dir(loc).is_ok() {
+                    parent = loc.parent();
+                } else {
+                    break;
+                }
+            }
+
+            Ok(())
+        } else {
+            Ok(())
+        }
+    }
+
     fn list_with_maybe_offset(
-        &self,
+        config: Arc<Config>,
         prefix: Option<&Path>,
         maybe_offset: Option<&Path>,
     ) -> BoxStream<'static, Result<ObjectMeta>> {
-        let config = Arc::clone(&self.config);
-
         let root_path = match prefix {
             Some(prefix) => match config.prefix_to_filesystem(prefix) {
                 Ok(path) => path,

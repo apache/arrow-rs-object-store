@@ -47,7 +47,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use client::GoogleCloudStorageClient;
-use futures::stream::BoxStream;
+use futures::stream::{BoxStream, StreamExt};
 use http::Method;
 use url::Url;
 
@@ -184,6 +184,24 @@ impl ObjectStore for GoogleCloudStorage {
         self.client.delete_request(location).await
     }
 
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
+        let client = Arc::clone(&self.client);
+        locations
+            .map(move |location| {
+                let client = Arc::clone(&client);
+                async move {
+                    let location = location?;
+                    client.delete_request(&location).await?;
+                    Ok(location)
+                }
+            })
+            .buffered(10)
+            .boxed()
+    }
+
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         self.client.list(prefix)
     }
@@ -282,7 +300,6 @@ impl PaginatedListStore for GoogleCloudStorage {
 
 #[cfg(test)]
 mod test {
-
     use credential::DEFAULT_GCS_BASE_URL;
 
     use crate::integration::*;

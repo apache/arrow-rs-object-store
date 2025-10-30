@@ -50,33 +50,28 @@ impl<T: ObjectStore> PrefixStore<T> {
 
     /// Create the full path from a path relative to prefix
     fn full_path(&self, location: &Path) -> Path {
-        self.prefix.parts().chain(location.parts()).collect()
+        full_path(&self.prefix, location)
     }
 
     /// Strip the constant prefix from a given path
     fn strip_prefix(&self, path: Path) -> Path {
-        // Note cannot use match because of borrow checker
-        if let Some(suffix) = path.prefix_match(&self.prefix) {
-            return suffix.collect();
-        }
-        path
+        strip_prefix(&self.prefix, path)
     }
 
     /// Strip the constant prefix from a given ObjectMeta
     fn strip_meta(&self, meta: ObjectMeta) -> ObjectMeta {
-        ObjectMeta {
-            last_modified: meta.last_modified,
-            size: meta.size,
-            location: self.strip_prefix(meta.location),
-            e_tag: meta.e_tag,
-            version: None,
-        }
+        strip_meta(&self.prefix, meta)
     }
 }
 
-// Note: This is a relative hack to move these two functions to pure functions so they don't rely
-// on the `self` lifetime. Expected to be cleaned up before merge.
-//
+// Note: This is a relative hack to move these functions to pure functions so they don't rely
+// on the `self` lifetime.
+
+/// Create the full path from a path relative to prefix
+fn full_path(prefix: &Path, path: &Path) -> Path {
+    prefix.parts().chain(path.parts()).collect()
+}
+
 /// Strip the constant prefix from a given path
 fn strip_prefix(prefix: &Path, path: Path) -> Path {
     // Note cannot use match because of borrow checker
@@ -96,6 +91,7 @@ fn strip_meta(prefix: &Path, meta: ObjectMeta) -> ObjectMeta {
         version: None,
     }
 }
+
 #[async_trait::async_trait]
 impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
     async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
@@ -156,6 +152,21 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
     async fn delete(&self, location: &Path) -> Result<()> {
         let full_path = self.full_path(location);
         self.inner.delete(&full_path).await
+    }
+
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
+        let prefix = self.prefix.clone();
+        let locations = locations
+            .map(move |location| location.map(|loc| full_path(&prefix, &loc)))
+            .boxed();
+        let prefix = self.prefix.clone();
+        self.inner
+            .delete_stream(locations)
+            .map(move |location| location.map(|loc| strip_prefix(&prefix, loc)))
+            .boxed()
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {

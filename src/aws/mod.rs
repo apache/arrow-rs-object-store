@@ -255,20 +255,24 @@ impl ObjectStore for AmazonS3 {
         Ok(())
     }
 
-    fn delete_stream<'a>(
-        &'a self,
-        locations: BoxStream<'a, Result<Path>>,
-    ) -> BoxStream<'a, Result<Path>> {
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
+        let client = Arc::clone(&self.client);
         locations
             .try_chunks(1_000)
-            .map(move |locations| async {
-                // Early return the error. We ignore the paths that have already been
-                // collected into the chunk.
-                let locations = locations.map_err(|e| e.1)?;
-                self.client
-                    .bulk_delete_request(locations)
-                    .await
-                    .map(futures::stream::iter)
+            .map(move |locations| {
+                let client = Arc::clone(&client);
+                async move {
+                    // Early return the error. We ignore the paths that have already been
+                    // collected into the chunk.
+                    let locations = locations.map_err(|e| e.1)?;
+                    client
+                        .bulk_delete_request(locations)
+                        .await
+                        .map(futures::stream::iter)
+                }
             })
             .buffered(20)
             .try_flatten()

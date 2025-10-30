@@ -237,6 +237,19 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         self.inner.delete(location).await
     }
 
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
+        // We wait for a certain duration before each delete location.
+        // This may be suboptimal if the inner store implements batch deletes.
+        // But there is no way around unnecessary waits since we do not know
+        // how the inner store implements `delete_stream`.
+        let wait_delete_per_call = self.config().wait_delete_per_call;
+        let locations = throttle_stream(locations, move |_| wait_delete_per_call);
+        self.inner.delete_stream(locations)
+    }
+
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         let stream = self.inner.list(prefix);
         let config = Arc::clone(&self.config);

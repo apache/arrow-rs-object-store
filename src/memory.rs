@@ -311,6 +311,20 @@ impl ObjectStore for InMemory {
         Ok(())
     }
 
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
+        let storage = Arc::clone(&self.storage);
+        locations
+            .map(move |location| {
+                let location = location?;
+                storage.write().map.remove(&location);
+                Ok(location)
+            })
+            .boxed()
+    }
+
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         let root = Path::default();
         let prefix = prefix.unwrap_or(&root);
