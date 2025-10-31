@@ -873,9 +873,8 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Delete all the objects at the specified locations
     ///
     /// When supported, this method will use bulk operations that delete more
-    /// than one object per a request. The default implementation will call
-    /// the single object delete method for each location, but with up to 10
-    /// concurrent requests.
+    /// than one object per a request. Otherwise, the implementation may call
+    /// the single object delete method for each location.
     ///
     /// The returned stream yields the results of the delete operations in the
     /// same order as the input locations. However, some errors will be from
@@ -911,19 +910,123 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// # let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
     /// # rt.block_on(example()).unwrap();
     /// ```
-    fn delete_stream<'a>(
-        &'a self,
-        locations: BoxStream<'a, Result<Path>>,
-    ) -> BoxStream<'a, Result<Path>> {
-        locations
-            .map(|location| async {
-                let location = location?;
-                self.delete(&location).await?;
-                Ok(location)
-            })
-            .buffered(10)
-            .boxed()
-    }
+    ///
+    /// Note: Before version 0.13, `delete_stream` has a default implementation
+    /// that deletes each object with up to 10 concurrent requests. This default
+    /// behavior has been removed, and each implementation must now provide its
+    /// own `delete_stream` implementation explicitly. The following example
+    /// shows how to implement `delete_stream` to get the previous default
+    /// behavior.
+    ///
+    /// ```
+    /// # use async_trait::async_trait;
+    /// # use futures::stream::{BoxStream, StreamExt};
+    /// # use object_store::path::Path;
+    /// # use object_store::{
+    /// #     GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    /// #     PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
+    /// # };
+    /// # use std::fmt;
+    /// # use std::fmt::Debug;
+    /// # use std::sync::Arc;
+    /// #
+    /// # struct ExampleClient;
+    /// #
+    /// # impl ExampleClient {
+    /// #     async fn delete(&self, _path: &Path) -> Result<()> {
+    /// #         Ok(())
+    /// #     }
+    /// # }
+    /// #
+    /// # struct ExampleStore {
+    /// #     client: Arc<ExampleClient>,
+    /// # }
+    /// #
+    /// # impl Debug for ExampleStore {
+    /// #     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    /// #         write!(f, "ExampleStore")
+    /// #     }
+    /// # }
+    /// #
+    /// # impl fmt::Display for ExampleStore {
+    /// #     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    /// #         write!(f, "ExampleStore")
+    /// #     }
+    /// # }
+    /// #
+    /// # #[async_trait]
+    /// # impl ObjectStore for ExampleStore {
+    /// #     async fn put_opts(&self, _: &Path, _: PutPayload, _: PutOptions) -> Result<PutResult> {
+    /// #         todo!()
+    /// #     }
+    /// #
+    /// #     async fn put_multipart_opts(
+    /// #         &self,
+    /// #         _: &Path,
+    /// #         _: PutMultipartOptions,
+    /// #     ) -> Result<Box<dyn MultipartUpload>> {
+    /// #         todo!()
+    /// #     }
+    /// #
+    /// #     async fn get_opts(&self, _: &Path, _: GetOptions) -> Result<GetResult> {
+    /// #         todo!()
+    /// #     }
+    /// #
+    /// #     async fn delete(&self, _: &Path) -> Result<()> {
+    /// #         todo!()
+    /// #     }
+    /// #
+    /// fn delete_stream(
+    ///     &self,
+    ///     locations: BoxStream<'static, Result<Path>>,
+    /// ) -> BoxStream<'static, Result<Path>> {
+    ///     let client = Arc::clone(&self.client);
+    ///     locations
+    ///         .map(move |location| {
+    ///             let client = Arc::clone(&client);
+    ///             async move {
+    ///                 let location = location?;
+    ///                 client.delete(&location).await?;
+    ///                 Ok(location)
+    ///             }
+    ///         })
+    ///         .buffered(10)
+    ///         .boxed()
+    /// }
+    /// #
+    /// #     fn list(&self, _: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+    /// #         todo!()
+    /// #     }
+    /// #
+    /// #     async fn list_with_delimiter(&self, _: Option<&Path>) -> Result<ListResult> {
+    /// #         todo!()
+    /// #     }
+    /// #
+    /// #     async fn copy(&self, _: &Path, _: &Path) -> Result<()> {
+    /// #         todo!()
+    /// #     }
+    /// #
+    /// #     async fn copy_if_not_exists(&self, _: &Path, _: &Path) -> Result<()> {
+    /// #         todo!()
+    /// #     }
+    /// # }
+    /// #
+    /// # async fn example() {
+    /// #     let store = ExampleStore { client: Arc::new(ExampleClient) };
+    /// #     let paths = futures::stream::iter(vec![Ok(Path::from("foo")), Ok(Path::from("bar"))]).boxed();
+    /// #     let results = store.delete_stream(paths).collect::<Vec<_>>().await;
+    /// #     assert_eq!(results.len(), 2);
+    /// #     assert_eq!(results[0].as_ref().unwrap(), &Path::from("foo"));
+    /// #     assert_eq!(results[1].as_ref().unwrap(), &Path::from("bar"));
+    /// # }
+    /// #
+    /// # let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    /// # rt.block_on(example());
+    /// ```
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>>;
 
     /// List all the objects with the given prefix.
     ///
@@ -1053,10 +1156,10 @@ macro_rules! as_ref_impl {
                 self.as_ref().delete(location).await
             }
 
-            fn delete_stream<'a>(
-                &'a self,
-                locations: BoxStream<'a, Result<Path>>,
-            ) -> BoxStream<'a, Result<Path>> {
+            fn delete_stream(
+                &self,
+                locations: BoxStream<'static, Result<Path>>,
+            ) -> BoxStream<'static, Result<Path>> {
                 self.as_ref().delete_stream(locations)
             }
 

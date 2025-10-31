@@ -136,6 +136,24 @@ impl ObjectStore for HttpStore {
         self.client.delete(location).await
     }
 
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
+        let client = Arc::clone(&self.client);
+        locations
+            .map(move |location| {
+                let client = Arc::clone(&client);
+                async move {
+                    let location = location?;
+                    client.delete(&location).await?;
+                    Ok(location)
+                }
+            })
+            .buffered(10)
+            .boxed()
+    }
+
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         let prefix_len = prefix.map(|p| p.as_ref().len()).unwrap_or_default();
         let prefix = prefix.cloned();

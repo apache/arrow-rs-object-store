@@ -237,6 +237,19 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         self.inner.delete(location).await
     }
 
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
+        // We wait for a certain duration before each delete location.
+        // This may be suboptimal if the inner store implements batch deletes.
+        // But there is no way around unnecessary waits since we do not know
+        // how the inner store implements `delete_stream`.
+        let wait_delete_per_call = self.config().wait_delete_per_call;
+        let locations = throttle_stream(locations, move |_| wait_delete_per_call);
+        self.inner.delete_stream(locations)
+    }
+
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         let stream = self.inner.list(prefix);
         let config = Arc::clone(&self.config);
@@ -459,6 +472,21 @@ mod tests {
     #[tokio::test]
     // macos github runner is so slow it can't complete within WAIT_TIME*2
     #[cfg(target_os = "linux")]
+    async fn delete_stream_test() {
+        let inner = InMemory::new();
+        let store = ThrottledStore::new(inner, ThrottleConfig::default());
+
+        assert_bounds!(measure_delete_stream(&store, 0).await, 0);
+        assert_bounds!(measure_delete_stream(&store, 10).await, 0);
+
+        store.config_mut(|cfg| cfg.wait_delete_per_call = WAIT_TIME);
+        assert_bounds!(measure_delete_stream(&store, 0).await, 0);
+        assert_bounds!(measure_delete_stream(&store, 10).await, 10);
+    }
+
+    #[tokio::test]
+    // macos github runner is so slow it can't complete within WAIT_TIME*2
+    #[cfg(target_os = "linux")]
     async fn get_test() {
         let inner = InMemory::new();
         let store = ThrottledStore::new(inner, ThrottleConfig::default());
@@ -594,6 +622,26 @@ mod tests {
 
         let t0 = Instant::now();
         store.delete(&path).await.unwrap();
+
+        t0.elapsed()
+    }
+
+    #[allow(dead_code)]
+    async fn measure_delete_stream(store: &ThrottledStore<InMemory>, n_entries: usize) -> Duration {
+        let prefix = place_test_objects(store, n_entries).await;
+
+        // materialize the paths so that the throttle time for listing is not counted
+        let paths = store.list(Some(&prefix)).collect::<Vec<_>>().await;
+        let paths = futures::stream::iter(paths)
+            .map(|x| x.map(|m| m.location))
+            .boxed();
+
+        let t0 = Instant::now();
+        store
+            .delete_stream(paths)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
 
         t0.elapsed()
     }

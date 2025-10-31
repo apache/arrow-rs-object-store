@@ -62,6 +62,13 @@ impl ObjectStore for MyStore {
         todo!()
     }
 
+    fn delete_stream(
+        &self,
+        _: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
+        todo!()
+    }
+
     fn list(&self, _: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         todo!()
     }
