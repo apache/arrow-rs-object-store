@@ -1070,7 +1070,7 @@ macro_rules! as_ref_impl {
     ($type:ty) => {
         #[async_trait]
         #[deny(clippy::missing_trait_methods)]
-        impl ObjectStore for $type {
+        impl<T: ObjectStore + ?Sized> ObjectStore for $type {
             async fn put_opts(
                 &self,
                 location: &Path,
@@ -1146,8 +1146,8 @@ macro_rules! as_ref_impl {
     };
 }
 
-as_ref_impl!(Arc<dyn ObjectStore>);
-as_ref_impl!(Box<dyn ObjectStore>);
+as_ref_impl!(Arc<T>);
+as_ref_impl!(Box<T>);
 
 /// Extension trait for [`ObjectStore`] with convenience functions.
 ///
