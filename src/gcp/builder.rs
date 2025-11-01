@@ -162,9 +162,17 @@ pub enum GoogleConfigKey {
     /// Application credentials path
     ///
     /// See [`GoogleCloudStorageBuilder::with_application_credentials`].
+    ///
+    /// Supported keys:
+    /// - `google_application_credentials`
+    /// - `application_credentials`
     ApplicationCredentials,
 
     /// Skip signing request
+    ///
+    /// Supported keys:
+    /// - `google_skip_signature`
+    /// - `skip_signature`
     SkipSignature,
 
     /// Client options

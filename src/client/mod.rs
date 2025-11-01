@@ -82,6 +82,9 @@ static DEFAULT_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CAR
 #[non_exhaustive]
 pub enum ClientConfigKey {
     /// Allow non-TLS, i.e. non-HTTPS connections
+    ///
+    /// Supported keys:
+    /// - `allow_http`
     AllowHttp,
     /// Skip certificate validation on https connections.
     ///
@@ -92,45 +95,96 @@ pub enum ClientConfigKey {
     /// will be trusted for use. This includes expired certificates. This
     /// introduces significant vulnerabilities, and should only be used
     /// as a last resort or for testing
+    ///
+    /// Supported keys:
+    /// - `allow_invalid_certificates`
     AllowInvalidCertificates,
     /// Timeout for only the connect phase of a Client
+    ///
+    /// Supported keys:
+    /// - `connect_timeout`
     ConnectTimeout,
     /// default CONTENT_TYPE for uploads
+    ///
+    /// Supported keys:
+    /// - `default_content_type`
     DefaultContentType,
     /// Only use http1 connections
+    ///
+    /// Supported keys:
+    /// - `http1_only`
     Http1Only,
     /// Interval for HTTP2 Ping frames should be sent to keep a connection alive.
+    ///
+    /// Supported keys:
+    /// - `http2_keep_alive_interval`
     Http2KeepAliveInterval,
     /// Timeout for receiving an acknowledgement of the keep-alive ping.
+    ///
+    /// Supported keys:
+    /// - `http2_keep_alive_timeout`
     Http2KeepAliveTimeout,
     /// Enable HTTP2 keep alive pings for idle connections
+    ///
+    /// Supported keys:
+    /// - `http2_keep_alive_while_idle`
     Http2KeepAliveWhileIdle,
     /// Sets the maximum frame size to use for HTTP2.
+    ///
+    /// Supported keys:
+    /// - `http2_max_frame_size`
     Http2MaxFrameSize,
     /// Only use http2 connections
+    ///
+    /// Supported keys:
+    /// - `http2_only`
     Http2Only,
     /// The pool max idle timeout
     ///
     /// This is the length of time an idle connection will be kept alive
+    ///
+    /// Supported keys:
+    /// - `pool_idle_timeout`
     PoolIdleTimeout,
     /// maximum number of idle connections per host
+    ///
+    /// Supported keys:
+    /// - `pool_max_idle_per_host`
     PoolMaxIdlePerHost,
     /// HTTP proxy to use for requests
+    ///
+    /// Supported keys:
+    /// - `proxy_url`
     ProxyUrl,
     /// PEM-formatted CA certificate for proxy connections
+    ///
+    /// Supported keys:
+    /// - `proxy_ca_certificate`
     ProxyCaCertificate,
     /// List of hosts that bypass proxy
+    ///
+    /// Supported keys:
+    /// - `proxy_excludes`
     ProxyExcludes,
     /// Randomize order addresses that the DNS resolution yields.
     ///
     /// This will spread the connections across more servers.
+    ///
+    /// Supported keys:
+    /// - `randomize_addresses`
     RandomizeAddresses,
     /// Request timeout
     ///
     /// The timeout is applied from when the request starts connecting until the
     /// response body has finished
+    ///
+    /// Supported keys:
+    /// - `timeout`
     Timeout,
     /// User-Agent header to be used by this client
+    ///
+    /// Supported keys:
+    /// - `user_agent`
     UserAgent,
 }
 
