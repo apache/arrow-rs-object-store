@@ -1102,7 +1102,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
 macro_rules! as_ref_impl {
     ($type:ty) => {
         #[async_trait]
-        impl ObjectStore for $type {
+        impl<T: ObjectStore + ?Sized> ObjectStore for $type {
             async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
                 self.as_ref().put(location, payload).await
             }
@@ -1197,10 +1197,8 @@ macro_rules! as_ref_impl {
         }
     };
 }
-
-as_ref_impl!(Arc<dyn ObjectStore>);
-as_ref_impl!(Box<dyn ObjectStore>);
-
+as_ref_impl!(Arc<T>);
+as_ref_impl!(Box<T>);
 /// Result of a list call that includes objects, prefixes (directories) and a
 /// token for the next set of results. Individual result sets may be limited to
 /// 1,000 objects based on the underlying object storage's limitations.
