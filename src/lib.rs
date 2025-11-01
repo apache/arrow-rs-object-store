@@ -999,7 +999,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
 macro_rules! as_ref_impl {
     ($type:ty) => {
         #[async_trait]
-        impl ObjectStore for $type {
+        impl<T: ObjectStore + ?Sized> ObjectStore for $type {
             async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
                 self.as_ref().put(location, payload).await
             }
@@ -1094,110 +1094,8 @@ macro_rules! as_ref_impl {
         }
     };
 }
-
-as_ref_impl!(Arc<dyn ObjectStore>);
-as_ref_impl!(Box<dyn ObjectStore>);
-
-macro_rules! as_ref_generic_impl {
-    ($type:ty) => {
-        #[async_trait]
-        impl<T: ObjectStore> ObjectStore for $type {
-            async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
-                self.as_ref().put(location, payload).await
-            }
-
-            async fn put_opts(
-                &self,
-                location: &Path,
-                payload: PutPayload,
-                opts: PutOptions,
-            ) -> Result<PutResult> {
-                self.as_ref().put_opts(location, payload, opts).await
-            }
-
-            async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
-                self.as_ref().put_multipart(location).await
-            }
-
-            async fn put_multipart_opts(
-                &self,
-                location: &Path,
-                opts: PutMultipartOptions,
-            ) -> Result<Box<dyn MultipartUpload>> {
-                self.as_ref().put_multipart_opts(location, opts).await
-            }
-
-            async fn get(&self, location: &Path) -> Result<GetResult> {
-                self.as_ref().get(location).await
-            }
-
-            async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
-                self.as_ref().get_opts(location, options).await
-            }
-
-            async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
-                self.as_ref().get_range(location, range).await
-            }
-
-            async fn get_ranges(
-                &self,
-                location: &Path,
-                ranges: &[Range<u64>],
-            ) -> Result<Vec<Bytes>> {
-                self.as_ref().get_ranges(location, ranges).await
-            }
-
-            async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-                self.as_ref().head(location).await
-            }
-
-            async fn delete(&self, location: &Path) -> Result<()> {
-                self.as_ref().delete(location).await
-            }
-
-            fn delete_stream<'a>(
-                &'a self,
-                locations: BoxStream<'a, Result<Path>>,
-            ) -> BoxStream<'a, Result<Path>> {
-                self.as_ref().delete_stream(locations)
-            }
-
-            fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-                self.as_ref().list(prefix)
-            }
-
-            fn list_with_offset(
-                &self,
-                prefix: Option<&Path>,
-                offset: &Path,
-            ) -> BoxStream<'static, Result<ObjectMeta>> {
-                self.as_ref().list_with_offset(prefix, offset)
-            }
-
-            async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-                self.as_ref().list_with_delimiter(prefix).await
-            }
-
-            async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-                self.as_ref().copy(from, to).await
-            }
-
-            async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
-                self.as_ref().rename(from, to).await
-            }
-
-            async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-                self.as_ref().copy_if_not_exists(from, to).await
-            }
-
-            async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-                self.as_ref().rename_if_not_exists(from, to).await
-            }
-        }
-    };
-}
-as_ref_generic_impl!(Arc<T>);
-as_ref_generic_impl!(Box<T>);
+as_ref_impl!(Arc<T>);
+as_ref_impl!(Box<T>);
 /// Result of a list call that includes objects, prefixes (directories) and a
 /// token for the next set of results. Individual result sets may be limited to
 /// 1,000 objects based on the underlying object storage's limitations.
