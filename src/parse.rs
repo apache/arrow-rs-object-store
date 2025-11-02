@@ -307,6 +307,14 @@ mod tests {
                 (ObjectStoreScheme::MicrosoftAzure, "path"),
             ),
             (
+                "abfss://account/container",
+                (ObjectStoreScheme::MicrosoftAzure, ""),
+            ),
+            (
+                "abfss://account/container/path",
+                (ObjectStoreScheme::MicrosoftAzure, "path"),
+            ),
+            (
                 "gs://bucket/path",
                 (ObjectStoreScheme::GoogleCloudStorage, "path"),
             ),
