@@ -19,7 +19,7 @@
 //!
 //! ## Streaming uploads
 //!
-//! [ObjectStore::put_multipart] will upload data in blocks and write a blob from those blocks.
+//! [`ObjectStore::put_multipart_opts`] will upload data in blocks and write a blob from those blocks.
 //!
 //! Unused blocks will automatically be dropped after 7 days.
 use crate::{

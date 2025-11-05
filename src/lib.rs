@@ -273,11 +273,12 @@
 //!
 //! # Multipart Upload
 //!
-//! Use the [`ObjectStore::put_multipart`] method to atomically write a large amount of data
+//! Use the [`ObjectStoreExt::put_multipart`] / [`ObjectStore::put_multipart_opts`] method to atomically write a large
+//! amount of data
 //!
 //! ```ignore-wasm32
 //! # use object_store::local::LocalFileSystem;
-//! # use object_store::{ObjectStore, WriteMultipart};
+//! # use object_store::{ObjectStore, ObjectStoreExt, WriteMultipart};
 //! # use std::sync::Arc;
 //! # use bytes::Bytes;
 //! # use tokio::io::AsyncWriteExt;
@@ -637,17 +638,6 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult>;
-
-    /// Perform a multipart upload
-    ///
-    /// Client should prefer [`ObjectStoreExt::put`] for small payloads, as streaming uploads
-    /// typically require multiple separate requests. See [`MultipartUpload`] for more information
-    ///
-    /// For more advanced multipart uploads see [`MultipartStore`](multipart::MultipartStore)
-    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
-        self.put_multipart_opts(location, PutMultipartOptions::default())
-            .await
-    }
 
     /// Perform a multipart upload with options
     ///
@@ -1117,10 +1107,6 @@ macro_rules! as_ref_impl {
                 self.as_ref().put_opts(location, payload, opts).await
             }
 
-            async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
-                self.as_ref().put_multipart(location).await
-            }
-
             async fn put_multipart_opts(
                 &self,
                 location: &Path,
@@ -1202,7 +1188,7 @@ macro_rules! as_ref_impl {
 as_ref_impl!(Arc<dyn ObjectStore>);
 as_ref_impl!(Box<dyn ObjectStore>);
 
-/// Extension trait for [`ObjectStore`] with convinience functions.
+/// Extension trait for [`ObjectStore`] with convenience functions.
 ///
 /// See "contract" section within the [`ObjectStore`] documentation for more reasoning.
 ///
@@ -1215,6 +1201,17 @@ pub trait ObjectStoreExt: ObjectStore {
     /// write the entirety of `payload` to `location`, or fail. No clients
     /// should be able to observe a partially written object
     fn put(&self, location: &Path, payload: PutPayload) -> impl Future<Output = Result<PutResult>>;
+
+    /// Perform a multipart upload
+    ///
+    /// Client should prefer [`ObjectStoreExt::put`] for small payloads, as streaming uploads
+    /// typically require multiple separate requests. See [`MultipartUpload`] for more information
+    ///
+    /// For more advanced multipart uploads see [`MultipartStore`](multipart::MultipartStore)
+    fn put_multipart(
+        &self,
+        location: &Path,
+    ) -> impl Future<Output = Result<Box<dyn MultipartUpload>>>;
 }
 
 impl<T> ObjectStoreExt for T
@@ -1223,6 +1220,11 @@ where
 {
     async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
         self.put_opts(location, payload, PutOptions::default())
+            .await
+    }
+
+    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
+        self.put_multipart_opts(location, PutMultipartOptions::default())
             .await
     }
 }

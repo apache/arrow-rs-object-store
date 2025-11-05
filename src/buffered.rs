@@ -211,12 +211,12 @@ impl AsyncBufRead for BufReader {
 /// An async buffered writer compatible with the tokio IO traits
 ///
 /// This writer adaptively uses [`ObjectStore::put_opts`] or
-/// [`ObjectStore::put_multipart`] depending on the amount of data that has
+/// [`ObjectStore::put_multipart_opts`] depending on the amount of data that has
 /// been written.
 ///
 /// Up to `capacity` bytes will be buffered in memory, and flushed on shutdown
 /// using [`ObjectStore::put_opts`]. If `capacity` is exceeded, data will instead be
-/// streamed using [`ObjectStore::put_multipart`]
+/// streamed using [`ObjectStore::put_multipart_opts`].
 pub struct BufWriter {
     capacity: usize,
     max_concurrency: usize,
@@ -238,7 +238,7 @@ impl std::fmt::Debug for BufWriter {
 enum BufWriterState {
     /// Buffer up to capacity bytes
     Buffer(Path, PutPayloadMut),
-    /// [`ObjectStore::put_multipart`]
+    /// [`ObjectStore::put_multipart_opts`]
     Prepare(BoxFuture<'static, crate::Result<WriteMultipart>>),
     /// Write to a multipart upload
     Write(Option<WriteMultipart>),

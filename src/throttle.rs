@@ -158,14 +158,6 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         self.inner.put_opts(location, payload, opts).await
     }
 
-    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
-        let upload = self.inner.put_multipart(location).await?;
-        Ok(Box::new(ThrottledUpload {
-            upload,
-            sleep: self.config().wait_put_per_call,
-        }))
-    }
-
     async fn put_multipart_opts(
         &self,
         location: &Path,
