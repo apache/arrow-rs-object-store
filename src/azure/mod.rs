@@ -311,6 +311,7 @@ impl PaginatedListStore for MicrosoftAzure {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ObjectStoreExt;
     use crate::integration::*;
     use crate::tests::*;
     use bytes::Bytes;

@@ -1124,7 +1124,7 @@ mod tests {
     #[cfg(target_family = "unix")]
     use tempfile::NamedTempFile;
 
-    use crate::integration::*;
+    use crate::{ObjectStoreExt, integration::*};
 
     use super::*;
 
