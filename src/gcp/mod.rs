@@ -302,6 +302,7 @@ impl PaginatedListStore for GoogleCloudStorage {
 mod test {
     use credential::DEFAULT_GCS_BASE_URL;
 
+    use crate::ObjectStoreExt;
     use crate::integration::*;
     use crate::tests::*;
 

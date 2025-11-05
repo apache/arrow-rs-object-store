@@ -498,6 +498,7 @@ impl PaginatedListStore for AmazonS3 {
 mod tests {
     use super::*;
     use crate::ClientOptions;
+    use crate::ObjectStoreExt;
     use crate::client::SpawnedReqwestConnector;
     use crate::client::get::GetClient;
     use crate::client::retry::RetryContext;

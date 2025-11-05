@@ -210,12 +210,12 @@ impl AsyncBufRead for BufReader {
 
 /// An async buffered writer compatible with the tokio IO traits
 ///
-/// This writer adaptively uses [`ObjectStore::put`] or
+/// This writer adaptively uses [`ObjectStore::put_opts`] or
 /// [`ObjectStore::put_multipart`] depending on the amount of data that has
 /// been written.
 ///
 /// Up to `capacity` bytes will be buffered in memory, and flushed on shutdown
-/// using [`ObjectStore::put`]. If `capacity` is exceeded, data will instead be
+/// using [`ObjectStore::put_opts`]. If `capacity` is exceeded, data will instead be
 /// streamed using [`ObjectStore::put_multipart`]
 pub struct BufWriter {
     capacity: usize,
@@ -242,7 +242,7 @@ enum BufWriterState {
     Prepare(BoxFuture<'static, crate::Result<WriteMultipart>>),
     /// Write to a multipart upload
     Write(Option<WriteMultipart>),
-    /// [`ObjectStore::put`]
+    /// [`ObjectStore::put_opts`]
     Flush(BoxFuture<'static, crate::Result<()>>),
 }
 
@@ -489,7 +489,7 @@ mod tests {
     use super::*;
     use crate::memory::InMemory;
     use crate::path::Path;
-    use crate::{Attribute, GetOptions};
+    use crate::{Attribute, GetOptions, ObjectStoreExt};
     use itertools::Itertools;
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 

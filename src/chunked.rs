@@ -186,6 +186,7 @@ impl ObjectStore for ChunkedStore {
 mod tests {
     use futures::StreamExt;
 
+    use crate::ObjectStoreExt;
     #[cfg(feature = "fs")]
     use crate::integration::*;
     #[cfg(feature = "fs")]
