@@ -19,7 +19,7 @@
 //!
 //! ## Multipart uploads
 //!
-//! Multipart uploads can be initiated with the [ObjectStore::put_multipart] method.
+//! Multipart uploads can be initiated with the [`ObjectStore::put_multipart_opts`] method.
 //!
 //! If the writer fails for any reason, you may have parts uploaded to AWS but not
 //! used that you will be charged for. [`MultipartUpload::abort`] may be invoked to drop

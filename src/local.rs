@@ -1719,7 +1719,7 @@ mod not_wasm_tests {
     use tempfile::TempDir;
 
     use crate::local::LocalFileSystem;
-    use crate::{ObjectStore, Path, PutPayload};
+    use crate::{ObjectStoreExt, Path, PutPayload};
 
     #[tokio::test]
     async fn test_cleanup_intermediate_files() {

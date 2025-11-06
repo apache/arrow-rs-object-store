@@ -104,11 +104,6 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner.put_opts(&full_path, payload, opts).await
     }
 
-    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
-        let full_path = self.full_path(location);
-        self.inner.put_multipart(&full_path).await
-    }
-
     async fn put_multipart_opts(
         &self,
         location: &Path,

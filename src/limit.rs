@@ -80,13 +80,6 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.put_opts(location, payload, opts).await
     }
-    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
-        let upload = self.inner.put_multipart(location).await?;
-        Ok(Box::new(LimitUpload {
-            semaphore: Arc::clone(&self.semaphore),
-            upload,
-        }))
-    }
 
     async fn put_multipart_opts(
         &self,
