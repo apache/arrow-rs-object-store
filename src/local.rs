@@ -1756,7 +1756,7 @@ mod unix_test {
     use tempfile::TempDir;
 
     use crate::local::LocalFileSystem;
-    use crate::{ObjectStore, Path};
+    use crate::{ObjectStore, ObjectStoreExt, Path};
 
     #[tokio::test]
     async fn test_fifo() {

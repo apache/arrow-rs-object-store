@@ -93,12 +93,6 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         }))
     }
 
-    async fn get(&self, location: &Path) -> Result<GetResult> {
-        let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
-        let r = self.inner.get(location).await?;
-        Ok(permit_get_result(r, permit))
-    }
-
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
         let r = self.inner.get_opts(location, options).await?;
