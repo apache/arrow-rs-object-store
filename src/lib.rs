@@ -204,7 +204,7 @@
 //!
 //! # Fetch objects
 //!
-//! Use the [`ObjectStore::get`] method to fetch the data bytes
+//! Use the [`ObjectStoreExt::get`] / [`ObjectStore::get_opts`] method to fetch the data bytes
 //! from remote storage or files in the local filesystem as a stream.
 //!
 //! ```ignore-wasm32
@@ -212,7 +212,7 @@
 //! # use object_store::local::LocalFileSystem;
 //! # use std::sync::Arc;
 //! #  use bytes::Bytes;
-//! # use object_store::{path::Path, ObjectStore, GetResult};
+//! # use object_store::{path::Path, ObjectStore, ObjectStoreExt, GetResult};
 //! # fn get_object_store() -> Arc<dyn ObjectStore> {
 //! #   Arc::new(LocalFileSystem::new())
 //! # }
@@ -403,7 +403,7 @@
 //! ```
 //! # use std::collections::btree_map::Entry;
 //! # use std::collections::HashMap;
-//! # use object_store::{GetOptions, GetResult, ObjectStore, Result, Error};
+//! # use object_store::{GetOptions, GetResult, ObjectStore, ObjectStoreExt, Result, Error};
 //! # use std::sync::Arc;
 //! # use std::time::{Duration, Instant};
 //! # use bytes::Bytes;
@@ -468,7 +468,7 @@
 //! storage, without relying on a separate DBMS.
 //!
 //! ```
-//! # use object_store::{Error, ObjectStore, PutMode, UpdateVersion};
+//! # use object_store::{Error, ObjectStore, ObjectStoreExt, PutMode, UpdateVersion};
 //! # use std::sync::Arc;
 //! # use bytes::Bytes;
 //! # use tokio::io::AsyncWriteExt;
@@ -650,38 +650,6 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>>;
-
-    /// Return the bytes that are stored at the specified location.
-    ///
-    /// ## Example
-    ///
-    /// This example uses a basic local filesystem object store to get an object.
-    ///
-    /// ```ignore-wasm32
-    /// # use object_store::local::LocalFileSystem;
-    /// # use tempfile::tempdir;
-    /// # use object_store::{path::Path, ObjectStore, ObjectStoreExt};
-    /// async fn get_example() {
-    ///     let tmp = tempdir().unwrap();
-    ///     let store = LocalFileSystem::new_with_prefix(tmp.path()).unwrap();
-    ///     let location = Path::from("example.txt");
-    ///     let content = b"Hello, Object Store!";
-    ///
-    ///     // Put the object into the store
-    ///     store
-    ///         .put(&location, content.as_ref().into())
-    ///         .await
-    ///         .expect("Failed to put object");
-    ///
-    ///     // Get the object from the store
-    ///     let get_result = store.get(&location).await.expect("Failed to get object");
-    ///     let bytes = get_result.bytes().await.expect("Failed to read bytes");
-    ///     println!("Retrieved content: {}", String::from_utf8_lossy(&bytes));
-    /// }
-    /// ```
-    async fn get(&self, location: &Path) -> Result<GetResult> {
-        self.get_opts(location, GetOptions::default()).await
-    }
 
     /// Perform a get request with options
     ///
@@ -1115,10 +1083,6 @@ macro_rules! as_ref_impl {
                 self.as_ref().put_multipart_opts(location, opts).await
             }
 
-            async fn get(&self, location: &Path) -> Result<GetResult> {
-                self.as_ref().get(location).await
-            }
-
             async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
                 self.as_ref().get_opts(location, options).await
             }
@@ -1212,6 +1176,36 @@ pub trait ObjectStoreExt: ObjectStore {
         &self,
         location: &Path,
     ) -> impl Future<Output = Result<Box<dyn MultipartUpload>>>;
+
+    /// Return the bytes that are stored at the specified location.
+    ///
+    /// ## Example
+    ///
+    /// This example uses a basic local filesystem object store to get an object.
+    ///
+    /// ```ignore-wasm32
+    /// # use object_store::local::LocalFileSystem;
+    /// # use tempfile::tempdir;
+    /// # use object_store::{path::Path, ObjectStore, ObjectStoreExt};
+    /// async fn get_example() {
+    ///     let tmp = tempdir().unwrap();
+    ///     let store = LocalFileSystem::new_with_prefix(tmp.path()).unwrap();
+    ///     let location = Path::from("example.txt");
+    ///     let content = b"Hello, Object Store!";
+    ///
+    ///     // Put the object into the store
+    ///     store
+    ///         .put(&location, content.as_ref().into())
+    ///         .await
+    ///         .expect("Failed to put object");
+    ///
+    ///     // Get the object from the store
+    ///     let get_result = store.get(&location).await.expect("Failed to get object");
+    ///     let bytes = get_result.bytes().await.expect("Failed to read bytes");
+    ///     println!("Retrieved content: {}", String::from_utf8_lossy(&bytes));
+    /// }
+    /// ```
+    fn get(&self, location: &Path) -> impl Future<Output = Result<GetResult>>;
 }
 
 impl<T> ObjectStoreExt for T
@@ -1226,6 +1220,10 @@ where
     async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
         self.put_multipart_opts(location, PutMultipartOptions::default())
             .await
+    }
+
+    async fn get(&self, location: &Path) -> Result<GetResult> {
+        self.get_opts(location, GetOptions::default()).await
     }
 }
 

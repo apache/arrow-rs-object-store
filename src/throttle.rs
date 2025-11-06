@@ -40,7 +40,7 @@ pub struct ThrottleConfig {
     /// the operation.
     pub wait_delete_per_call: Duration,
 
-    /// Sleep duration for every byte received during [`get`](ThrottledStore::get).
+    /// Sleep duration for every byte received during [`get_opts`](ThrottledStore::get_opts).
     ///
     /// Sleeping is performed after the underlying store returned and only for successful gets. The
     /// sleep duration is additive to [`wait_get_per_call`](Self::wait_get_per_call).
@@ -50,7 +50,7 @@ pub struct ThrottleConfig {
     /// resulting sleep time will be partial as well.
     pub wait_get_per_byte: Duration,
 
-    /// Sleep duration for every call to [`get`](ThrottledStore::get).
+    /// Sleep duration for every call to [`get_opts`](ThrottledStore::get_opts).
     ///
     /// Sleeping is done before the underlying store is called and independently of the success of
     /// the operation. The sleep duration is additive to
@@ -168,16 +168,6 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
             upload,
             sleep: self.config().wait_put_per_call,
         }))
-    }
-
-    async fn get(&self, location: &Path) -> Result<GetResult> {
-        sleep(self.config().wait_get_per_call).await;
-
-        // need to copy to avoid moving / referencing `self`
-        let wait_get_per_byte = self.config().wait_get_per_byte;
-
-        let result = self.inner.get(location).await?;
-        Ok(throttle_get(result, wait_get_per_byte))
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {

@@ -45,13 +45,14 @@ pub const DEFAULT_BUFFER_SIZE: usize = 1024 * 1024;
 /// very [high first-byte latencies], on the order of 100-200ms, and so avoiding unnecessary
 /// round-trips is critical to throughput.
 ///
-/// Systems looking to sequentially scan a file should instead consider using [`ObjectStore::get`],
+/// Systems looking to sequentially scan a file should instead consider using [`ObjectStoreExt::get`],
 /// or [`ObjectStore::get_opts`], or [`ObjectStore::get_range`] to read a particular range.
 ///
 /// Systems looking to read multiple ranges of a file should instead consider using
 /// [`ObjectStore::get_ranges`], which will optimise the vectored IO.
 ///
 /// [high first-byte latencies]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance.html
+/// [`ObjectStoreExt::get`]: crate::ObjectStoreExt::get
 pub struct BufReader {
     /// The object store to fetch data from
     store: Arc<dyn ObjectStore>,

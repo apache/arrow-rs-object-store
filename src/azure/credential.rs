@@ -1073,7 +1073,7 @@ mod tests {
     use super::*;
     use crate::azure::MicrosoftAzureBuilder;
     use crate::client::mock_server::MockServer;
-    use crate::{ObjectStore, Path};
+    use crate::{ObjectStoreExt, Path};
 
     #[tokio::test]
     async fn test_managed_identity() {

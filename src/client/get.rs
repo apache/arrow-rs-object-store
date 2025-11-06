@@ -487,7 +487,7 @@ mod http_tests {
     use crate::client::{HttpError, HttpErrorKind, HttpResponseBody};
     use crate::http::HttpBuilder;
     use crate::path::Path;
-    use crate::{ClientOptions, ObjectStore, RetryConfig};
+    use crate::{ClientOptions, ObjectStoreExt, RetryConfig};
     use bytes::Bytes;
     use futures::FutureExt;
     use http::header::{CONTENT_LENGTH, CONTENT_RANGE, ETAG, RANGE};
