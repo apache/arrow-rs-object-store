@@ -19,8 +19,8 @@
 
 use crate::path::Path;
 use crate::{
-    Attributes, Extensions, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions,
-    PutPayloadMut, TagSet, WriteMultipart,
+    Attributes, Extensions, ObjectMeta, ObjectStore, ObjectStoreExt, PutMultipartOptions,
+    PutOptions, PutPayloadMut, TagSet, WriteMultipart,
 };
 use bytes::Bytes;
 use futures::future::{BoxFuture, FutureExt};
@@ -37,7 +37,7 @@ pub const DEFAULT_BUFFER_SIZE: usize = 1024 * 1024;
 
 /// An async-buffered reader compatible with the tokio IO traits
 ///
-/// Internally this maintains a buffer of the requested size, and uses [`ObjectStore::get_range`]
+/// Internally this maintains a buffer of the requested size, and uses [`ObjectStoreExt::get_range`]
 /// to populate its internal buffer once depleted. This buffer is cleared on seek.
 ///
 /// Whilst simple, this interface will typically be outperformed by the native [`ObjectStore`]
@@ -46,7 +46,7 @@ pub const DEFAULT_BUFFER_SIZE: usize = 1024 * 1024;
 /// round-trips is critical to throughput.
 ///
 /// Systems looking to sequentially scan a file should instead consider using [`ObjectStoreExt::get`],
-/// or [`ObjectStore::get_opts`], or [`ObjectStore::get_range`] to read a particular range.
+/// or [`ObjectStore::get_opts`], or [`ObjectStoreExt::get_range`] to read a particular range.
 ///
 /// Systems looking to read multiple ranges of a file should instead consider using
 /// [`ObjectStore::get_ranges`], which will optimise the vectored IO.
