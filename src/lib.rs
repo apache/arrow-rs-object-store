@@ -615,7 +615,7 @@ pub type MultipartId = String;
 
 /// Universal API to multiple object store services.
 ///
-/// For more convience methods, check [`ObjectStoreExt`].
+/// For more convenience methods, check [`ObjectStoreExt`].
 ///
 /// # Contract
 /// This trait is meant as a contract between object store implementations
@@ -624,7 +624,57 @@ pub type MultipartId = String;
 ///
 /// The [`ObjectStoreExt`] acts as an API/contract between `object_store`
 /// and the store users and provides additional methods that may be simpler to use but overlap
-/// in functionality with `ObjectStore`
+/// in functionality with [`ObjectStore`].
+///
+/// # Wrappers
+/// If you wrap an [`ObjectStore`] -- e.g. to add observability -- you SHOULD
+/// implement all trait methods. This ensures that defaults implementations
+/// that are overwritten by the wrapped store are also used by the wrapper.
+/// For example:
+///
+/// ```ignore
+/// struct MyStore {
+///     ...
+/// }
+///
+/// #[async_trait]
+/// impl ObjectStore for MyStore {
+///     // implement custom ranges handling
+///     async fn get_ranges(
+///         &self,
+///         location: &Path,
+///         ranges: &[Range<u64>],
+///     ) -> Result<Vec<Bytes>> {
+///         ...
+///     }
+///
+///     ...
+/// }
+///
+/// struct Wrapper {
+///     inner: Arc<dyn ObjectStore>,
+/// }
+///
+/// #[async_trait]
+/// #[deny(clippy::missing_trait_methods)]
+/// impl ObjectStore for Wrapper {
+///     // If we would not implement this method,
+///     // we would get the trait default and not
+///     // use the actual implementation of `inner`.
+///     async fn get_ranges(
+///         &self,
+///         location: &Path,
+///         ranges: &[Range<u64>],
+///     ) -> Result<Vec<Bytes>> {
+///         ...
+///     }
+///
+///     ...
+/// }
+/// ```
+///
+/// To automatically detect this issue, use
+/// [`#[deny(clippy::missing_trait_methods)]`](https://rust-lang.github.io/rust-clippy/master/index.html#missing_trait_methods).
 #[async_trait]
 pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Save the provided `payload` to `location` with the given options
@@ -1065,6 +1115,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
 macro_rules! as_ref_impl {
     ($type:ty) => {
         #[async_trait]
+        #[deny(clippy::missing_trait_methods)]
         impl ObjectStore for $type {
             async fn put_opts(
                 &self,

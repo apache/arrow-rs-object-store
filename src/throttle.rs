@@ -147,6 +147,7 @@ impl<T: ObjectStore> std::fmt::Display for ThrottledStore<T> {
 }
 
 #[async_trait]
+#[deny(clippy::missing_trait_methods)]
 impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
     async fn put_opts(
         &self,

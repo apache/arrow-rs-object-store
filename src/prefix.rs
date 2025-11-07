@@ -93,6 +93,7 @@ fn strip_meta(prefix: &Path, meta: ObjectMeta) -> ObjectMeta {
 }
 
 #[async_trait::async_trait]
+#[deny(clippy::missing_trait_methods)]
 impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
     async fn put_opts(
         &self,

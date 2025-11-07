@@ -70,6 +70,7 @@ impl<T: ObjectStore> std::fmt::Display for LimitStore<T> {
 }
 
 #[async_trait]
+#[deny(clippy::missing_trait_methods)]
 impl<T: ObjectStore> ObjectStore for LimitStore<T> {
     async fn put_opts(
         &self,
