@@ -60,7 +60,6 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::Instrument;
 
 #[cfg(not(target_arch = "wasm32"))]
 use reqwest::{NoProxy, Proxy};
@@ -829,7 +828,6 @@ mod cloud {
         client: HttpClient,
         retry: RetryConfig,
         cache: TokenCache<Arc<T::Credential>>,
-        label: &'static str,
     }
 
     impl<T: TokenProvider> TokenCredentialProvider<T> {
@@ -839,7 +837,6 @@ mod cloud {
                 client,
                 retry,
                 cache: Default::default(),
-                label: std::any::type_name::<T>(),
             }
         }
 
@@ -856,18 +853,8 @@ mod cloud {
         type Credential = T::Credential;
 
         async fn get_credential(&self) -> Result<Arc<Self::Credential>> {
-            let provider_span =
-                tracing::info_span!("object_store.token_provider", provider = self.label);
             self.cache
-                .get_or_insert_with(|| {
-                    self.inner
-                        .fetch_token(&self.client, &self.retry)
-                        .instrument(tracing::info_span!(
-                            "object_store.fetch_token",
-                            provider = self.label
-                        ))
-                })
-                .instrument(provider_span)
+                .get_or_insert_with(|| self.inner.fetch_token(&self.client, &self.retry))
                 .await
         }
     }

@@ -32,7 +32,7 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{info, info_span, warn, Instrument};
+use tracing::warn;
 use url::Url;
 
 #[derive(Debug, thiserror::Error)]
@@ -557,21 +557,13 @@ async fn instance_creds(
 
     let token_url = format!("{endpoint}/latest/api/token");
 
-    let token_start = Instant::now();
     let token_result = client
         .request(Method::PUT, token_url)
         .header("X-aws-ec2-metadata-token-ttl-seconds", "600") // 10 minute TTL
         .retryable(retry_config)
         .idempotent(true)
         .send()
-        .instrument(info_span!("imdsv2_token_request"))
         .await;
-    info!(
-        target: "object_store.instance_credentials",
-        event = "imdsv2_token",
-        duration_ms = token_start.elapsed().as_millis() as i64,
-        success = token_result.is_ok()
-    );
 
     let token = match token_result {
         Ok(t) => Some(t.into_body().text().await?),
@@ -589,18 +581,12 @@ async fn instance_creds(
         role_request = role_request.header(AWS_EC2_METADATA_TOKEN_HEADER, token);
     }
 
-    let role_start = Instant::now();
     let role = role_request
         .send_retry(retry_config)
         .await?
         .into_body()
         .text()
         .await?;
-    info!(
-        target: "object_store.instance_credentials",
-        event = "metadata_role",
-        duration_ms = role_start.elapsed().as_millis() as i64
-    );
 
     let creds_url = format!("{endpoint}/{CREDENTIALS_PATH}/{role}");
     let mut creds_request = client.request(Method::GET, creds_url);
@@ -608,27 +594,15 @@ async fn instance_creds(
         creds_request = creds_request.header(AWS_EC2_METADATA_TOKEN_HEADER, token);
     }
 
-    let creds_start = Instant::now();
     let creds: InstanceCredentials = creds_request
         .send_retry(retry_config)
         .await?
         .into_body()
         .json()
         .await?;
-    info!(
-        target: "object_store.instance_credentials",
-        event = "metadata_credentials",
-        duration_ms = creds_start.elapsed().as_millis() as i64
-    );
 
     let now = Utc::now();
     let ttl = (creds.expiration - now).to_std().unwrap_or_default();
-    info!(
-        target: "object_store.instance_credentials",
-        event = "complete",
-        total_duration_ms = overall_start.elapsed().as_millis() as i64,
-        credential_ttl_secs = ttl.as_secs() as i64
-    );
     Ok(TemporaryToken {
         token: Arc::new(creds.into()),
         expiry: Some(Instant::now() + ttl),
