@@ -17,7 +17,7 @@
 
 use std::future::Future;
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tracing::info;
 
 /// A temporary authentication token with an associated expiry
@@ -34,7 +34,8 @@ pub(crate) struct TemporaryToken<T> {
 /// [`TemporaryToken`] based on its expiry
 #[derive(Debug)]
 pub(crate) struct TokenCache<T> {
-    cache: Mutex<Option<(TemporaryToken<T>, Instant)>>,
+    cache: RwLock<Option<(TemporaryToken<T>, Instant)>>,
+    refresh_lock: Mutex<()>,
     min_ttl: Duration,
     fetch_backoff: Duration,
 }
@@ -43,6 +44,7 @@ impl<T> Default for TokenCache<T> {
     fn default() -> Self {
         Self {
             cache: Default::default(),
+            refresh_lock: Default::default(),
             min_ttl: Duration::from_secs(300),
             // How long to wait before re-attempting a token fetch after receiving one that
             // is still within the min-ttl
@@ -63,48 +65,68 @@ impl<T: Clone + Send> TokenCache<T> {
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = Result<TemporaryToken<T>, E>> + Send,
     {
-        let now = Instant::now();
-        let mut locked = self.cache.lock().await;
+        if let Some(token) = self.try_get_cached().await {
+            return Ok(token);
+        }
 
-        if let Some((cached, fetched_at)) = locked.as_ref() {
-            match cached.expiry {
-                Some(ttl) => {
-                    if ttl.checked_duration_since(now).unwrap_or_default() > self.min_ttl ||
-                        // if we've recently attempted to fetch this token and it's not actually
-                        // expired, we'll wait to re-fetch it and return the cached one
-                        (fetched_at.elapsed() < self.fetch_backoff && ttl.checked_duration_since(now).is_some())
-                    {
-                        info!(
-                            target: "object_store.token_cache",
-                            event = "hit",
-                            remaining_ms = ttl
-                                .checked_duration_since(now)
-                                .map(|d| d.as_millis() as i64)
-                                .unwrap_or(-1)
-                        );
-                        return Ok(cached.token.clone());
-                    }
-                }
-                None => return Ok(cached.token.clone()),
-            }
+        // Only one fetch at a time
+        let _refresh = self.refresh_lock.lock().await;
+
+        // Re-check after acquiring lock in case another task refreshed already
+        if let Some(token) = self.try_get_cached().await {
+            return Ok(token);
         }
 
         info!(target: "object_store.token_cache", event = "miss");
-        let cached = f().await?;
-        let token = cached.token.clone();
-        if let Some(expiry) = cached.expiry {
+        let fetched = f().await?;
+        let token = fetched.token.clone();
+
+        if let Some(expiry) = fetched.expiry {
             info!(
                 target: "object_store.token_cache",
                 event = "store",
                 ttl_ms = expiry
-                    .checked_duration_since(now)
+                    .checked_duration_since(Instant::now())
                     .map(|d| d.as_millis() as i64)
                     .unwrap_or(-1)
             );
         }
-        *locked = Some((cached, Instant::now()));
 
+        let mut guard = self.cache.write().await;
+        *guard = Some((fetched, Instant::now()));
         Ok(token)
+    }
+
+    async fn try_get_cached(&self) -> Option<T> {
+        let now = Instant::now();
+        let guard = self.cache.read().await;
+        if let Some((cached, fetched_at)) = guard.as_ref() {
+            match cached.expiry {
+                Some(ttl) => {
+                    let remaining = ttl.checked_duration_since(now).unwrap_or_default();
+                    if remaining > self.min_ttl
+                        || (fetched_at.elapsed() < self.fetch_backoff
+                            && ttl.checked_duration_since(now).is_some())
+                    {
+                        info!(
+                            target: "object_store.token_cache",
+                            event = "hit",
+                            remaining_ms = remaining.as_millis() as i64
+                        );
+                        return Some(cached.token.clone());
+                    }
+                }
+                None => {
+                    info!(
+                        target: "object_store.token_cache",
+                        event = "hit",
+                        remaining_ms = -1
+                    );
+                    return Some(cached.token.clone());
+                }
+            }
+        }
+        None
     }
 }
 
