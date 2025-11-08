@@ -36,7 +36,7 @@ use http_body_util::BodyExt;
 use reqwest::header::ToStrError;
 use std::ops::Range;
 use std::sync::Arc;
-use tracing::{info, instrument};
+use tracing::{info, instrument, Instrument};
 
 /// A client that can perform a get request
 #[async_trait]
@@ -175,6 +175,7 @@ impl<T: GetClient> GetContext<T> {
         let request = self
             .client
             .get_request(&mut self.retry_ctx, &self.location, self.options.clone())
+            .instrument(tracing::info_span!("get_request future"))
             .await?;
 
         let (parts, body) = request.into_parts();
