@@ -36,7 +36,7 @@ use http_body_util::BodyExt;
 use reqwest::header::ToStrError;
 use std::ops::Range;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, instrument};
 
 /// A client that can perform a get request
 #[async_trait]
@@ -64,6 +64,7 @@ pub(crate) trait GetClientExt {
 
 #[async_trait]
 impl<T: GetClient> GetClientExt for Arc<T> {
+    #[instrument(name = "get_opts", skip(self, location, options))]
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let ctx = GetContext {
             location: location.clone(),
@@ -165,6 +166,7 @@ struct GetContext<T: GetClient> {
 }
 
 impl<T: GetClient> GetContext<T> {
+    #[instrument(name = "get_result", skip(self))]
     async fn get_result(mut self) -> Result<GetResult> {
         if let Some(r) = &self.options.range {
             r.is_valid().map_err(Self::err)?;
