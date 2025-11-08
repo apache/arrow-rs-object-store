@@ -55,6 +55,7 @@ use quick_xml::events::{self as xml_events};
 use ring::digest;
 use ring::digest::Context;
 use serde::{Deserialize, Serialize};
+use std::any::type_name_of_val;
 use std::sync::Arc;
 use tracing::Instrument;
 
@@ -218,7 +219,13 @@ impl S3Config {
         let credential = match self.skip_signature {
             false => {
                 let provider = self.session_provider.as_ref().unwrap_or(&self.credentials);
-                Some(provider.get_credential().await?)
+                let provider_name = provider_type_name(provider);
+                let span = tracing::info_span!(
+                    "aws.get_session_credential",
+                    provider = provider_name,
+                    session_provider = self.session_provider.is_some()
+                );
+                Some(provider.get_credential().instrument(span).await?)
             }
             true => None,
         };
@@ -241,6 +248,11 @@ impl S3Config {
     pub(crate) fn is_s3_express(&self) -> bool {
         self.session_provider.is_some()
     }
+}
+
+fn provider_type_name(provider: &AwsCredentialProvider) -> &'static str {
+    // Convert the trait object into its underlying type name to aid debugging
+    type_name_of_val(provider.as_ref())
 }
 
 struct SessionCredential<'a> {

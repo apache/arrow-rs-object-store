@@ -18,6 +18,7 @@
 use std::future::Future;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+use tracing::info;
 
 /// A temporary authentication token with an associated expiry
 #[derive(Debug, Clone)]
@@ -73,6 +74,14 @@ impl<T: Clone + Send> TokenCache<T> {
                         // expired, we'll wait to re-fetch it and return the cached one
                         (fetched_at.elapsed() < self.fetch_backoff && ttl.checked_duration_since(now).is_some())
                     {
+                        info!(
+                            target: "object_store.token_cache",
+                            event = "hit",
+                            remaining_ms = ttl
+                                .checked_duration_since(now)
+                                .map(|d| d.as_millis() as i64)
+                                .unwrap_or(-1)
+                        );
                         return Ok(cached.token.clone());
                     }
                 }
@@ -80,8 +89,19 @@ impl<T: Clone + Send> TokenCache<T> {
             }
         }
 
+        info!(target: "object_store.token_cache", event = "miss");
         let cached = f().await?;
         let token = cached.token.clone();
+        if let Some(expiry) = cached.expiry {
+            info!(
+                target: "object_store.token_cache",
+                event = "store",
+                ttl_ms = expiry
+                    .checked_duration_since(now)
+                    .map(|d| d.as_millis() as i64)
+                    .unwrap_or(-1)
+            );
+        }
         *locked = Some((cached, Instant::now()));
 
         Ok(token)
