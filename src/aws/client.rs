@@ -847,11 +847,7 @@ impl GetClient for S3Client {
         path: &Path,
         options: GetOptions,
     ) -> Result<HttpResponse> {
-        let credential = self
-            .config
-            .get_session_credential()
-            .instrument(tracing::info_span!("get_session_credential"))
-            .await?;
+        let credential = self.config.get_session_credential().await?;
         let url = self.config.path_url(path);
         let method = match options.head {
             true => Method::HEAD,
@@ -877,7 +873,6 @@ impl GetClient for S3Client {
             .with_aws_sigv4(credential.authorizer(), None)
             .retryable_request()
             .send(ctx)
-            .instrument(tracing::info_span!("send_request"))
             .await
             .map_err(|e| e.error(STORE, path.to_string()))?;
 

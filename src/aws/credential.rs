@@ -549,9 +549,6 @@ async fn instance_creds(
     endpoint: &str,
     imdsv1_fallback: bool,
 ) -> Result<TemporaryToken<Arc<AwsCredential>>, StdError> {
-    let span = info_span!("object_store.instance_credentials", endpoint = endpoint);
-    let _guard = span.enter();
-    let overall_start = Instant::now();
     const CREDENTIALS_PATH: &str = "latest/meta-data/iam/security-credentials";
     const AWS_EC2_METADATA_TOKEN_HEADER: &str = "X-aws-ec2-metadata-token";
 

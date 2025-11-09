@@ -34,7 +34,6 @@ use futures::{StreamExt, TryStreamExt};
 use reqwest::header::{HeaderName, IF_MATCH, IF_NONE_MATCH};
 use reqwest::{Method, StatusCode};
 use std::{sync::Arc, time::Duration};
-use tracing::instrument;
 use url::Url;
 
 use crate::aws::client::{CompleteMultipartMode, PutPartPayload, RequestError, S3Client};
@@ -247,7 +246,6 @@ impl ObjectStore for AmazonS3 {
         }))
     }
 
-    #[instrument(skip(self))]
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         self.client.get_opts(location, options).await
     }
