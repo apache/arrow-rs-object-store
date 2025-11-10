@@ -135,13 +135,10 @@ impl ObjectStore for ChunkedStore {
         })
     }
 
-    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
-        self.inner.get_range(location, range).await
-    }
-
     async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
         self.inner.get_ranges(location, ranges).await
     }
+
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
         self.inner.head(location).await
     }

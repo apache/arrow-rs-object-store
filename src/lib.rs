@@ -824,46 +824,6 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult>;
 
     /// Return the bytes that are stored at the specified location
-    /// in the given byte range.
-    ///
-    /// See [`GetRange::Bounded`] for more details on how `range` gets interpreted.
-    ///
-    /// To retrieve a range of bytes from a versioned object, use [`ObjectStore::get_opts`] by specifying the range in the [`GetOptions`].
-    ///
-    /// ## Examples
-    ///
-    /// This example uses a basic local filesystem object store to get a byte range from an object.
-    ///
-    /// ```ignore-wasm32
-    /// # use object_store::local::LocalFileSystem;
-    /// # use tempfile::tempdir;
-    /// # use object_store::{path::Path, ObjectStore, ObjectStoreExt};
-    /// async fn get_range_example() {
-    ///     let tmp = tempdir().unwrap();
-    ///     let store = LocalFileSystem::new_with_prefix(tmp.path()).unwrap();
-    ///     let location = Path::from("example.txt");
-    ///     let content = b"Hello, Object Store!";
-    ///
-    ///     // Put the object into the store
-    ///     store
-    ///         .put(&location, content.as_ref().into())
-    ///         .await
-    ///         .expect("Failed to put object");
-    ///
-    ///     // Get the object from the store
-    ///     let bytes = store
-    ///         .get_range(&location, 0..5)
-    ///         .await
-    ///         .expect("Failed to get object");
-    ///     println!("Retrieved range [0-5]: {}", String::from_utf8_lossy(&bytes));
-    /// }
-    /// ```
-    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
-        let options = GetOptions::new().with_range(Some(range));
-        self.get_opts(location, options).await?.bytes().await
-    }
-
-    /// Return the bytes that are stored at the specified location
     /// in the given byte ranges
     async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
         coalesce_ranges(
@@ -1138,10 +1098,6 @@ macro_rules! as_ref_impl {
                 self.as_ref().get_opts(location, options).await
             }
 
-            async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
-                self.as_ref().get_range(location, range).await
-            }
-
             async fn get_ranges(
                 &self,
                 location: &Path,
@@ -1257,6 +1213,43 @@ pub trait ObjectStoreExt: ObjectStore {
     /// }
     /// ```
     fn get(&self, location: &Path) -> impl Future<Output = Result<GetResult>>;
+
+    /// Return the bytes that are stored at the specified location
+    /// in the given byte range.
+    ///
+    /// See [`GetRange::Bounded`] for more details on how `range` gets interpreted.
+    ///
+    /// To retrieve a range of bytes from a versioned object, use [`ObjectStore::get_opts`] by specifying the range in the [`GetOptions`].
+    ///
+    /// ## Examples
+    ///
+    /// This example uses a basic local filesystem object store to get a byte range from an object.
+    ///
+    /// ```ignore-wasm32
+    /// # use object_store::local::LocalFileSystem;
+    /// # use tempfile::tempdir;
+    /// # use object_store::{path::Path, ObjectStore, ObjectStoreExt};
+    /// async fn get_range_example() {
+    ///     let tmp = tempdir().unwrap();
+    ///     let store = LocalFileSystem::new_with_prefix(tmp.path()).unwrap();
+    ///     let location = Path::from("example.txt");
+    ///     let content = b"Hello, Object Store!";
+    ///
+    ///     // Put the object into the store
+    ///     store
+    ///         .put(&location, content.as_ref().into())
+    ///         .await
+    ///         .expect("Failed to put object");
+    ///
+    ///     // Get the object from the store
+    ///     let bytes = store
+    ///         .get_range(&location, 0..5)
+    ///         .await
+    ///         .expect("Failed to get object");
+    ///     println!("Retrieved range [0-5]: {}", String::from_utf8_lossy(&bytes));
+    /// }
+    /// ```
+    fn get_range(&self, location: &Path, range: Range<u64>) -> impl Future<Output = Result<Bytes>>;
 }
 
 impl<T> ObjectStoreExt for T
@@ -1275,6 +1268,11 @@ where
 
     async fn get(&self, location: &Path) -> Result<GetResult> {
         self.get_opts(location, GetOptions::default()).await
+    }
+
+    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
+        let options = GetOptions::new().with_range(Some(range));
+        self.get_opts(location, options).await?.bytes().await
     }
 }
 
