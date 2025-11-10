@@ -124,12 +124,6 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner.get_ranges(&full_path, ranges).await
     }
 
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        let full_path = self.full_path(location);
-        let meta = self.inner.head(&full_path).await?;
-        Ok(self.strip_meta(meta))
-    }
-
     async fn delete(&self, location: &Path) -> Result<()> {
         let full_path = self.full_path(location);
         self.inner.delete(&full_path).await

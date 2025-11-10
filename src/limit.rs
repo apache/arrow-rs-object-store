@@ -105,11 +105,6 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         self.inner.get_ranges(location, ranges).await
     }
 
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        let _permit = self.semaphore.acquire().await.unwrap();
-        self.inner.head(location).await
-    }
-
     async fn delete(&self, location: &Path) -> Result<()> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.delete(location).await

@@ -294,18 +294,6 @@ impl ObjectStore for InMemory {
             .collect()
     }
 
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        let entry = self.entry(location)?;
-
-        Ok(ObjectMeta {
-            location: location.clone(),
-            last_modified: entry.last_modified,
-            size: entry.data.len() as u64,
-            e_tag: Some(entry.e_tag.to_string()),
-            version: None,
-        })
-    }
-
     async fn delete(&self, location: &Path) -> Result<()> {
         self.storage.write().map.remove(location);
         Ok(())
