@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arc_swap::ArcSwapOption;
 use std::future::Future;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
@@ -33,7 +35,8 @@ pub(crate) struct TemporaryToken<T> {
 /// [`TemporaryToken`] based on its expiry
 #[derive(Debug)]
 pub(crate) struct TokenCache<T> {
-    cache: Mutex<Option<(TemporaryToken<T>, Instant)>>,
+    cache: ArcSwapOption<CacheEntry<T>>,
+    refresh_lock: Mutex<()>,
     min_ttl: Duration,
     fetch_backoff: Duration,
 }
@@ -41,7 +44,8 @@ pub(crate) struct TokenCache<T> {
 impl<T> Default for TokenCache<T> {
     fn default() -> Self {
         Self {
-            cache: Default::default(),
+            cache: ArcSwapOption::new(None),
+            refresh_lock: Default::default(),
             min_ttl: Duration::from_secs(300),
             // How long to wait before re-attempting a token fetch after receiving one that
             // is still within the min-ttl
@@ -62,30 +66,56 @@ impl<T: Clone + Send> TokenCache<T> {
         F: FnOnce() -> Fut + Send,
         Fut: Future<Output = Result<TemporaryToken<T>, E>> + Send,
     {
-        let now = Instant::now();
-        let mut locked = self.cache.lock().await;
-
-        if let Some((cached, fetched_at)) = locked.as_ref() {
-            match cached.expiry {
-                Some(ttl) => {
-                    if ttl.checked_duration_since(now).unwrap_or_default() > self.min_ttl ||
-                        // if we've recently attempted to fetch this token and it's not actually
-                        // expired, we'll wait to re-fetch it and return the cached one
-                        (fetched_at.elapsed() < self.fetch_backoff && ttl.checked_duration_since(now).is_some())
-                    {
-                        return Ok(cached.token.clone());
-                    }
-                }
-                None => return Ok(cached.token.clone()),
-            }
+        if let Some(token) = self.try_get_cached() {
+            return Ok(token);
         }
 
-        let cached = f().await?;
-        let token = cached.token.clone();
-        *locked = Some((cached, Instant::now()));
+        // Only one fetch at a time
+        let _refresh = self.refresh_lock.lock().await;
 
-        Ok(token)
+        // Re-check after acquiring lock in case another task refreshed already
+        if let Some(token) = self.try_get_cached() {
+            return Ok(token);
+        }
+
+        let fetched = f().await?;
+        let token_clone = fetched.token.clone();
+        let entry = Arc::new(CacheEntry {
+            token: fetched.token,
+            expiry: fetched.expiry,
+            fetched_at: Instant::now(),
+        });
+        self.cache.store(Some(entry));
+        Ok(token_clone)
     }
+
+    fn try_get_cached(&self) -> Option<T> {
+        let now = Instant::now();
+        if let Some(entry) = self.cache.load_full() {
+            match entry.expiry {
+                Some(ttl) => {
+                    let remaining = ttl.checked_duration_since(now).unwrap_or_default();
+                    if remaining > self.min_ttl
+                        || (entry.fetched_at.elapsed() < self.fetch_backoff
+                            && ttl.checked_duration_since(now).is_some())
+                    {
+                        return Some(entry.token.clone());
+                    }
+                }
+                None => {
+                    return Some(entry.token.clone());
+                }
+            }
+        }
+        None
+    }
+}
+
+#[derive(Debug)]
+struct CacheEntry<T> {
+    token: T,
+    expiry: Option<Instant>,
+    fetched_at: Instant,
 }
 
 #[cfg(test)]
