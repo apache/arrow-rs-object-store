@@ -88,13 +88,17 @@ pub enum ClientConfigKey {
     AllowHttp,
     /// Skip certificate validation on https connections.
     ///
-    /// # Warning
-    ///
+    /// <div class="warning">
+    /// 
+    /// **Warning**
+    /// 
     /// You should think very carefully before using this method. If
     /// invalid certificates are trusted, *any* certificate for *any* site
     /// will be trusted for use. This includes expired certificates. This
     /// introduces significant vulnerabilities, and should only be used
     /// as a last resort or for testing
+    /// 
+    /// </div>
     ///
     /// Supported keys:
     /// - `allow_invalid_certificates`
@@ -104,7 +108,7 @@ pub enum ClientConfigKey {
     /// Supported keys:
     /// - `connect_timeout`
     ConnectTimeout,
-    /// default CONTENT_TYPE for uploads
+    /// default [`Content-Type`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Type) for uploads
     ///
     /// Supported keys:
     /// - `default_content_type`
@@ -448,7 +452,7 @@ impl ClientOptions {
         }
     }
 
-    /// Sets the User-Agent header to be used by this client
+    /// Sets the [`User-Agent`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/User-Agent) header to be used by this client
     ///
     /// Default is based on the version of this crate
     pub fn with_user_agent(mut self, agent: HeaderValue) -> Self {
@@ -466,13 +470,13 @@ impl ClientOptions {
         self
     }
 
-    /// Set the default CONTENT_TYPE for uploads
+    /// Set the default [`Content-Type`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Type) for uploads
     pub fn with_default_content_type(mut self, mime: impl Into<String>) -> Self {
         self.default_content_type = Some(mime.into());
         self
     }
 
-    /// Set the CONTENT_TYPE for a given file extension
+    /// Set the [`Content-Type`](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Type) for a given file extension
     pub fn with_content_type_for_suffix(
         mut self,
         extension: impl Into<String>,
@@ -488,24 +492,32 @@ impl ClientOptions {
         self
     }
 
-    /// Sets what protocol is allowed. If `allow_http` is :
-    /// * false (default):  Only HTTPS are allowed
-    /// * true:  HTTP and HTTPS are allowed
+    /// Sets what protocol is allowed.
+    ///
+    /// If `allow_http` is :
+    /// * `false` (default):  Only HTTPS are allowed
+    /// * `true`:  HTTP and HTTPS are allowed
     pub fn with_allow_http(mut self, allow_http: bool) -> Self {
         self.allow_http = allow_http.into();
         self
     }
     /// Allows connections to invalid SSL certificates
-    /// * false (default):  Only valid HTTPS certificates are allowed
-    /// * true:  All HTTPS certificates are allowed
     ///
-    /// # Warning
+    /// If `allow_invalid_certificates` is :
+    /// * `false` (default):  Only valid HTTPS certificates are allowed
+    /// * `true`:  All HTTPS certificates are allowed
+    ///
+    /// <div class="warning">
+    ///
+    /// **Warning**
     ///
     /// You should think very carefully before using this method. If
     /// invalid certificates are trusted, *any* certificate for *any* site
     /// will be trusted for use. This includes expired certificates. This
     /// introduces significant vulnerabilities, and should only be used
     /// as a last resort or for testing
+    ///
+    /// </div>
     pub fn with_allow_invalid_certificates(mut self, allow_insecure: bool) -> Self {
         self.allow_insecure = allow_insecure.into();
         self
@@ -513,7 +525,13 @@ impl ClientOptions {
 
     /// Only use http1 connections
     ///
-    /// This is on by default, since http2 is known to be significantly slower than http1.
+    /// # See Also
+    /// * [`Self::with_http2_only`] if you only want to use http2
+    /// * [`Self::with_allow_http2`] if you want to use http1 or http2
+    ///
+    /// <div class="warning">
+    /// This is off by default, since http2 is known to be significantly slower than http1.
+    /// </div>
     pub fn with_http1_only(mut self) -> Self {
         self.http2_only = false.into();
         self.http1_only = true.into();
@@ -521,6 +539,14 @@ impl ClientOptions {
     }
 
     /// Only use http2 connections
+    ///
+    /// # See Also
+    /// * [`Self::with_http1_only`] if you only want to use http1
+    /// * [`Self::with_allow_http2`] if you want to use http1 or http2
+    ///
+    /// <div class="warning">
+    /// This is off by default, since http2 is known to be significantly slower than http1.
+    /// </div>
     pub fn with_http2_only(mut self) -> Self {
         self.http1_only = false.into();
         self.http2_only = true.into();
@@ -528,6 +554,14 @@ impl ClientOptions {
     }
 
     /// Use http2 if supported, otherwise use http1.
+    ///
+    /// # See Also
+    /// * [`Self::with_http1_only`] if you only want to use http1
+    /// * [`Self::with_http2_only`] if you only want to use http2
+    ///
+    /// <div class="warning">
+    /// This is off by default, since http2 is known to be significantly slower than http1.
+    /// </div>
     pub fn with_allow_http2(mut self) -> Self {
         self.http1_only = false.into();
         self.http2_only = false.into();
