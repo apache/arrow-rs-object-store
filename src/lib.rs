@@ -834,12 +834,6 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
         .await
     }
 
-    /// Return the metadata for the specified location
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        let options = GetOptions::new().with_head(true);
-        Ok(self.get_opts(location, options).await?.meta)
-    }
-
     /// Delete the object at the specified location.
     async fn delete(&self, location: &Path) -> Result<()>;
 
@@ -1106,10 +1100,6 @@ macro_rules! as_ref_impl {
                 self.as_ref().get_ranges(location, ranges).await
             }
 
-            async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-                self.as_ref().head(location).await
-            }
-
             async fn delete(&self, location: &Path) -> Result<()> {
                 self.as_ref().delete(location).await
             }
@@ -1250,6 +1240,9 @@ pub trait ObjectStoreExt: ObjectStore {
     /// }
     /// ```
     fn get_range(&self, location: &Path, range: Range<u64>) -> impl Future<Output = Result<Bytes>>;
+
+    /// Return the metadata for the specified location
+    fn head(&self, location: &Path) -> impl Future<Output = Result<ObjectMeta>>;
 }
 
 impl<T> ObjectStoreExt for T
@@ -1273,6 +1266,11 @@ where
     async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
         let options = GetOptions::new().with_range(Some(range));
         self.get_opts(location, options).await?.bytes().await
+    }
+
+    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
+        let options = GetOptions::new().with_head(true);
+        Ok(self.get_opts(location, options).await?.meta)
     }
 }
 

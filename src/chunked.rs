@@ -139,10 +139,6 @@ impl ObjectStore for ChunkedStore {
         self.inner.get_ranges(location, ranges).await
     }
 
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        self.inner.head(location).await
-    }
-
     async fn delete(&self, location: &Path) -> Result<()> {
         self.inner.delete(location).await
     }
