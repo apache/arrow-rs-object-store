@@ -559,6 +559,14 @@ pub(crate) enum ApplicationDefaultCredentials {
     /// - <https://google.aip.dev/auth/4113>
     #[serde(rename = "authorized_user")]
     AuthorizedUser(AuthorizedUserCredentials),
+    /// External Account Authorized User via Workforce Identity Federation.
+    ///
+    /// Created by `gcloud auth application-default login` when using workforce pools.
+    ///
+    /// # References
+    /// - <https://cloud.google.com/iam/docs/workforce-identity-federation>
+    #[serde(rename = "external_account_authorized_user")]
+    ExternalAccountAuthorizedUser(ExternalAccountAuthorizedUserCredentials),
 }
 
 impl ApplicationDefaultCredentials {
@@ -597,6 +605,44 @@ pub(crate) struct AuthorizedUserCredentials {
     client_id: String,
     client_secret: String,
     refresh_token: String,
+}
+
+impl From<ExternalAccountAuthorizedUserCredentials> for AuthorizedUserCredentials {
+    fn from(creds: ExternalAccountAuthorizedUserCredentials) -> Self {
+        Self {
+            client_id: creds.client_id,
+            client_secret: creds.client_secret,
+            refresh_token: creds.refresh_token,
+        }
+    }
+}
+
+/// External Account Authorized User credentials for Workforce Identity Federation.
+///
+/// These credentials are created when authenticating through workforce identity pools
+/// using `gcloud auth application-default login`.
+///
+/// # References
+/// - <https://cloud.google.com/iam/docs/workforce-identity-federation>
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct ExternalAccountAuthorizedUserCredentials {
+    /// OAuth 2.0 client ID
+    client_id: String,
+    /// OAuth 2.0 client secret
+    client_secret: String,
+    /// Refresh token for obtaining new access tokens
+    refresh_token: String,
+    /// STS token endpoint URL
+    token_url: String,
+    /// Audience field identifying the workforce pool
+    #[serde(default)]
+    audience: Option<String>,
+    /// Optional quota project ID
+    #[serde(default)]
+    quota_project_id: Option<String>,
+    /// Optional token info URL for introspection
+    #[serde(default)]
+    token_info_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -722,6 +768,65 @@ impl TokenProvider for AuthorizedUserCredentials {
         retry: &RetryConfig,
     ) -> crate::Result<TemporaryToken<Arc<GcpCredential>>> {
         let response = get_token_response(
+            &self.client_id,
+            &self.client_secret,
+            &self.refresh_token,
+            client,
+            retry,
+        )
+        .await?;
+
+        Ok(TemporaryToken {
+            token: Arc::new(GcpCredential {
+                bearer: response.access_token,
+            }),
+            expiry: Some(Instant::now() + Duration::from_secs(response.expires_in)),
+        })
+    }
+}
+
+/// Fetch an access token using a custom token endpoint URL.
+///
+/// Used for external account authorized user credentials which specify their own
+/// token_url (typically the STS OAuth token endpoint).
+async fn get_external_account_token_response(
+    token_url: &str,
+    client_id: &str,
+    client_secret: &str,
+    refresh_token: &str,
+    client: &HttpClient,
+    retry: &RetryConfig,
+) -> Result<TokenResponse> {
+    client
+        .post(token_url)
+        .form([
+            ("grant_type", "refresh_token"),
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("refresh_token", refresh_token),
+        ])
+        .retryable(retry)
+        .idempotent(true)
+        .send()
+        .await
+        .map_err(|source| Error::TokenRequest { source })?
+        .into_body()
+        .json::<TokenResponse>()
+        .await
+        .map_err(|source| Error::TokenResponseBody { source })
+}
+
+#[async_trait]
+impl TokenProvider for ExternalAccountAuthorizedUserCredentials {
+    type Credential = GcpCredential;
+
+    async fn fetch_token(
+        &self,
+        client: &HttpClient,
+        retry: &RetryConfig,
+    ) -> crate::Result<TemporaryToken<Arc<GcpCredential>>> {
+        let response = get_external_account_token_response(
+            &self.token_url,
             &self.client_id,
             &self.client_secret,
             &self.refresh_token,
@@ -960,5 +1065,89 @@ x-goog-meta-reviewer:jane,john"
             GCSAuthorizer::canonicalize_query(&url),
             "max-keys=2&prefix=object".to_string()
         );
+    }
+
+    #[test]
+    fn test_deserialize_external_account_authorized_user() {
+        // Test that we can deserialize external_account_authorized_user credentials
+        let json = r#"{
+            "type": "external_account_authorized_user",
+            "audience": "//iam.googleapis.com/locations/global/workforcePools/test-pool/providers/test-provider",
+            "client_id": "test-client-id.apps.googleusercontent.com",
+            "client_secret": "test-client-secret",
+            "refresh_token": "test-refresh-token",
+            "token_url": "https://sts.googleapis.com/v1/oauthtoken",
+            "token_info_url": "https://sts.googleapis.com/v1/introspect",
+            "quota_project_id": "test-project"
+        }"#;
+
+        let creds: ApplicationDefaultCredentials = serde_json::from_str(json).unwrap();
+
+        match creds {
+            ApplicationDefaultCredentials::ExternalAccountAuthorizedUser(ref user_creds) => {
+                assert_eq!(
+                    user_creds.client_id,
+                    "test-client-id.apps.googleusercontent.com"
+                );
+                assert_eq!(user_creds.client_secret, "test-client-secret");
+                assert_eq!(user_creds.refresh_token, "test-refresh-token");
+                assert_eq!(
+                    user_creds.token_url,
+                    "https://sts.googleapis.com/v1/oauthtoken"
+                );
+            }
+            _ => panic!("Expected ExternalAccountAuthorizedUser variant"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_external_account_authorized_user_minimal() {
+        // Test with minimal required fields only
+        let json = r#"{
+            "type": "external_account_authorized_user",
+            "client_id": "test-client-id.apps.googleusercontent.com",
+            "client_secret": "test-client-secret",
+            "refresh_token": "test-refresh-token",
+            "token_url": "https://sts.googleapis.com/v1/oauthtoken"
+        }"#;
+
+        let creds: ApplicationDefaultCredentials = serde_json::from_str(json).unwrap();
+
+        match creds {
+            ApplicationDefaultCredentials::ExternalAccountAuthorizedUser(ref user_creds) => {
+                assert_eq!(
+                    user_creds.client_id,
+                    "test-client-id.apps.googleusercontent.com"
+                );
+                assert_eq!(
+                    user_creds.token_url,
+                    "https://sts.googleapis.com/v1/oauthtoken"
+                );
+                assert_eq!(user_creds.audience, None);
+                assert_eq!(user_creds.quota_project_id, None);
+                assert_eq!(user_creds.token_info_url, None);
+            }
+            _ => panic!("Expected ExternalAccountAuthorizedUser variant"),
+        }
+    }
+
+    #[test]
+    fn test_external_account_authorized_user_conversion() {
+        // Test conversion to AuthorizedUserCredentials for signing
+        let external_creds = ExternalAccountAuthorizedUserCredentials {
+            client_id: "test-client".to_string(),
+            client_secret: "test-secret".to_string(),
+            refresh_token: "test-token".to_string(),
+            token_url: "https://sts.googleapis.com/v1/oauthtoken".to_string(),
+            audience: Some("//iam.googleapis.com/test".to_string()),
+            quota_project_id: Some("test-project".to_string()),
+            token_info_url: Some("https://sts.googleapis.com/v1/introspect".to_string()),
+        };
+
+        let auth_user_creds: AuthorizedUserCredentials = external_creds.into();
+
+        assert_eq!(auth_user_creds.client_id, "test-client");
+        assert_eq!(auth_user_creds.client_secret, "test-secret");
+        assert_eq!(auth_user_creds.refresh_token, "test-token");
     }
 }
