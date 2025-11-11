@@ -17,7 +17,6 @@
 
 //! Path abstraction for Object Storage
 
-use itertools::Itertools;
 use percent_encoding::percent_decode;
 use std::fmt::Formatter;
 #[cfg(not(target_arch = "wasm32"))]
@@ -29,9 +28,12 @@ pub const DELIMITER: &str = "/";
 /// The path delimiter as a single byte
 pub const DELIMITER_BYTE: u8 = DELIMITER.as_bytes()[0];
 
+/// The path delimiter as a single char
+pub const DELIMITER_CHAR: char = DELIMITER_BYTE as char;
+
 mod parts;
 
-pub use parts::{InvalidPart, PathPart};
+pub use parts::{InvalidPart, PathPart, PathParts};
 
 /// Error returned by [`Path::parse`]
 #[derive(Debug, thiserror::Error)]
@@ -157,6 +159,11 @@ pub struct Path {
 }
 
 impl Path {
+    /// Create an empty [`Path`], equivalent to `Path::from("/")`.
+    pub const fn empty() -> Self {
+        Self { raw: String::new() }
+    }
+
     /// Parse a string as a [`Path`], returning a [`Error`] if invalid,
     /// as defined on the docstring for [`Path`]
     ///
@@ -255,14 +262,39 @@ impl Path {
         Self::parse(decoded)
     }
 
-    /// Returns the [`PathPart`] of this [`Path`]
-    pub fn parts(&self) -> impl Iterator<Item = PathPart<'_>> {
-        self.raw
-            .split_terminator(DELIMITER)
-            .map(|s| PathPart { raw: s.into() })
+    /// Returns the number of [`PathPart`]s in this [`Path`]
+    ///
+    /// # Performance
+    ///
+    /// This operation is `O(n)`, similar to calling `.parts().count()` manually.
+    pub fn len(&self) -> usize {
+        self.raw.split_terminator(DELIMITER).count()
+    }
+
+    /// True if this [`Path`] has zero segments, equivalent to `Path::from("/")`
+    pub fn is_empty(&self) -> bool {
+        self.raw.is_empty()
+    }
+
+    /// Returns the [`PathPart`]s of this [`Path`]
+    pub fn parts(&self) -> PathParts<'_> {
+        PathParts::new(self)
+    }
+
+    /// Returns a copy of this [`Path`] with the last path segment removed
+    ///
+    /// Returns `None` if this path has zero segments.
+    pub fn prefix(&self) -> Option<Self> {
+        let prefix = self.raw.rsplit_once(DELIMITER)?.1;
+
+        Some(Self {
+            raw: prefix.to_string(),
+        })
     }
 
     /// Returns the last path segment containing the filename stored in this [`Path`]
+    ///
+    /// Returns `None` only if this path has zero segments.
     pub fn filename(&self) -> Option<&str> {
         match self.raw.is_empty() {
             true => None,
@@ -343,18 +375,27 @@ impl std::fmt::Display for Path {
     }
 }
 
+impl<'a, I: Into<PathPart<'a>>> Extend<I> for Path {
+    fn extend<T: IntoIterator<Item = I>>(&mut self, iter: T) {
+        for s in iter.into_iter() {
+            let s = s.into();
+            if s.raw.is_empty() {
+                continue;
+            }
+            self.raw.push_str(DELIMITER);
+            self.raw.push_str(&s.raw);
+        }
+    }
+}
+
 impl<'a, I> FromIterator<I> for Path
 where
     I: Into<PathPart<'a>>,
 {
     fn from_iter<T: IntoIterator<Item = I>>(iter: T) -> Self {
-        let raw = T::into_iter(iter)
-            .map(|s| s.into())
-            .filter(|s| !s.raw.is_empty())
-            .map(|s| s.raw)
-            .join(DELIMITER);
-
-        Self { raw }
+        let mut this = Self::empty();
+        this.extend(iter);
+        this
     }
 }
 
