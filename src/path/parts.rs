@@ -16,7 +16,11 @@
 // under the License.
 
 use percent_encoding::{AsciiSet, CONTROLS, percent_encode};
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    iter::{self, FusedIterator},
+    str::SplitTerminator,
+};
 
 use crate::path::DELIMITER_BYTE;
 
@@ -128,6 +132,36 @@ impl From<String> for PathPart<'static> {
 impl AsRef<str> for PathPart<'_> {
     fn as_ref(&self) -> &str {
         self.raw.as_ref()
+    }
+}
+
+/// See [`Path::parts`](super::Path::parts)
+#[derive(Debug, Clone)]
+pub struct PathParts<'a>(iter::Map<SplitTerminator<'a, char>, fn(&str) -> PathPart<'_>>);
+
+impl<'a> PathParts<'a> {
+    /// Create an iterator over the parts of the provided raw [`Path`].
+    pub(super) fn new(raw: &'a str) -> Self {
+        Self(
+            raw.split_terminator(super::DELIMITER_CHAR)
+                .map(|s| PathPart { raw: s.into() }),
+        )
+    }
+}
+
+impl<'a> Iterator for PathParts<'a> {
+    type Item = PathPart<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
+    }
+}
+
+impl<'a> FusedIterator for PathParts<'a> {}
+
+impl<'a> DoubleEndedIterator for PathParts<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.0.next_back()
     }
 }
 
