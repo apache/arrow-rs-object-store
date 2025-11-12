@@ -1060,10 +1060,9 @@ impl AmazonS3Builder {
                 (Some(_), None, _) => return Err(Error::MissingSecretAccessKey.into()),
                 (None, None, _) => unreachable!(),
             }
-        } else if let (Ok(token_path), Ok(role_arn)) = (
-            std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE"),
-            std::env::var("AWS_ROLE_ARN"),
-        ) {
+        } else if let (Some(token_path), Some(role_arn)) =
+            (self.web_identity_token_file, self.role_arn)
+        {
             debug!("Using WebIdentity credential provider");
 
             let session_name = self
