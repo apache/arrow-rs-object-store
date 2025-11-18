@@ -998,11 +998,11 @@ mod tests {
         let connect_timeout = "90 seconds".to_string();
         let default_content_type = "object_store:fake_default_content_type".to_string();
         let http1_only = "true".to_string();
-        let HTTP/2_only = "false".to_string();
-        let HTTP/2_keep_alive_interval = "90 seconds".to_string();
-        let HTTP/2_keep_alive_timeout = "91 seconds".to_string();
-        let HTTP/2_keep_alive_while_idle = "92 seconds".to_string();
-        let HTTP/2_max_frame_size = "1337".to_string();
+        let http2_only = "false".to_string();
+        let http2_keep_alive_interval = "90 seconds".to_string();
+        let http2_keep_alive_timeout = "91 seconds".to_string();
+        let http2_keep_alive_while_idle = "92 seconds".to_string();
+        let http2_max_frame_size = "1337".to_string();
         let pool_idle_timeout = "93 seconds".to_string();
         let pool_max_idle_per_host = "94".to_string();
         let proxy_url = "https://fake_proxy_url".to_string();
@@ -1021,9 +1021,9 @@ mod tests {
             ("http2_only", http2_only.clone()),
             (
                 "http2_keep_alive_interval",
-                HTTP/2_keep_alive_interval.clone(),
+                http2_keep_alive_interval.clone(),
             ),
-            ("http2_keep_alive_timeout", HTTP/2_keep_alive_timeout.clone()),
+            ("http2_keep_alive_timeout", http2_keep_alive_timeout.clone()),
             (
                 "http2_keep_alive_while_idle",
                 http2_keep_alive_while_idle.clone(),
