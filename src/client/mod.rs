@@ -113,12 +113,12 @@ pub enum ClientConfigKey {
     /// Supported keys:
     /// - `default_content_type`
     DefaultContentType,
-    /// Only use http1 connections
+    /// Only use HTTP/1 connections
     ///
     /// Supported keys:
     /// - `http1_only`
     Http1Only,
-    /// Interval for HTTP2 Ping frames should be sent to keep a connection alive.
+    /// Interval for HTTP/2 Ping frames should be sent to keep a connection alive.
     ///
     /// Supported keys:
     /// - `http2_keep_alive_interval`
@@ -128,17 +128,17 @@ pub enum ClientConfigKey {
     /// Supported keys:
     /// - `http2_keep_alive_timeout`
     Http2KeepAliveTimeout,
-    /// Enable HTTP2 keep alive pings for idle connections
+    /// Enable HTTP/2 keep alive pings for idle connections
     ///
     /// Supported keys:
     /// - `http2_keep_alive_while_idle`
     Http2KeepAliveWhileIdle,
-    /// Sets the maximum frame size to use for HTTP2.
+    /// Sets the maximum frame size to use for HTTP/2.
     ///
     /// Supported keys:
     /// - `http2_max_frame_size`
     Http2MaxFrameSize,
-    /// Only use http2 connections
+    /// Only use HTTP/2 connections
     ///
     /// Supported keys:
     /// - `http2_only`
@@ -355,8 +355,8 @@ impl Default for ClientOptions {
             http2_keep_alive_timeout: None,
             http2_keep_alive_while_idle: Default::default(),
             http2_max_frame_size: None,
-            // HTTP2 is known to be significantly slower than HTTP1, so we default
-            // to HTTP1 for now.
+            // HTTP/2 is known to be significantly slower than HTTP/1, so we default
+            // to HTTP/1 for now.
             // https://github.com/apache/arrow-rs/issues/5194
             http1_only: true.into(),
             http2_only: Default::default(),
@@ -523,14 +523,14 @@ impl ClientOptions {
         self
     }
 
-    /// Only use http1 connections
+    /// Only use HTTP/1 connections
     ///
     /// # See Also
-    /// * [`Self::with_http2_only`] if you only want to use http2
-    /// * [`Self::with_allow_http2`] if you want to use http1 or http2
+    /// * [`Self::with_http2_only`] if you only want to use HTTP/2
+    /// * [`Self::with_allow_http2`] if you want to use HTTP/1 or HTTP/2
     ///
     /// <div class="warning">
-    /// This is off by default, since http2 is known to be significantly slower than http1.
+    /// This is off by default, since HTTP/2 is known to be significantly slower than http1.
     /// </div>
     pub fn with_http1_only(mut self) -> Self {
         self.http2_only = false.into();
@@ -538,14 +538,14 @@ impl ClientOptions {
         self
     }
 
-    /// Only use http2 connections
+    /// Only use HTTP/2 connections
     ///
     /// # See Also
-    /// * [`Self::with_http1_only`] if you only want to use http1
-    /// * [`Self::with_allow_http2`] if you want to use http1 or http2
+    /// * [`Self::with_http1_only`] if you only want to use HTTP/1
+    /// * [`Self::with_allow_http2`] if you want to use HTTP/1 or HTTP/2
     ///
     /// <div class="warning">
-    /// This is off by default, since http2 is known to be significantly slower than http1.
+    /// This is off by default, since HTTP/2 is known to be significantly slower than HTTP/1.
     /// </div>
     pub fn with_http2_only(mut self) -> Self {
         self.http1_only = false.into();
@@ -553,14 +553,14 @@ impl ClientOptions {
         self
     }
 
-    /// Use http2 if supported, otherwise use http1.
+    /// Use HTTP/2 if supported, otherwise use HTTP/1.
     ///
     /// # See Also
-    /// * [`Self::with_http1_only`] if you only want to use http1
-    /// * [`Self::with_http2_only`] if you only want to use http2
+    /// * [`Self::with_http1_only`] if you only want to use HTTP/1
+    /// * [`Self::with_http2_only`] if you only want to use HTTP/2
     ///
     /// <div class="warning">
-    /// This is off by default, since http2 is known to be significantly slower than http1.
+    /// This is off by default, since HTTP/2 is known to be significantly slower than HTTP/1.
     /// </div>
     pub fn with_allow_http2(mut self) -> Self {
         self.http1_only = false.into();
@@ -662,7 +662,7 @@ impl ClientOptions {
         self
     }
 
-    /// Sets an interval for HTTP2 Ping frames should be sent to keep a connection alive.
+    /// Sets an interval for HTTP/2 Ping frames should be sent to keep a connection alive.
     ///
     /// Default is disabled enforced by reqwest
     pub fn with_http2_keep_alive_interval(mut self, interval: Duration) -> Self {
@@ -673,7 +673,7 @@ impl ClientOptions {
     /// Sets a timeout for receiving an acknowledgement of the keep-alive ping.
     ///
     /// If the ping is not acknowledged within the timeout, the connection will be closed.
-    /// Does nothing if http2_keep_alive_interval is disabled.
+    /// Does nothing if HTTP/2_keep_alive_interval is disabled.
     ///
     /// Default is disabled enforced by reqwest
     pub fn with_http2_keep_alive_timeout(mut self, interval: Duration) -> Self {
@@ -681,7 +681,7 @@ impl ClientOptions {
         self
     }
 
-    /// Enable HTTP2 keep alive pings for idle connections
+    /// Enable HTTP/2 keep alive pings for idle connections
     ///
     /// If disabled, keep-alive pings are only sent while there are open request/response
     /// streams. If enabled, pings are also sent when no streams are active
@@ -692,7 +692,7 @@ impl ClientOptions {
         self
     }
 
-    /// Sets the maximum frame size to use for HTTP2.
+    /// Sets the maximum frame size to use for HTTP/2.
     ///
     /// Default is currently 16,384 but may change internally to optimize for common uses.
     pub fn with_http2_max_frame_size(mut self, sz: u32) -> Self {
@@ -998,11 +998,11 @@ mod tests {
         let connect_timeout = "90 seconds".to_string();
         let default_content_type = "object_store:fake_default_content_type".to_string();
         let http1_only = "true".to_string();
-        let http2_only = "false".to_string();
-        let http2_keep_alive_interval = "90 seconds".to_string();
-        let http2_keep_alive_timeout = "91 seconds".to_string();
-        let http2_keep_alive_while_idle = "92 seconds".to_string();
-        let http2_max_frame_size = "1337".to_string();
+        let HTTP/2_only = "false".to_string();
+        let HTTP/2_keep_alive_interval = "90 seconds".to_string();
+        let HTTP/2_keep_alive_timeout = "91 seconds".to_string();
+        let HTTP/2_keep_alive_while_idle = "92 seconds".to_string();
+        let HTTP/2_max_frame_size = "1337".to_string();
         let pool_idle_timeout = "93 seconds".to_string();
         let pool_max_idle_per_host = "94".to_string();
         let proxy_url = "https://fake_proxy_url".to_string();
@@ -1021,9 +1021,9 @@ mod tests {
             ("http2_only", http2_only.clone()),
             (
                 "http2_keep_alive_interval",
-                http2_keep_alive_interval.clone(),
+                HTTP/2_keep_alive_interval.clone(),
             ),
-            ("http2_keep_alive_timeout", http2_keep_alive_timeout.clone()),
+            ("http2_keep_alive_timeout", HTTP/2_keep_alive_timeout.clone()),
             (
                 "http2_keep_alive_while_idle",
                 http2_keep_alive_while_idle.clone(),
