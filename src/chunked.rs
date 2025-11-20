@@ -139,10 +139,6 @@ impl ObjectStore for ChunkedStore {
         self.inner.get_ranges(location, ranges).await
     }
 
-    async fn delete(&self, location: &Path) -> Result<()> {
-        self.inner.delete(location).await
-    }
-
     fn delete_stream(
         &self,
         locations: BoxStream<'static, Result<Path>>,

@@ -132,10 +132,6 @@ impl ObjectStore for HttpStore {
         self.client.get_opts(location, options).await
     }
 
-    async fn delete(&self, location: &Path) -> Result<()> {
-        self.client.delete(location).await
-    }
-
     fn delete_stream(
         &self,
         locations: BoxStream<'static, Result<Path>>,
