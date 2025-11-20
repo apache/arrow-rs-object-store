@@ -250,11 +250,6 @@ impl ObjectStore for AmazonS3 {
         self.client.get_opts(location, options).await
     }
 
-    async fn delete(&self, location: &Path) -> Result<()> {
-        self.client.request(Method::DELETE, location).send().await?;
-        Ok(())
-    }
-
     fn delete_stream(
         &self,
         locations: BoxStream<'static, Result<Path>>,

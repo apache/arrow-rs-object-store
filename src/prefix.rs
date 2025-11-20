@@ -124,11 +124,6 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner.get_ranges(&full_path, ranges).await
     }
 
-    async fn delete(&self, location: &Path) -> Result<()> {
-        let full_path = self.full_path(location);
-        self.inner.delete(&full_path).await
-    }
-
     fn delete_stream(
         &self,
         locations: BoxStream<'static, Result<Path>>,

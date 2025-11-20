@@ -853,9 +853,6 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
         .await
     }
 
-    /// Delete the object at the specified location.
-    async fn delete(&self, location: &Path) -> Result<()>;
-
     /// Delete all the objects at the specified locations
     ///
     /// When supported, this method will use bulk operations that delete more
@@ -955,10 +952,6 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// #     }
     /// #
     /// #     async fn get_opts(&self, _: &Path, _: GetOptions) -> Result<GetResult> {
-    /// #         todo!()
-    /// #     }
-    /// #
-    /// #     async fn delete(&self, _: &Path) -> Result<()> {
     /// #         todo!()
     /// #     }
     /// #
@@ -1107,10 +1100,6 @@ macro_rules! as_ref_impl {
                 self.as_ref().get_ranges(location, ranges).await
             }
 
-            async fn delete(&self, location: &Path) -> Result<()> {
-                self.as_ref().delete(location).await
-            }
-
             fn delete_stream(
                 &self,
                 locations: BoxStream<'static, Result<Path>>,
@@ -1250,6 +1239,9 @@ pub trait ObjectStoreExt: ObjectStore {
     /// Return the metadata for the specified location
     fn head(&self, location: &Path) -> impl Future<Output = Result<ObjectMeta>>;
 
+    /// Delete the object at the specified location.
+    fn delete(&self, location: &Path) -> impl Future<Output = Result<()>>;
+
     /// Copy an object from one path to another in the same object store.
     ///
     /// If there exists an object at the destination, it will be overwritten.
@@ -1304,6 +1296,24 @@ where
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
         let options = GetOptions::new().with_head(true);
         Ok(self.get_opts(location, options).await?.meta)
+    }
+
+    async fn delete(&self, location: &Path) -> Result<()> {
+        let location = location.clone();
+        let mut stream =
+            self.delete_stream(futures::stream::once(async move { Ok(location) }).boxed());
+        let _path = stream.try_next().await?.ok_or_else(|| Error::Generic {
+            store: "ext",
+            source: "`delete_stream` was supposed to yield once but didn't".into(),
+        })?;
+        if stream.next().await.is_some() {
+            Err(Error::Generic {
+                store: "ext",
+                source: "`delete_stream` yielded more than once".into(),
+            })
+        } else {
+            Ok(())
+        }
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
