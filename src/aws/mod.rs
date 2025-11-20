@@ -44,9 +44,9 @@ use crate::multipart::{MultipartStore, PartId};
 use crate::signer::Signer;
 use crate::util::STRICT_ENCODE_SET;
 use crate::{
-    Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
-    ObjectStore, Path, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
-    UploadPart,
+    CopyMode, CopyOptions, Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
+    ObjectMeta, ObjectStore, Path, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    Result, UploadPart,
 };
 
 static TAGS_HEADER: HeaderName = HeaderName::from_static("x-amz-tagging");
@@ -305,77 +305,89 @@ impl ObjectStore for AmazonS3 {
         self.client.list_with_delimiter(prefix).await
     }
 
-    async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        self.client
-            .copy_request(from, to)
-            .idempotent(true)
-            .send()
-            .await?;
-        Ok(())
-    }
+    async fn copy_opts(&self, from: &Path, to: &Path, options: CopyOptions) -> Result<()> {
+        let CopyOptions {
+            mode,
+            extensions: _,
+        } = options;
 
-    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        let (k, v, status) = match &self.client.config.copy_if_not_exists {
-            Some(S3CopyIfNotExists::Header(k, v)) => (k, v, StatusCode::PRECONDITION_FAILED),
-            Some(S3CopyIfNotExists::HeaderWithStatus(k, v, status)) => (k, v, *status),
-            Some(S3CopyIfNotExists::Multipart) => {
-                let upload_id = self
-                    .client
-                    .create_multipart(to, PutMultipartOptions::default())
+        match mode {
+            CopyMode::Overwrite => {
+                self.client
+                    .copy_request(from, to)
+                    .idempotent(true)
+                    .send()
                     .await?;
-
-                let res = async {
-                    let part_id = self
-                        .client
-                        .put_part(to, &upload_id, 0, PutPartPayload::Copy(from))
-                        .await?;
-                    match self
-                        .client
-                        .complete_multipart(
-                            to,
-                            &upload_id,
-                            vec![part_id],
-                            CompleteMultipartMode::Create,
-                        )
-                        .await
-                    {
-                        Err(e @ Error::Precondition { .. }) => Err(Error::AlreadyExists {
-                            path: to.to_string(),
-                            source: Box::new(e),
-                        }),
-                        Ok(_) => Ok(()),
-                        Err(e) => Err(e),
+                Ok(())
+            }
+            CopyMode::Create => {
+                let (k, v, status) = match &self.client.config.copy_if_not_exists {
+                    Some(S3CopyIfNotExists::Header(k, v)) => {
+                        (k, v, StatusCode::PRECONDITION_FAILED)
                     }
+                    Some(S3CopyIfNotExists::HeaderWithStatus(k, v, status)) => (k, v, *status),
+                    Some(S3CopyIfNotExists::Multipart) => {
+                        let upload_id = self
+                            .client
+                            .create_multipart(to, PutMultipartOptions::default())
+                            .await?;
+
+                        let res = async {
+                            let part_id = self
+                                .client
+                                .put_part(to, &upload_id, 0, PutPartPayload::Copy(from))
+                                .await?;
+                            match self
+                                .client
+                                .complete_multipart(
+                                    to,
+                                    &upload_id,
+                                    vec![part_id],
+                                    CompleteMultipartMode::Create,
+                                )
+                                .await
+                            {
+                                Err(e @ Error::Precondition { .. }) => Err(Error::AlreadyExists {
+                                    path: to.to_string(),
+                                    source: Box::new(e),
+                                }),
+                                Ok(_) => Ok(()),
+                                Err(e) => Err(e),
+                            }
+                        }
+                        .await;
+
+                        // If the multipart upload failed, make a best effort attempt to
+                        // clean it up. It's the caller's responsibility to add a
+                        // lifecycle rule if guaranteed cleanup is required, as we
+                        // cannot protect against an ill-timed process crash.
+                        if res.is_err() {
+                            let _ = self.client.abort_multipart(to, &upload_id).await;
+                        }
+
+                        return res;
+                    }
+                    None => {
+                        return Err(Error::NotSupported {
+                            source: "S3 does not support copy-if-not-exists".to_string().into(),
+                        });
+                    }
+                };
+
+                let req = self.client.copy_request(from, to);
+                match req.header(k, v).send().await {
+                    Err(RequestError::Retry { source, path })
+                        if source.status() == Some(status) =>
+                    {
+                        Err(Error::AlreadyExists {
+                            source: Box::new(source),
+                            path,
+                        })
+                    }
+                    Err(e) => Err(e.into()),
+                    Ok(_) => Ok(()),
                 }
-                .await;
-
-                // If the multipart upload failed, make a best effort attempt to
-                // clean it up. It's the caller's responsibility to add a
-                // lifecycle rule if guaranteed cleanup is required, as we
-                // cannot protect against an ill-timed process crash.
-                if res.is_err() {
-                    let _ = self.client.abort_multipart(to, &upload_id).await;
-                }
-
-                return res;
             }
-            None => {
-                return Err(Error::NotSupported {
-                    source: "S3 does not support copy-if-not-exists".to_string().into(),
-                });
-            }
-        };
-
-        let req = self.client.copy_request(from, to);
-        match req.header(k, v).send().await {
-            Err(RequestError::Retry { source, path }) if source.status() == Some(status) => {
-                Err(Error::AlreadyExists {
-                    source: Box::new(source),
-                    path,
-                })
-            }
-            Err(e) => Err(e.into()),
-            Ok(_) => Ok(()),
         }
     }
 }
