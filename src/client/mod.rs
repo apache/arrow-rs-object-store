@@ -89,15 +89,15 @@ pub enum ClientConfigKey {
     /// Skip certificate validation on https connections.
     ///
     /// <div class="warning">
-    /// 
+    ///
     /// **Warning**
-    /// 
+    ///
     /// You should think very carefully before using this method. If
     /// invalid certificates are trusted, *any* certificate for *any* site
     /// will be trusted for use. This includes expired certificates. This
     /// introduces significant vulnerabilities, and should only be used
     /// as a last resort or for testing
-    /// 
+    ///
     /// </div>
     ///
     /// Supported keys:
