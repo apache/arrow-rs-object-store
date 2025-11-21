@@ -1885,9 +1885,9 @@ impl From<Error> for std::io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::buffered::BufWriter;
+    
     use chrono::TimeZone;
-    use tokio::io::AsyncWriteExt;
+    
 
     macro_rules! maybe_skip_integration {
         () => {
@@ -1897,7 +1897,7 @@ mod tests {
             }
         };
     }
-    pub(crate) use maybe_skip_integration;
+    
 
     /// Test that the returned stream does not borrow the lifetime of Path
     fn list_store<'a>(
@@ -2155,12 +2155,12 @@ mod tests {
         assert_eq!(options.extensions.get::<&str>(), extensions.get::<&str>());
     }
 
-    fn takes_generic_object_store<T: ObjectStoreExt>(store: T) {
+    fn takes_generic_object_store<T: ObjectStore>(store: T) {
         // This function is just to ensure that the trait bounds are satisfied
         let _ = store;
     }
     #[test]
-    fn test_dyn_generic_impl() {
+    fn test_dyn_impl() {
         let store: Arc<dyn ObjectStore> = Arc::new(memory::InMemory::new());
         takes_generic_object_store(store);
         let store: Box<dyn ObjectStore> = Box::new(memory::InMemory::new());
