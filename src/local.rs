@@ -443,14 +443,6 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn delete(&self, location: &Path) -> Result<()> {
-        let config = Arc::clone(&self.config);
-        let automatic_cleanup = self.automatic_cleanup;
-        let location = location.clone();
-        maybe_spawn_blocking(move || Self::delete_location(config, automatic_cleanup, &location))
-            .await
-    }
-
     fn delete_stream(
         &self,
         locations: BoxStream<'static, Result<Path>>,

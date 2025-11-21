@@ -34,10 +34,13 @@ use std::time::Duration;
 /// Configuration settings for throttled store
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ThrottleConfig {
-    /// Sleep duration for every call to [`delete`](ThrottledStore::delete).
+    /// Sleep duration for every call to [`delete`], or every element in [`delete_stream`].
     ///
     /// Sleeping is done before the underlying store is called and independently of the success of
     /// the operation.
+    ///
+    /// [`delete`]: crate::ObjectStoreExt::delete
+    /// [`delete_stream`]: ThrottledStore::delete_stream
     pub wait_delete_per_call: Duration,
 
     /// Sleep duration for every byte received during [`get_opts`](ThrottledStore::get_opts).
@@ -191,12 +194,6 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         sleep(sleep_duration).await;
 
         self.inner.get_ranges(location, ranges).await
-    }
-
-    async fn delete(&self, location: &Path) -> Result<()> {
-        sleep(self.config().wait_delete_per_call).await;
-
-        self.inner.delete(location).await
     }
 
     fn delete_stream(
