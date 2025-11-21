@@ -35,6 +35,7 @@ async-trait = "0.1.53"
 bytes = "1.0"
 chrono = { version = "0.4.34", default-features = false, features = ["clock"] }
 futures = "0.3"
+futures-timer = "3"
 http = "1.2.0"
 humantime = "2.1"
 itertools = "0.14.0"
@@ -53,7 +54,7 @@ httparse = { version = "1.8.0", default-features = false, features = ["std"], op
 hyper = { version = "1.2", default-features = false, optional = true }
 md-5 = { version = "0.10.6", default-features = false, optional = true }
 quick-xml = { version = "0.38.0", features = ["serialize", "overlapped-lists"], optional = true }
-rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"], optional = true }
+rand = { version = "0.9.1", default-features = false, features = ["std", "std_rng", "thread_rng"], optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "http2"], optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 rustls-pemfile = { version = "2.0", default-features = false, features = ["std"], optional = true }
@@ -68,6 +69,7 @@ nix = { version = "0.30.0", features = ["fs"] }
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 web-time = { version = "1.1.0" }
 wasm-bindgen-futures = "0.4.18"
+futures-timer = { version = "3", features = ["wasm-bindgen"] }
 
 [features]
 default = ["fs"]
@@ -83,7 +85,7 @@ integration = ["rand"]
 [dev-dependencies] # In alphabetical order
 hyper = { version = "1.2", features = ["server"] }
 hyper-util = "0.1"
-rand = "0.9"
+rand = "0.9.1"
 tempfile = "3.1.0"
 regex = "1.11.1"
 # The "gzip" feature for reqwest is enabled for an integration test.
