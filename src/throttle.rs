@@ -147,6 +147,7 @@ impl<T: ObjectStore> std::fmt::Display for ThrottledStore<T> {
 }
 
 #[async_trait]
+#[deny(clippy::missing_trait_methods)]
 impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
     async fn put_opts(
         &self,
@@ -180,17 +181,6 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         Ok(throttle_get(result, wait_get_per_byte))
     }
 
-    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
-        let config = self.config();
-
-        let sleep_duration =
-            config.wait_get_per_call + config.wait_get_per_byte * (range.end - range.start) as u32;
-
-        sleep(sleep_duration).await;
-
-        self.inner.get_range(location, range).await
-    }
-
     async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
         let config = self.config();
 
@@ -201,11 +191,6 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         sleep(sleep_duration).await;
 
         self.inner.get_ranges(location, ranges).await
-    }
-
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        sleep(self.config().wait_put_per_call).await;
-        self.inner.head(location).await
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {

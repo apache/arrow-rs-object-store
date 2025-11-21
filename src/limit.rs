@@ -70,6 +70,7 @@ impl<T: ObjectStore> std::fmt::Display for LimitStore<T> {
 }
 
 #[async_trait]
+#[deny(clippy::missing_trait_methods)]
 impl<T: ObjectStore> ObjectStore for LimitStore<T> {
     async fn put_opts(
         &self,
@@ -99,19 +100,9 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         Ok(permit_get_result(r, permit))
     }
 
-    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
-        let _permit = self.semaphore.acquire().await.unwrap();
-        self.inner.get_range(location, range).await
-    }
-
     async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.get_ranges(location, ranges).await
-    }
-
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        let _permit = self.semaphore.acquire().await.unwrap();
-        self.inner.head(location).await
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {

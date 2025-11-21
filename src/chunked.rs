@@ -61,6 +61,7 @@ impl Display for ChunkedStore {
 }
 
 #[async_trait]
+#[deny(clippy::missing_trait_methods)]
 impl ObjectStore for ChunkedStore {
     async fn put_opts(
         &self,
@@ -134,12 +135,8 @@ impl ObjectStore for ChunkedStore {
         })
     }
 
-    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
-        self.inner.get_range(location, range).await
-    }
-
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        self.inner.head(location).await
+    async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
+        self.inner.get_ranges(location, ranges).await
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
@@ -173,8 +170,16 @@ impl ObjectStore for ChunkedStore {
         self.inner.copy(from, to).await
     }
 
+    async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
+        self.inner.rename(from, to).await
+    }
+
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
         self.inner.copy_if_not_exists(from, to).await
+    }
+
+    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+        self.inner.rename_if_not_exists(from, to).await
     }
 }
 

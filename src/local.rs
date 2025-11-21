@@ -429,15 +429,6 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
-        let path = self.path_to_filesystem(location)?;
-        maybe_spawn_blocking(move || {
-            let (mut file, _) = open_file(&path)?;
-            read_range(&mut file, &path, range)
-        })
-        .await
-    }
-
     async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
         let path = self.path_to_filesystem(location)?;
         let ranges = ranges.to_vec();
@@ -1756,7 +1747,7 @@ mod unix_test {
     use tempfile::TempDir;
 
     use crate::local::LocalFileSystem;
-    use crate::{ObjectStore, ObjectStoreExt, Path};
+    use crate::{ObjectStoreExt, Path};
 
     #[tokio::test]
     async fn test_fifo() {

@@ -93,6 +93,7 @@ fn strip_meta(prefix: &Path, meta: ObjectMeta) -> ObjectMeta {
 }
 
 #[async_trait::async_trait]
+#[deny(clippy::missing_trait_methods)]
 impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
     async fn put_opts(
         &self,
@@ -113,11 +114,6 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner.put_multipart_opts(&full_path, opts).await
     }
 
-    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
-        let full_path = self.full_path(location);
-        self.inner.get_range(&full_path, range).await
-    }
-
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let full_path = self.full_path(location);
         self.inner.get_opts(&full_path, options).await
@@ -126,12 +122,6 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
     async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
         let full_path = self.full_path(location);
         self.inner.get_ranges(&full_path, ranges).await
-    }
-
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        let full_path = self.full_path(location);
-        let meta = self.inner.head(&full_path).await?;
-        Ok(self.strip_meta(meta))
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
