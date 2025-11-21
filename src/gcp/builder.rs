@@ -533,6 +533,15 @@ impl GoogleCloudStorageBuilder {
                         self.retry_config.clone(),
                     )) as _
                 }
+                ApplicationDefaultCredentials::ExternalAccountAuthorizedUser(token) => Arc::new(
+                    TokenCredentialProvider::new(
+                        token,
+                        http.connect(&self.client_options)?,
+                        self.retry_config.clone(),
+                    )
+                    .with_min_ttl(TOKEN_MIN_TTL),
+                )
+                    as _,
             }
         } else {
             Arc::new(
@@ -565,6 +574,15 @@ impl GoogleCloudStorageBuilder {
                 }
                 ApplicationDefaultCredentials::ServiceAccount(token) => {
                     token.signing_credentials()?
+                }
+                ApplicationDefaultCredentials::ExternalAccountAuthorizedUser(token) => {
+                    // External account authorized user credentials don't have private keys,
+                    // so we use the same approach as AuthorizedUser
+                    Arc::new(TokenCredentialProvider::new(
+                        AuthorizedUserSigningCredentials::from(token.into())?,
+                        http.connect(&self.client_options)?,
+                        self.retry_config.clone(),
+                    )) as _
                 }
             }
         } else {
@@ -745,5 +763,85 @@ mod tests {
         } else {
             panic!("{key} not propagated as ClientConfigKey");
         }
+    }
+
+    #[test]
+    fn gcs_test_external_account_authorized_user_credentials() {
+        // Create an external_account_authorized_user credential file
+        // This format is used by workforce identity federation
+        let mut creds_file = NamedTempFile::new().unwrap();
+        creds_file
+            .write_all(
+                br#"{
+  "type": "external_account_authorized_user",
+  "audience": "//iam.googleapis.com/locations/global/workforcePools/test-pool/providers/test-provider",
+  "client_id": "test-client-id.apps.googleusercontent.com",
+  "client_secret": "test-client-secret",
+  "refresh_token": "test-refresh-token",
+  "token_url": "https://sts.googleapis.com/v1/oauthtoken",
+  "token_info_url": "https://sts.googleapis.com/v1/introspect",
+  "quota_project_id": "test-project"
+}"#,
+            )
+            .unwrap();
+
+        // Should successfully deserialize and create a builder
+        let result = GoogleCloudStorageBuilder::new()
+            .with_application_credentials(creds_file.path().to_str().unwrap())
+            .with_bucket_name("test-bucket")
+            .build();
+
+        // Build should succeed - the credentials are valid format
+        assert!(
+            result.is_ok(),
+            "Build should succeed with external_account_authorized_user credentials: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    #[ignore] // Only run manually when testing with real ADC
+    fn gcs_test_real_external_account_authorized_user_adc() {
+        // This test uses real ADC credentials from the standard location
+        // Run with: cargo test --features gcp gcs_test_real_external -- --ignored --nocapture
+
+        let home = std::env::var("HOME").expect("HOME not set");
+        let adc_path = format!(
+            "{}/.config/gcloud/application_default_credentials.json",
+            home
+        );
+
+        if !std::path::Path::new(&adc_path).exists() {
+            println!("⚠️  No ADC file found at {}", adc_path);
+            return;
+        }
+
+        // Read and display credential type
+        let content = std::fs::read_to_string(&adc_path).expect("Failed to read ADC");
+        let json: serde_json::Value = serde_json::from_str(&content).expect("Invalid JSON");
+        let cred_type = json
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+
+        println!("📋 Testing with ADC credential type: {}", cred_type);
+
+        let result = GoogleCloudStorageBuilder::new()
+            .with_bucket_name("test-bucket")
+            .build();
+
+        match &result {
+            Ok(_) => println!(
+                "✅ Successfully built GoogleCloudStorage with {} credentials!",
+                cred_type
+            ),
+            Err(e) => println!("❌ Build failed: {}", e),
+        }
+
+        assert!(
+            result.is_ok(),
+            "Should successfully build with {} credentials from ADC",
+            cred_type
+        );
     }
 }
