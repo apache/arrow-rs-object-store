@@ -495,7 +495,7 @@ impl ClientOptions {
     /// Sets what protocol is allowed.
     ///
     /// If `allow_http` is :
-    /// * `false` (default):  Only HTTPS are allowed
+    /// * `false` (default):  Only HTTPS is allowed
     /// * `true`:  HTTP and HTTPS are allowed
     pub fn with_allow_http(mut self, allow_http: bool) -> Self {
         self.allow_http = allow_http.into();
@@ -523,14 +523,14 @@ impl ClientOptions {
         self
     }
 
-    /// Only use HTTP/1 connections
+    /// Only use HTTP/1 connections (default)
     ///
     /// # See Also
     /// * [`Self::with_http2_only`] if you only want to use HTTP/2
     /// * [`Self::with_allow_http2`] if you want to use HTTP/1 or HTTP/2
     ///
     /// <div class="warning">
-    /// This is off by default, since HTTP/2 is known to be significantly slower than http1.
+    /// HTTP/2 is not used by default. See details [#104](https://github.com/apache/arrow-rs-object-store/issues/104)
     /// </div>
     pub fn with_http1_only(mut self) -> Self {
         self.http2_only = false.into();
@@ -545,7 +545,7 @@ impl ClientOptions {
     /// * [`Self::with_allow_http2`] if you want to use HTTP/1 or HTTP/2
     ///
     /// <div class="warning">
-    /// This is off by default, since HTTP/2 is known to be significantly slower than HTTP/1.
+    /// HTTP/2 is not used by default. See details [#104](https://github.com/apache/arrow-rs-object-store/issues/104)
     /// </div>
     pub fn with_http2_only(mut self) -> Self {
         self.http1_only = false.into();
@@ -560,7 +560,7 @@ impl ClientOptions {
     /// * [`Self::with_http2_only`] if you only want to use HTTP/2
     ///
     /// <div class="warning">
-    /// This is off by default, since HTTP/2 is known to be significantly slower than HTTP/1.
+    /// HTTP/2 is not used by default. See details [#104](https://github.com/apache/arrow-rs-object-store/issues/104)
     /// </div>
     pub fn with_allow_http2(mut self) -> Self {
         self.http1_only = false.into();
@@ -673,7 +673,7 @@ impl ClientOptions {
     /// Sets a timeout for receiving an acknowledgement of the keep-alive ping.
     ///
     /// If the ping is not acknowledged within the timeout, the connection will be closed.
-    /// Does nothing if HTTP/2_keep_alive_interval is disabled.
+    /// Does nothing if `http2_keep_alive_interval` is disabled.
     ///
     /// Default is disabled enforced by reqwest
     pub fn with_http2_keep_alive_timeout(mut self, interval: Duration) -> Self {

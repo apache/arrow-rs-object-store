@@ -475,7 +475,7 @@
 
 - Remove deprecated try\_with\_option methods [\#5237](https://github.com/apache/arrow-rs/pull/5237) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([tustvold](https://github.com/tustvold))
 - object\_store: full HTTP range support [\#5222](https://github.com/apache/arrow-rs/pull/5222) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([clbarnes](https://github.com/clbarnes))
-- feat\(object\_store\): use HTTP/1 by default [\#5204](https://github.com/apache/arrow-rs/pull/5204) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([wjones127](https://github.com/wjones127))
+- feat\(object\_store\): use http1 by default [\#5204](https://github.com/apache/arrow-rs/pull/5204) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([wjones127](https://github.com/wjones127))
 - refactor: change `object_store` CA handling [\#5056](https://github.com/apache/arrow-rs/pull/5056) [[object-store](https://github.com/apache/arrow-rs/labels/object-store)] ([crepererum](https://github.com/crepererum))
 
 **Implemented enhancements:**
