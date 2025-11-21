@@ -2154,4 +2154,23 @@ mod tests {
         assert!(options.head);
         assert_eq!(options.extensions.get::<&str>(), extensions.get::<&str>());
     }
+
+    fn takes_generic_object_store<T: ObjectStoreExt>(store: T) {
+        // This function is just to ensure that the trait bounds are satisfied
+        let _ = store;
+    }
+    #[test]
+    fn test_dyn_generic_impl() {
+        let store: Arc<dyn ObjectStore> = Arc::new(memory::InMemory::new());
+        takes_generic_object_store(store);
+        let store: Box<dyn ObjectStore> = Box::new(memory::InMemory::new());
+        takes_generic_object_store(store);
+    }
+    #[test]
+    fn test_generic_impl() {
+        let store = Arc::new(memory::InMemory::new());
+        takes_generic_object_store(store);
+        let store = Box::new(memory::InMemory::new());
+        takes_generic_object_store(store);
+    }
 }
