@@ -33,7 +33,7 @@ use crate::{
     ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutResult, Result,
     UpdateVersion, UploadPart, path::Path,
 };
-use crate::{GetOptions, PutPayload};
+use crate::{CopyMode, CopyOptions, GetOptions, PutPayload};
 
 /// A specialized `Error` for in-memory object store-related errors
 #[derive(Debug, thiserror::Error)]
@@ -391,24 +391,30 @@ impl ObjectStore for InMemory {
         })
     }
 
-    async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        let entry = self.entry(from)?;
-        self.storage
-            .write()
-            .insert(to, entry.data, entry.attributes);
-        Ok(())
-    }
+    async fn copy_opts(&self, from: &Path, to: &Path, options: CopyOptions) -> Result<()> {
+        let CopyOptions {
+            mode,
+            extensions: _,
+        } = options;
 
-    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
         let entry = self.entry(from)?;
         let mut storage = self.storage.write();
-        if storage.map.contains_key(to) {
-            return Err(Error::AlreadyExists {
-                path: to.to_string(),
+
+        match mode {
+            CopyMode::Overwrite => {
+                storage.insert(to, entry.data, entry.attributes);
             }
-            .into());
+            CopyMode::Create => {
+                if storage.map.contains_key(to) {
+                    return Err(Error::AlreadyExists {
+                        path: to.to_string(),
+                    }
+                    .into());
+                }
+                storage.insert(to, entry.data, entry.attributes);
+            }
         }
-        storage.insert(to, entry.data, entry.attributes);
+
         Ok(())
     }
 }

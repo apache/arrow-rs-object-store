@@ -40,6 +40,7 @@ use crate::{
     path::{Path, absolute_path_to_url},
     util::InvalidGetRange,
 };
+use crate::{CopyMode, CopyOptions};
 
 /// A specialized `Error` for filesystem object store-related errors
 #[derive(Debug, thiserror::Error)]
@@ -189,7 +190,7 @@ impl From<Error> for super::Error {
 ///
 /// # Cross-Filesystem Copy
 ///
-/// [`LocalFileSystem::copy`] is implemented using [`std::fs::hard_link`], and therefore
+/// [`LocalFileSystem::copy_opts`] is implemented using [`std::fs::hard_link`], and therefore
 /// does not support copying across filesystem boundaries.
 ///
 #[derive(Debug)]
@@ -533,38 +534,80 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
+    async fn copy_opts(&self, from: &Path, to: &Path, options: CopyOptions) -> Result<()> {
+        let CopyOptions {
+            mode,
+            extensions: _,
+        } = options;
+
         let from = self.path_to_filesystem(from)?;
         let to = self.path_to_filesystem(to)?;
-        let mut id = 0;
-        // In order to make this atomic we:
-        //
-        // - hard link to a hidden temporary file
-        // - atomically rename this temporary file into place
-        //
-        // This is necessary because hard_link returns an error if the destination already exists
-        maybe_spawn_blocking(move || {
-            loop {
-                let staged = staged_upload_path(&to, &id.to_string());
-                match std::fs::hard_link(&from, &staged) {
-                    Ok(_) => {
-                        return std::fs::rename(&staged, &to).map_err(|source| {
-                            let _ = std::fs::remove_file(&staged); // Attempt to clean up
-                            Error::UnableToCopyFile { from, to, source }.into()
-                        });
+
+        match mode {
+            CopyMode::Overwrite => {
+                let mut id = 0;
+                // In order to make this atomic we:
+                //
+                // - hard link to a hidden temporary file
+                // - atomically rename this temporary file into place
+                //
+                // This is necessary because hard_link returns an error if the destination already exists
+                maybe_spawn_blocking(move || {
+                    loop {
+                        let staged = staged_upload_path(&to, &id.to_string());
+                        match std::fs::hard_link(&from, &staged) {
+                            Ok(_) => {
+                                return std::fs::rename(&staged, &to).map_err(|source| {
+                                    let _ = std::fs::remove_file(&staged); // Attempt to clean up
+                                    Error::UnableToCopyFile { from, to, source }.into()
+                                });
+                            }
+                            Err(source) => match source.kind() {
+                                ErrorKind::AlreadyExists => id += 1,
+                                ErrorKind::NotFound => match from.exists() {
+                                    true => create_parent_dirs(&to, source)?,
+                                    false => {
+                                        return Err(Error::NotFound { path: from, source }.into());
+                                    }
+                                },
+                                _ => {
+                                    return Err(Error::UnableToCopyFile { from, to, source }.into());
+                                }
+                            },
+                        }
                     }
-                    Err(source) => match source.kind() {
-                        ErrorKind::AlreadyExists => id += 1,
-                        ErrorKind::NotFound => match from.exists() {
-                            true => create_parent_dirs(&to, source)?,
-                            false => return Err(Error::NotFound { path: from, source }.into()),
-                        },
-                        _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
-                    },
-                }
+                })
+                .await
             }
-        })
-        .await
+            CopyMode::Create => {
+                maybe_spawn_blocking(move || {
+                    loop {
+                        match std::fs::hard_link(&from, &to) {
+                            Ok(_) => return Ok(()),
+                            Err(source) => match source.kind() {
+                                ErrorKind::AlreadyExists => {
+                                    return Err(Error::AlreadyExists {
+                                        path: to.to_str().unwrap().to_string(),
+                                        source,
+                                    }
+                                    .into());
+                                }
+                                ErrorKind::NotFound => match from.exists() {
+                                    true => create_parent_dirs(&to, source)?,
+                                    false => {
+                                        return Err(Error::NotFound { path: from, source }.into());
+                                    }
+                                },
+                                _ => {
+                                    return Err(Error::UnableToCopyFile { from, to, source }.into());
+                                }
+                            },
+                        }
+                    }
+                })
+                .await
+            }
+        }
     }
 
     async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
@@ -575,34 +618,6 @@ impl ObjectStore for LocalFileSystem {
                 match std::fs::rename(&from, &to) {
                     Ok(_) => return Ok(()),
                     Err(source) => match source.kind() {
-                        ErrorKind::NotFound => match from.exists() {
-                            true => create_parent_dirs(&to, source)?,
-                            false => return Err(Error::NotFound { path: from, source }.into()),
-                        },
-                        _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
-                    },
-                }
-            }
-        })
-        .await
-    }
-
-    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        let from = self.path_to_filesystem(from)?;
-        let to = self.path_to_filesystem(to)?;
-
-        maybe_spawn_blocking(move || {
-            loop {
-                match std::fs::hard_link(&from, &to) {
-                    Ok(_) => return Ok(()),
-                    Err(source) => match source.kind() {
-                        ErrorKind::AlreadyExists => {
-                            return Err(Error::AlreadyExists {
-                                path: to.to_str().unwrap().to_string(),
-                                source,
-                            }
-                            .into());
-                        }
                         ErrorKind::NotFound => match from.exists() {
                             true => create_parent_dirs(&to, source)?,
                             false => return Err(Error::NotFound { path: from, source }.into()),

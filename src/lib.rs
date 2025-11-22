@@ -890,7 +890,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// # use futures::stream::{BoxStream, StreamExt};
     /// # use object_store::path::Path;
     /// # use object_store::{
-    /// #     GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    /// #     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
     /// #     PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
     /// # };
     /// # use std::fmt;
@@ -969,11 +969,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// #         todo!()
     /// #     }
     /// #
-    /// #     async fn copy(&self, _: &Path, _: &Path) -> Result<()> {
-    /// #         todo!()
-    /// #     }
-    /// #
-    /// #     async fn copy_if_not_exists(&self, _: &Path, _: &Path) -> Result<()> {
+    /// #     async fn copy_opts(&self, _: &Path, _: &Path, _: CopyOptions) -> Result<()> {
     /// #         todo!()
     /// #     }
     /// # }
@@ -1033,9 +1029,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult>;
 
     /// Copy an object from one path to another in the same object store.
-    ///
-    /// If there exists an object at the destination, it will be overwritten.
-    async fn copy(&self, from: &Path, to: &Path) -> Result<()>;
+    async fn copy_opts(&self, from: &Path, to: &Path, options: CopyOptions) -> Result<()>;
 
     /// Move an object from one path to another in the same object store.
     ///
@@ -1047,15 +1041,6 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
         self.copy(from, to).await?;
         self.delete(from).await
     }
-
-    /// Copy an object from one path to another, only if destination is empty.
-    ///
-    /// Will return an error if the destination already has an object.
-    ///
-    /// Performs an atomic operation if the underlying object storage supports it.
-    /// If atomic operations are not supported by the underlying object storage (like S3)
-    /// it will return an error.
-    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()>;
 
     /// Move an object from one path to another in the same object store.
     ///
@@ -1127,16 +1112,12 @@ macro_rules! as_ref_impl {
                 self.as_ref().list_with_delimiter(prefix).await
             }
 
-            async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-                self.as_ref().copy(from, to).await
+            async fn copy_opts(&self, from: &Path, to: &Path, options: CopyOptions) -> Result<()> {
+                self.as_ref().copy_opts(from, to, options).await
             }
 
             async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
                 self.as_ref().rename(from, to).await
-            }
-
-            async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-                self.as_ref().copy_if_not_exists(from, to).await
             }
 
             async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
@@ -1243,6 +1224,20 @@ pub trait ObjectStoreExt: ObjectStore {
 
     /// Return the metadata for the specified location
     fn head(&self, location: &Path) -> impl Future<Output = Result<ObjectMeta>>;
+
+    /// Copy an object from one path to another in the same object store.
+    ///
+    /// If there exists an object at the destination, it will be overwritten.
+    fn copy(&self, from: &Path, to: &Path) -> impl Future<Output = Result<()>>;
+
+    /// Copy an object from one path to another, only if destination is empty.
+    ///
+    /// Will return an error if the destination already has an object.
+    ///
+    /// Performs an atomic operation if the underlying object storage supports it.
+    /// If atomic operations are not supported by the underlying object storage (like S3)
+    /// it will return an error.
+    fn copy_if_not_exists(&self, from: &Path, to: &Path) -> impl Future<Output = Result<()>>;
 }
 
 impl<T> ObjectStoreExt for T
@@ -1271,6 +1266,16 @@ where
     async fn head(&self, location: &Path) -> Result<ObjectMeta> {
         let options = GetOptions::new().with_head(true);
         Ok(self.get_opts(location, options).await?.meta)
+    }
+
+    async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
+        let options = CopyOptions::new().with_mode(CopyMode::Overwrite);
+        self.copy_opts(from, to, options).await
+    }
+
+    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+        let options = CopyOptions::new().with_mode(CopyMode::Create);
+        self.copy_opts(from, to, options).await
     }
 }
 
@@ -1633,7 +1638,7 @@ pub struct PutOptions {
     ///
     /// These extensions are ignored entirely by backends offered through this crate.
     ///
-    /// They are also eclused from [`PartialEq`] and [`Eq`].
+    /// They are also excluded from [`PartialEq`] and [`Eq`].
     pub extensions: Extensions,
 }
 
@@ -1705,7 +1710,7 @@ pub struct PutMultipartOptions {
     ///
     /// These extensions are ignored entirely by backends offered through this crate.
     ///
-    /// They are also eclused from [`PartialEq`] and [`Eq`].
+    /// They are also excluded from [`PartialEq`] and [`Eq`].
     pub extensions: Extensions,
 }
 
@@ -1755,6 +1760,73 @@ pub struct PutResult {
     /// A version indicator for the newly created object
     pub version: Option<String>,
 }
+
+/// Configure preconditions for the copy operation
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CopyMode {
+    /// Perform an atomic write operation, overwriting any object present at the provided path
+    #[default]
+    Overwrite,
+    /// Perform an atomic write operation, returning [`Error::AlreadyExists`] if an
+    /// object already exists at the provided path
+    Create,
+}
+
+/// Options for a copy request
+#[derive(Debug, Clone, Default)]
+pub struct CopyOptions {
+    /// Configure the [`CopyMode`] for this operation
+    pub mode: CopyMode,
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to pass context-specific information (like tracing spans) via trait methods.
+    ///
+    /// These extensions are ignored entirely by backends offered through this crate.
+    ///
+    /// They are also excluded from [`PartialEq`] and [`Eq`].
+    pub extensions: Extensions,
+}
+
+impl CopyOptions {
+    /// Create a new [`CopyOptions`]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the `mode.
+    ///
+    /// See [`CopyOptions::mode`].
+    #[must_use]
+    pub fn with_mode(mut self, mode: CopyMode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Sets the `extensions`.
+    ///
+    /// See [`CopyOptions::extensions`].
+    #[must_use]
+    pub fn with_extensions(mut self, extensions: Extensions) -> Self {
+        self.extensions = extensions;
+        self
+    }
+}
+
+impl PartialEq<Self> for CopyOptions {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            mode,
+            extensions: _,
+        } = self;
+        let Self {
+            mode: mode_other,
+            extensions: _,
+        } = other;
+
+        mode == mode_other
+    }
+}
+
+impl Eq for CopyOptions {}
 
 /// A specialized `Result` for object store-related errors
 pub type Result<T, E = Error> = std::result::Result<T, E>;

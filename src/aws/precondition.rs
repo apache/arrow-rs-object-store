@@ -19,9 +19,9 @@ use crate::config::Parse;
 
 use itertools::Itertools;
 
-/// Configure how to provide [`ObjectStore::copy_if_not_exists`] for [`AmazonS3`].
+/// Configure how to provide [`CopyMode::Create`] for [`AmazonS3`].
 ///
-/// [`ObjectStore::copy_if_not_exists`]: crate::ObjectStore::copy_if_not_exists
+/// [`CopyMode::Create`]: crate::CopyMode::Create
 /// [`AmazonS3`]: super::AmazonS3
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -29,7 +29,7 @@ pub enum S3CopyIfNotExists {
     /// Some S3-compatible stores, such as Cloudflare R2, support copy if not exists
     /// semantics through custom headers.
     ///
-    /// If set, [`ObjectStore::copy_if_not_exists`] will perform a normal copy operation
+    /// If set, [`CopyMode::Create`] will perform a normal copy operation
     /// with the provided header pair, and expect the store to fail with `412 Precondition Failed`
     /// if the destination file already exists.
     ///
@@ -38,7 +38,7 @@ pub enum S3CopyIfNotExists {
     /// For example `header: cf-copy-destination-if-none-match: *`, would set
     /// the header `cf-copy-destination-if-none-match` to `*`
     ///
-    /// [`ObjectStore::copy_if_not_exists`]: crate::ObjectStore::copy_if_not_exists
+    /// [`CopyMode::Create`]: crate::CopyMode::Create
     Header(String, String),
     /// The same as [`S3CopyIfNotExists::Header`] but allows custom status code checking, for object stores that return values
     /// other than 412.
