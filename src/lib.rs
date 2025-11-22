@@ -62,6 +62,11 @@
 //! [ACID]: https://en.wikipedia.org/wiki/ACID
 //! [S3]: https://aws.amazon.com/s3/
 //!
+//! # APIs
+//!
+//! * [`ObjectStore`]: Core object store API
+//! * [`ObjectStoreExt`]: (*New in 0.13.0*) Extension trait with additional convenience methods
+//!
 //! # Available [`ObjectStore`] Implementations
 //!
 //! By default, this crate provides the following implementations:
@@ -615,66 +620,31 @@ pub type MultipartId = String;
 
 /// Universal API to multiple object store services.
 ///
-/// For more convenience methods, check [`ObjectStoreExt`].
+/// See the [module-level documentation](crate) for a high leve overview and
+/// examples. See [`ObjectStoreExt`] for additional convenience methods.
 ///
 /// # Contract
-/// This trait is meant as a contract between object store implementations
-/// (e.g. providers, wrappers) and the `object_store` crate itself and is
+/// This trait is a contract between object store implementations
+/// (e.g. providers, wrappers) and the `object_store` crate itself. It is
 /// intended to be the minimum API required for an object store.
 ///
-/// The [`ObjectStoreExt`] acts as an API/contract between `object_store`
-/// and the store users and provides additional methods that may be simpler to use but overlap
-/// in functionality with [`ObjectStore`].
+/// The [`ObjectStoreExt`] acts as an API/contract between `object_store` and
+/// the store users and provides additional methods that may be simpler to use
+/// but overlap in functionality with [`ObjectStore`].
 ///
-/// # Wrappers
-/// If you wrap an [`ObjectStore`] -- e.g. to add observability -- you SHOULD
-/// implement all trait methods. This ensures that defaults implementations
-/// that are overwritten by the wrapped store are also used by the wrapper.
-/// For example:
+/// # No Default Implementations
 ///
-/// ```ignore
-/// struct MyStore {
-///     ...
-/// }
+/// There are no default implementation for any of the methods in this trait by
+/// design. This was different than in versions prior to `0.13.0`, which had
+/// several default implementations. Default implementations were convenient for
+/// users, but was error-prone as it required implementations of ObjectStore
+/// keep the convenience APIs correctly in sync.
 ///
-/// #[async_trait]
-/// impl ObjectStore for MyStore {
-///     // implement custom ranges handling
-///     async fn get_ranges(
-///         &self,
-///         location: &Path,
-///         ranges: &[Range<u64>],
-///     ) -> Result<Vec<Bytes>> {
-///         ...
-///     }
+/// As of version 0.13.0, all methods on [`ObjectStore`] must be implemented, and
+/// the convenience methods are provided by the [`ObjectStoreExt`] trait as
+/// described above. See [#385] for more details.
 ///
-///     ...
-/// }
-///
-/// struct Wrapper {
-///     inner: Arc<dyn ObjectStore>,
-/// }
-///
-/// #[async_trait]
-/// #[deny(clippy::missing_trait_methods)]
-/// impl ObjectStore for Wrapper {
-///     // If we would not implement this method,
-///     // we would get the trait default and not
-///     // use the actual implementation of `inner`.
-///     async fn get_ranges(
-///         &self,
-///         location: &Path,
-///         ranges: &[Range<u64>],
-///     ) -> Result<Vec<Bytes>> {
-///         ...
-///     }
-///
-///     ...
-/// }
-/// ```
-///
-/// To automatically detect this issue, use
-/// [`#[deny(clippy::missing_trait_methods)]`](https://rust-lang.github.io/rust-clippy/master/index.html#missing_trait_methods).
+/// [#385]: https://github.com/apache/arrow-rs-object-store/issues/385
 #[async_trait]
 pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Save the provided `payload` to `location` with the given options
@@ -1151,7 +1121,9 @@ as_ref_impl!(Box<dyn ObjectStore>);
 
 /// Extension trait for [`ObjectStore`] with convenience functions.
 ///
-/// See "contract" section within the [`ObjectStore`] documentation for more reasoning.
+/// See the [module-level documentation](crate) for a high leve overview and
+/// examples. See "contract" section within the [`ObjectStore`] documentation
+/// for more reasoning.
 ///
 /// # Implementation
 /// You MUST NOT implement this trait yourself. It is automatically implemented for all [`ObjectStore`] implementations.
