@@ -21,14 +21,14 @@ use std::ops::Range;
 use std::{convert::TryInto, sync::Arc};
 
 use crate::multipart::{MultipartStore, PartId};
-use crate::{
-    path::Path, GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
-};
 use crate::{GetOptions, UploadPart};
+use crate::{
+    GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, path::Path,
+};
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{stream::BoxStream, FutureExt, StreamExt};
+use futures::{FutureExt, StreamExt, stream::BoxStream};
 use std::time::Duration;
 
 /// Configuration settings for throttled store
@@ -40,7 +40,7 @@ pub struct ThrottleConfig {
     /// the operation.
     pub wait_delete_per_call: Duration,
 
-    /// Sleep duration for every byte received during [`get`](ThrottledStore::get).
+    /// Sleep duration for every byte received during [`get_opts`](ThrottledStore::get_opts).
     ///
     /// Sleeping is performed after the underlying store returned and only for successful gets. The
     /// sleep duration is additive to [`wait_get_per_call`](Self::wait_get_per_call).
@@ -50,7 +50,7 @@ pub struct ThrottleConfig {
     /// resulting sleep time will be partial as well.
     pub wait_get_per_byte: Duration,
 
-    /// Sleep duration for every call to [`get`](ThrottledStore::get).
+    /// Sleep duration for every call to [`get_opts`](ThrottledStore::get_opts).
     ///
     /// Sleeping is done before the underlying store is called and independently of the success of
     /// the operation. The sleep duration is additive to
@@ -90,7 +90,7 @@ pub struct ThrottleConfig {
     /// [`wait_list_with_delimiter_per_call`](Self::wait_list_with_delimiter_per_call).
     pub wait_list_with_delimiter_per_entry: Duration,
 
-    /// Sleep duration for every call to [`put`](ThrottledStore::put).
+    /// Sleep duration for every call to [`put_opts`](ThrottledStore::put_opts).
     ///
     /// Sleeping is done before the underlying store is called and independently of the success of
     /// the operation.
@@ -147,12 +147,8 @@ impl<T: ObjectStore> std::fmt::Display for ThrottledStore<T> {
 }
 
 #[async_trait]
+#[deny(clippy::missing_trait_methods)]
 impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
-    async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
-        sleep(self.config().wait_put_per_call).await;
-        self.inner.put(location, payload).await
-    }
-
     async fn put_opts(
         &self,
         location: &Path,
@@ -163,34 +159,16 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         self.inner.put_opts(location, payload, opts).await
     }
 
-    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
-        let upload = self.inner.put_multipart(location).await?;
-        Ok(Box::new(ThrottledUpload {
-            upload,
-            sleep: self.config().wait_put_per_call,
-        }))
-    }
-
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
         let upload = self.inner.put_multipart_opts(location, opts).await?;
         Ok(Box::new(ThrottledUpload {
             upload,
             sleep: self.config().wait_put_per_call,
         }))
-    }
-
-    async fn get(&self, location: &Path) -> Result<GetResult> {
-        sleep(self.config().wait_get_per_call).await;
-
-        // need to copy to avoid moving / referencing `self`
-        let wait_get_per_byte = self.config().wait_get_per_byte;
-
-        let result = self.inner.get(location).await?;
-        Ok(throttle_get(result, wait_get_per_byte))
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
@@ -201,17 +179,6 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
 
         let result = self.inner.get_opts(location, options).await?;
         Ok(throttle_get(result, wait_get_per_byte))
-    }
-
-    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
-        let config = self.config();
-
-        let sleep_duration =
-            config.wait_get_per_call + config.wait_get_per_byte * (range.end - range.start) as u32;
-
-        sleep(sleep_duration).await;
-
-        self.inner.get_range(location, range).await
     }
 
     async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
@@ -226,15 +193,23 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         self.inner.get_ranges(location, ranges).await
     }
 
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        sleep(self.config().wait_put_per_call).await;
-        self.inner.head(location).await
-    }
-
     async fn delete(&self, location: &Path) -> Result<()> {
         sleep(self.config().wait_delete_per_call).await;
 
         self.inner.delete(location).await
+    }
+
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
+        // We wait for a certain duration before each delete location.
+        // This may be suboptimal if the inner store implements batch deletes.
+        // But there is no way around unnecessary waits since we do not know
+        // how the inner store implements `delete_stream`.
+        let wait_delete_per_call = self.config().wait_delete_per_call;
+        let locations = throttle_stream(locations, move |_| wait_delete_per_call);
+        self.inner.delete_stream(locations)
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
@@ -404,7 +379,10 @@ impl MultipartUpload for ThrottledUpload {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{integration::*, memory::InMemory, GetResultPayload};
+    #[cfg(target_os = "linux")]
+    use crate::GetResultPayload;
+    use crate::ObjectStoreExt;
+    use crate::{integration::*, memory::InMemory};
     use futures::TryStreamExt;
     use tokio::time::Duration;
     use tokio::time::Instant;
@@ -452,6 +430,21 @@ mod tests {
         assert_bounds!(measure_delete(&store, None).await, 1);
         assert_bounds!(measure_delete(&store, Some(0)).await, 1);
         assert_bounds!(measure_delete(&store, Some(10)).await, 1);
+    }
+
+    #[tokio::test]
+    // macos github runner is so slow it can't complete within WAIT_TIME*2
+    #[cfg(target_os = "linux")]
+    async fn delete_stream_test() {
+        let inner = InMemory::new();
+        let store = ThrottledStore::new(inner, ThrottleConfig::default());
+
+        assert_bounds!(measure_delete_stream(&store, 0).await, 0);
+        assert_bounds!(measure_delete_stream(&store, 10).await, 0);
+
+        store.config_mut(|cfg| cfg.wait_delete_per_call = WAIT_TIME);
+        assert_bounds!(measure_delete_stream(&store, 0).await, 0);
+        assert_bounds!(measure_delete_stream(&store, 10).await, 10);
     }
 
     #[tokio::test]
@@ -557,7 +550,7 @@ mod tests {
         let path = Path::from("foo");
 
         if let Some(n_bytes) = n_bytes {
-            let data: Vec<_> = std::iter::repeat(1u8).take(n_bytes).collect();
+            let data: Vec<_> = std::iter::repeat_n(1u8, n_bytes).collect();
             store.put(&path, data.into()).await.unwrap();
         } else {
             // ensure object is absent
@@ -592,6 +585,26 @@ mod tests {
 
         let t0 = Instant::now();
         store.delete(&path).await.unwrap();
+
+        t0.elapsed()
+    }
+
+    #[allow(dead_code)]
+    async fn measure_delete_stream(store: &ThrottledStore<InMemory>, n_entries: usize) -> Duration {
+        let prefix = place_test_objects(store, n_entries).await;
+
+        // materialize the paths so that the throttle time for listing is not counted
+        let paths = store.list(Some(&prefix)).collect::<Vec<_>>().await;
+        let paths = futures::stream::iter(paths)
+            .map(|x| x.map(|m| m.location))
+            .boxed();
+
+        let t0 = Instant::now();
+        store
+            .delete_stream(paths)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
 
         t0.elapsed()
     }
@@ -649,7 +662,7 @@ mod tests {
     }
 
     async fn measure_put(store: &ThrottledStore<InMemory>, n_bytes: usize) -> Duration {
-        let data: Vec<_> = std::iter::repeat(1u8).take(n_bytes).collect();
+        let data: Vec<_> = std::iter::repeat_n(1u8, n_bytes).collect();
 
         let t0 = Instant::now();
         store.put(&Path::from("foo"), data.into()).await.unwrap();

@@ -19,7 +19,7 @@
 //!
 //! ## Multipart uploads
 //!
-//! Multipart uploads can be initiated with the [ObjectStore::put_multipart] method.
+//! Multipart uploads can be initiated with the [`ObjectStore::put_multipart_opts`] method.
 //!
 //! If the writer fails for any reason, you may have parts uploaded to AWS but not
 //! used that you will be charged for. [`MultipartUpload::abort`] may be invoked to drop
@@ -37,15 +37,15 @@ use std::{sync::Arc, time::Duration};
 use url::Url;
 
 use crate::aws::client::{CompleteMultipartMode, PutPartPayload, RequestError, S3Client};
+use crate::client::CredentialProvider;
 use crate::client::get::GetClientExt;
 use crate::client::list::{ListClient, ListClientExt};
-use crate::client::CredentialProvider;
 use crate::multipart::{MultipartStore, PartId};
 use crate::signer::Signer;
 use crate::util::STRICT_ENCODE_SET;
 use crate::{
     Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
-    ObjectStore, Path, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
+    ObjectStore, Path, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
     UploadPart,
 };
 
@@ -231,7 +231,7 @@ impl ObjectStore for AmazonS3 {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
         let upload_id = self.client.create_multipart(location, opts).await?;
 
@@ -255,20 +255,24 @@ impl ObjectStore for AmazonS3 {
         Ok(())
     }
 
-    fn delete_stream<'a>(
-        &'a self,
-        locations: BoxStream<'a, Result<Path>>,
-    ) -> BoxStream<'a, Result<Path>> {
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
+        let client = Arc::clone(&self.client);
         locations
             .try_chunks(1_000)
-            .map(move |locations| async {
-                // Early return the error. We ignore the paths that have already been
-                // collected into the chunk.
-                let locations = locations.map_err(|e| e.1)?;
-                self.client
-                    .bulk_delete_request(locations)
-                    .await
-                    .map(futures::stream::iter)
+            .map(move |locations| {
+                let client = Arc::clone(&client);
+                async move {
+                    // Early return the error. We ignore the paths that have already been
+                    // collected into the chunk.
+                    let locations = locations.map_err(|e| e.1)?;
+                    client
+                        .bulk_delete_request(locations)
+                        .await
+                        .map(futures::stream::iter)
+                }
             })
             .buffered(20)
             .try_flatten()
@@ -317,7 +321,7 @@ impl ObjectStore for AmazonS3 {
             Some(S3CopyIfNotExists::Multipart) => {
                 let upload_id = self
                     .client
-                    .create_multipart(to, PutMultipartOpts::default())
+                    .create_multipart(to, PutMultipartOptions::default())
                     .await?;
 
                 let res = async {
@@ -358,7 +362,7 @@ impl ObjectStore for AmazonS3 {
             None => {
                 return Err(Error::NotSupported {
                     source: "S3 does not support copy-if-not-exists".to_string().into(),
-                })
+                });
             }
         };
 
@@ -442,7 +446,7 @@ impl MultipartUpload for S3MultiPartUpload {
 impl MultipartStore for AmazonS3 {
     async fn create_multipart(&self, path: &Path) -> Result<MultipartId> {
         self.client
-            .create_multipart(path, PutMultipartOpts::default())
+            .create_multipart(path, PutMultipartOptions::default())
             .await
     }
 
@@ -493,14 +497,15 @@ impl PaginatedListStore for AmazonS3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ClientOptions;
+    use crate::ObjectStoreExt;
+    use crate::client::SpawnedReqwestConnector;
     use crate::client::get::GetClient;
     use crate::client::retry::RetryContext;
-    use crate::client::SpawnedReqwestConnector;
     use crate::integration::*;
     use crate::tests::*;
-    use crate::ClientOptions;
-    use base64::prelude::BASE64_STANDARD;
     use base64::Engine;
+    use base64::prelude::BASE64_STANDARD;
     use http::HeaderMap;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
@@ -518,7 +523,7 @@ mod tests {
 
         let str = "test.bin";
         let path = Path::parse(str).unwrap();
-        let opts = PutMultipartOpts::default();
+        let opts = PutMultipartOptions::default();
         let mut upload = store.put_multipart_opts(&path, opts).await.unwrap();
 
         upload
@@ -549,7 +554,7 @@ mod tests {
 
         let str = "test.bin";
         let path = Path::parse(str).unwrap();
-        let opts = PutMultipartOpts::default();
+        let opts = PutMultipartOptions::default();
         let mut upload = store.put_multipart_opts(&path, opts).await.unwrap();
 
         upload

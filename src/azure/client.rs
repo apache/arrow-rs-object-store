@@ -20,25 +20,25 @@ use crate::azure::credential::*;
 use crate::azure::{AzureCredentialProvider, STORE};
 use crate::client::builder::HttpRequestBuilder;
 use crate::client::get::GetClient;
-use crate::client::header::{get_put_result, HeaderConfig};
+use crate::client::header::{HeaderConfig, get_put_result};
 use crate::client::list::ListClient;
 use crate::client::retry::{RetryContext, RetryExt};
 use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpRequest, HttpResponse};
 use crate::list::{PaginatedListOptions, PaginatedListResult};
 use crate::multipart::PartId;
-use crate::util::{deserialize_rfc1123, GetRange};
+use crate::util::{GetRange, deserialize_rfc1123};
 use crate::{
     Attribute, Attributes, ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode,
-    PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, RetryConfig, TagSet,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, RetryConfig, TagSet,
 };
 use async_trait::async_trait;
-use base64::prelude::{BASE64_STANDARD, BASE64_STANDARD_NO_PAD};
 use base64::Engine;
+use base64::prelude::{BASE64_STANDARD, BASE64_STANDARD_NO_PAD};
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use http::{
-    header::{HeaderMap, HeaderValue, CONTENT_LENGTH, CONTENT_TYPE, IF_MATCH, IF_NONE_MATCH},
     HeaderName, Method,
+    header::{CONTENT_LENGTH, CONTENT_TYPE, HeaderMap, HeaderValue, IF_MATCH, IF_NONE_MATCH},
 };
 use rand::Rng as _;
 use serde::{Deserialize, Serialize};
@@ -48,6 +48,7 @@ use std::time::Duration;
 use url::Url;
 
 const VERSION_HEADER: &str = "x-ms-version-id";
+const ACCESS_TIER_HEADER: &str = "x-ms-access-tier";
 const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-ms-meta-";
 static MS_CACHE_CONTROL: HeaderName = HeaderName::from_static("x-ms-blob-cache-control");
 static MS_CONTENT_TYPE: HeaderName = HeaderName::from_static("x-ms-blob-content-type");
@@ -242,8 +243,9 @@ impl PutRequest<'_> {
                     has_content_type = true;
                     builder.header(&MS_CONTENT_TYPE, v.as_ref())
                 }
+                Attribute::StorageClass => builder.header(ACCESS_TIER_HEADER, v.as_ref()),
                 Attribute::Metadata(k_suffix) => builder.header(
-                    &format!("{}{}", USER_DEFINED_METADATA_HEADER_PREFIX, k_suffix),
+                    &format!("{USER_DEFINED_METADATA_HEADER_PREFIX}{k_suffix}"),
                     v.as_ref(),
                 ),
             };
@@ -350,7 +352,7 @@ fn serialize_part_delete_request(
 
     // Encode the subrequest request-line
     extend(dst, b"DELETE ");
-    extend(dst, format!("/{} ", relative_url).as_bytes());
+    extend(dst, format!("/{relative_url} ").as_bytes());
     extend(dst, b"HTTP/1.1");
     extend(dst, b"\r\n");
 
@@ -495,7 +497,7 @@ async fn parse_blob_batch_delete_body(
                     code: code.to_string(),
                     reason: part_response.reason.unwrap_or_default().to_string(),
                 }
-                .into())
+                .into());
             }
             _ => return Err(invalid_response("missing part response status code").into()),
         }
@@ -597,9 +599,9 @@ impl AzureClient {
         &self,
         path: &Path,
         parts: Vec<PartId>,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<PutResult> {
-        let PutMultipartOpts {
+        let PutMultipartOptions {
             tags,
             attributes,
             extensions,
@@ -716,7 +718,7 @@ impl AzureClient {
             .query(&[("restype", "container"), ("comp", "batch")])
             .header(
                 CONTENT_TYPE,
-                HeaderValue::from_str(format!("multipart/mixed; boundary={}", boundary).as_str())
+                HeaderValue::from_str(format!("multipart/mixed; boundary={boundary}").as_str())
                     .unwrap(),
             )
             .header(CONTENT_LENGTH, HeaderValue::from(body_bytes.len()))

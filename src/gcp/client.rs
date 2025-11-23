@@ -17,7 +17,7 @@
 
 use crate::client::builder::HttpRequestBuilder;
 use crate::client::get::GetClient;
-use crate::client::header::{get_put_result, get_version, HeaderConfig};
+use crate::client::header::{HeaderConfig, get_put_result, get_version};
 use crate::client::list::ListClient;
 use crate::client::retry::{RetryContext, RetryExt};
 use crate::client::s3::{
@@ -32,25 +32,26 @@ use crate::multipart::PartId;
 use crate::path::Path;
 use crate::util::hex_encode;
 use crate::{
-    Attribute, Attributes, ClientOptions, GetOptions, MultipartId, PutMode, PutMultipartOpts,
+    Attribute, Attributes, ClientOptions, GetOptions, MultipartId, PutMode, PutMultipartOptions,
     PutOptions, PutPayload, PutResult, Result, RetryConfig,
 };
 use async_trait::async_trait;
-use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
 use bytes::Buf;
 use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH,
     CONTENT_TYPE,
 };
 use http::{HeaderName, Method, StatusCode};
-use percent_encoding::{percent_encode, utf8_percent_encode, NON_ALPHANUMERIC};
+use percent_encoding::{NON_ALPHANUMERIC, percent_encode, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 const VERSION_HEADER: &str = "x-goog-generation";
 const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
 const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-goog-meta-";
+const STORAGE_CLASS: &str = "x-goog-storage-class";
 
 static VERSION_MATCH: HeaderName = HeaderName::from_static("x-goog-if-generation-match");
 
@@ -201,8 +202,9 @@ impl Request<'_> {
                     has_content_type = true;
                     builder.header(CONTENT_TYPE, v.as_ref())
                 }
+                Attribute::StorageClass => builder.header(STORAGE_CLASS, v.as_ref()),
                 Attribute::Metadata(k_suffix) => builder.header(
-                    &format!("{}{}", USER_DEFINED_METADATA_HEADER_PREFIX, k_suffix),
+                    &format!("{USER_DEFINED_METADATA_HEADER_PREFIX}{k_suffix}"),
                     v.as_ref(),
                 ),
             };
@@ -327,8 +329,7 @@ impl GoogleCloudStorageClient {
         };
 
         let url = format!(
-            "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{}:signBlob",
-            client_email
+            "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/{client_email}:signBlob"
         );
 
         let response = self
@@ -444,9 +445,9 @@ impl GoogleCloudStorageClient {
     pub(crate) async fn multipart_initiate(
         &self,
         path: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<MultipartId> {
-        let PutMultipartOpts {
+        let PutMultipartOptions {
             // not supported by GCP
             tags: _,
             attributes,

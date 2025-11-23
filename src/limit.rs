@@ -19,7 +19,7 @@
 
 use crate::{
     BoxStream, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, Path, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, StreamExt,
+    ObjectStore, Path, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, StreamExt,
     UploadPart,
 };
 use async_trait::async_trait;
@@ -70,12 +70,8 @@ impl<T: ObjectStore> std::fmt::Display for LimitStore<T> {
 }
 
 #[async_trait]
+#[deny(clippy::missing_trait_methods)]
 impl<T: ObjectStore> ObjectStore for LimitStore<T> {
-    async fn put(&self, location: &Path, payload: PutPayload) -> Result<PutResult> {
-        let _permit = self.semaphore.acquire().await.unwrap();
-        self.inner.put(location, payload).await
-    }
-
     async fn put_opts(
         &self,
         location: &Path,
@@ -85,18 +81,11 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.put_opts(location, payload, opts).await
     }
-    async fn put_multipart(&self, location: &Path) -> Result<Box<dyn MultipartUpload>> {
-        let upload = self.inner.put_multipart(location).await?;
-        Ok(Box::new(LimitUpload {
-            semaphore: Arc::clone(&self.semaphore),
-            upload,
-        }))
-    }
 
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
         let upload = self.inner.put_multipart_opts(location, opts).await?;
         Ok(Box::new(LimitUpload {
@@ -105,21 +94,10 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         }))
     }
 
-    async fn get(&self, location: &Path) -> Result<GetResult> {
-        let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
-        let r = self.inner.get(location).await?;
-        Ok(permit_get_result(r, permit))
-    }
-
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
         let r = self.inner.get_opts(location, options).await?;
         Ok(permit_get_result(r, permit))
-    }
-
-    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
-        let _permit = self.semaphore.acquire().await.unwrap();
-        self.inner.get_range(location, range).await
     }
 
     async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
@@ -127,20 +105,15 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         self.inner.get_ranges(location, ranges).await
     }
 
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        let _permit = self.semaphore.acquire().await.unwrap();
-        self.inner.head(location).await
-    }
-
     async fn delete(&self, location: &Path) -> Result<()> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.delete(location).await
     }
 
-    fn delete_stream<'a>(
-        &'a self,
-        locations: BoxStream<'a, Result<Path>>,
-    ) -> BoxStream<'a, Result<Path>> {
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
         self.inner.delete_stream(locations)
     }
 
@@ -276,10 +249,10 @@ impl MultipartUpload for LimitUpload {
 
 #[cfg(test)]
 mod tests {
+    use crate::ObjectStore;
     use crate::integration::*;
     use crate::limit::LimitStore;
     use crate::memory::InMemory;
-    use crate::ObjectStore;
     use futures::stream::StreamExt;
     use std::pin::Pin;
     use std::time::Duration;

@@ -49,7 +49,7 @@ impl ObjectStore for MyStore {
     async fn put_multipart_opts(
         &self,
         _location: &Path,
-        _opts: PutMultipartOpts,
+        _opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
         todo!()
     }
@@ -59,6 +59,13 @@ impl ObjectStore for MyStore {
     }
 
     async fn delete(&self, _: &Path) -> Result<()> {
+        todo!()
+    }
+
+    fn delete_stream(
+        &self,
+        _: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
         todo!()
     }
 
@@ -115,11 +122,36 @@ async fn test_get_opts_over_range() {
     let expected = Bytes::from_static(b"hello world");
     store.put(&path, expected.clone().into()).await.unwrap();
 
-    let opts = GetOptions {
-        range: Some(GetRange::Bounded(0..(expected.len() as u64 * 2))),
-        ..Default::default()
-    };
+    let opts =
+        GetOptions::new().with_range(Some(GetRange::Bounded(0..(expected.len() as u64 * 2))));
     let res = store.get_opts(&path, opts).await.unwrap();
     assert_eq!(res.range, 0..expected.len() as u64);
     assert_eq!(res.bytes().await.unwrap(), expected);
+}
+
+#[tokio::test]
+async fn test_get_range_opts_with_etag() {
+    let tmp = tempdir().unwrap();
+    let store = MyStore(LocalFileSystem::new_with_prefix(tmp.path()).unwrap());
+    let path = Path::from("foo");
+
+    let expected = Bytes::from_static(b"hello world");
+    store.put(&path, expected.clone().into()).await.unwrap();
+
+    // pull the file to get the etag
+    let file = store.get(&path).await.unwrap();
+    let etag = file.meta.e_tag.clone().unwrap();
+
+    let opts = GetOptions::new()
+        .with_if_match(Some(etag))
+        .with_range(Some(0..(expected.len() as u64 * 2)));
+    let res = store.get_opts(&path, opts).await.unwrap();
+    assert_eq!(res.bytes().await.unwrap(), expected);
+
+    // pulling a file with an invalid etag should fail
+    let opts = GetOptions::new()
+        .with_if_match(Some("invalid-etag"))
+        .with_range(Some(0..(expected.len() as u64 * 2)));
+    let err = store.get_opts(&path, opts).await;
+    assert!(err.is_err());
 }

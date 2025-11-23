@@ -29,14 +29,14 @@ use crate::multipart::MultipartStore;
 use crate::path::Path;
 use crate::{
     Attribute, Attributes, DynObjectStore, Error, GetOptions, GetRange, MultipartUpload,
-    ObjectStore, PutMode, PutPayload, UpdateVersion, WriteMultipart,
+    ObjectStore, ObjectStoreExt, PutMode, PutPayload, UpdateVersion, WriteMultipart,
 };
 use bytes::Bytes;
 use futures::stream::FuturesUnordered;
 use futures::{StreamExt, TryStreamExt};
-use rand::distr::Alphanumeric;
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 use std::collections::HashSet;
+use std::slice;
 
 pub(crate) async fn flatten_list_stream(
     storage: &DynObjectStore,
@@ -68,11 +68,11 @@ pub async fn put_get_delete_list(storage: &DynObjectStore) {
 
     // List everything
     let content_list = flatten_list_stream(storage, None).await.unwrap();
-    assert_eq!(content_list, &[location.clone()]);
+    assert_eq!(content_list, slice::from_ref(&location));
 
     // Should behave the same as no prefix
     let content_list = flatten_list_stream(storage, Some(&root)).await.unwrap();
-    assert_eq!(content_list, &[location.clone()]);
+    assert_eq!(content_list, slice::from_ref(&location));
 
     // List with delimiter
     let result = storage.list_with_delimiter(None).await.unwrap();
@@ -97,7 +97,7 @@ pub async fn put_get_delete_list(storage: &DynObjectStore) {
     // List everything starting with a prefix that should return results
     let prefix = Path::from("test_dir");
     let content_list = flatten_list_stream(storage, Some(&prefix)).await.unwrap();
-    assert_eq!(content_list, &[location.clone()]);
+    assert_eq!(content_list, slice::from_ref(&location));
 
     // List everything starting with a prefix that shouldn't return results
     let prefix = Path::from("something");
@@ -114,10 +114,7 @@ pub async fn put_get_delete_list(storage: &DynObjectStore) {
     let bytes = range_result.unwrap();
     assert_eq!(bytes, data.slice(range.start as usize..range.end as usize));
 
-    let opts = GetOptions {
-        range: Some(GetRange::Bounded(2..5)),
-        ..Default::default()
-    };
+    let opts = GetOptions::new().with_range(Some(GetRange::Bounded(2..5)));
     let result = storage.get_opts(&location, opts).await.unwrap();
     // Data is `"arbitrary data"`, length 14 bytes
     assert_eq!(result.meta.size, 14); // Should return full object size (#5272)
@@ -131,20 +128,14 @@ pub async fn put_get_delete_list(storage: &DynObjectStore) {
     // Should be a non-fatal error
     out_of_range_result.unwrap_err();
 
-    let opts = GetOptions {
-        range: Some(GetRange::Bounded(2..100)),
-        ..Default::default()
-    };
+    let opts = GetOptions::new().with_range(Some(GetRange::Bounded(2..100)));
     let result = storage.get_opts(&location, opts).await.unwrap();
     assert_eq!(result.range, 2..14);
     assert_eq!(result.meta.size, 14);
     let bytes = result.bytes().await.unwrap();
     assert_eq!(bytes, b"bitrary data".as_ref());
 
-    let opts = GetOptions {
-        range: Some(GetRange::Suffix(2)),
-        ..Default::default()
-    };
+    let opts = GetOptions::new().with_range(Some(GetRange::Suffix(2)));
     match storage.get_opts(&location, opts).await {
         Ok(result) => {
             assert_eq!(result.range, 12..14);
@@ -156,10 +147,7 @@ pub async fn put_get_delete_list(storage: &DynObjectStore) {
         Err(e) => panic!("{e}"),
     }
 
-    let opts = GetOptions {
-        range: Some(GetRange::Suffix(100)),
-        ..Default::default()
-    };
+    let opts = GetOptions::new().with_range(Some(GetRange::Suffix(100)));
     match storage.get_opts(&location, opts).await {
         Ok(result) => {
             assert_eq!(result.range, 0..14);
@@ -171,20 +159,14 @@ pub async fn put_get_delete_list(storage: &DynObjectStore) {
         Err(e) => panic!("{e}"),
     }
 
-    let opts = GetOptions {
-        range: Some(GetRange::Offset(3)),
-        ..Default::default()
-    };
+    let opts = GetOptions::new().with_range(Some(GetRange::Offset(3)));
     let result = storage.get_opts(&location, opts).await.unwrap();
     assert_eq!(result.range, 3..14);
     assert_eq!(result.meta.size, 14);
     let bytes = result.bytes().await.unwrap();
     assert_eq!(bytes, b"itrary data".as_ref());
 
-    let opts = GetOptions {
-        range: Some(GetRange::Offset(100)),
-        ..Default::default()
-    };
+    let opts = GetOptions::new().with_range(Some(GetRange::Offset(100)));
     storage.get_opts(&location, opts).await.unwrap_err();
 
     let ranges = vec![0..1, 2..3, 0..5];
@@ -483,6 +465,10 @@ pub async fn put_get_attributes(integration: &dyn ObjectStore) {
         (Attribute::ContentLanguage, "en-US"),
         (Attribute::ContentType, "text/html; charset=utf-8"),
         (Attribute::Metadata("test_key".into()), "test_value"),
+        (
+            Attribute::Metadata("key_with_spaces".into()),
+            "hello   world",
+        ),
     ]);
 
     let path = Path::from("attributes");
@@ -516,76 +502,55 @@ pub async fn get_opts(storage: &dyn ObjectStore) {
     storage.put(&path, "foo".into()).await.unwrap();
     let meta = storage.head(&path).await.unwrap();
 
-    let options = GetOptions {
-        if_unmodified_since: Some(meta.last_modified),
-        ..GetOptions::default()
-    };
+    let options = GetOptions::new().with_if_unmodified_since(Some(meta.last_modified));
     match storage.get_opts(&path, options).await {
         Ok(_) | Err(Error::NotSupported { .. }) => {}
         Err(e) => panic!("{e}"),
     }
 
-    let options = GetOptions {
-        if_unmodified_since: Some(meta.last_modified + chrono::Duration::try_hours(10).unwrap()),
-        ..GetOptions::default()
-    };
+    let options = GetOptions::new().with_if_unmodified_since(Some(
+        meta.last_modified + chrono::Duration::try_hours(10).unwrap(),
+    ));
     match storage.get_opts(&path, options).await {
         Ok(_) | Err(Error::NotSupported { .. }) => {}
         Err(e) => panic!("{e}"),
     }
 
-    let options = GetOptions {
-        if_unmodified_since: Some(meta.last_modified - chrono::Duration::try_hours(10).unwrap()),
-        ..GetOptions::default()
-    };
+    let options = GetOptions::new().with_if_unmodified_since(Some(
+        meta.last_modified - chrono::Duration::try_hours(10).unwrap(),
+    ));
     match storage.get_opts(&path, options).await {
         Err(Error::Precondition { .. } | Error::NotSupported { .. }) => {}
         d => panic!("{d:?}"),
     }
 
-    let options = GetOptions {
-        if_modified_since: Some(meta.last_modified),
-        ..GetOptions::default()
-    };
+    let options = GetOptions::new().with_if_modified_since(Some(meta.last_modified));
     match storage.get_opts(&path, options).await {
         Err(Error::NotModified { .. } | Error::NotSupported { .. }) => {}
         d => panic!("{d:?}"),
     }
 
-    let options = GetOptions {
-        if_modified_since: Some(meta.last_modified - chrono::Duration::try_hours(10).unwrap()),
-        ..GetOptions::default()
-    };
+    let options = GetOptions::new().with_if_modified_since(Some(
+        meta.last_modified - chrono::Duration::try_hours(10).unwrap(),
+    ));
     match storage.get_opts(&path, options).await {
         Ok(_) | Err(Error::NotSupported { .. }) => {}
         Err(e) => panic!("{e}"),
     }
 
     let tag = meta.e_tag.unwrap();
-    let options = GetOptions {
-        if_match: Some(tag.clone()),
-        ..GetOptions::default()
-    };
+    let options = GetOptions::new().with_if_match(Some(tag.clone()));
     storage.get_opts(&path, options).await.unwrap();
 
-    let options = GetOptions {
-        if_match: Some("invalid".to_string()),
-        ..GetOptions::default()
-    };
+    let options = GetOptions::new().with_if_match(Some("invalid".to_string()));
     let err = storage.get_opts(&path, options).await.unwrap_err();
     assert!(matches!(err, Error::Precondition { .. }), "{err}");
 
-    let options = GetOptions {
-        if_none_match: Some(tag.clone()),
-        ..GetOptions::default()
-    };
+    let options = GetOptions::new().with_if_none_match(Some(tag.clone()));
     let err = storage.get_opts(&path, options).await.unwrap_err();
     assert!(matches!(err, Error::NotModified { .. }), "{err}");
 
-    let options = GetOptions {
-        if_none_match: Some("invalid".to_string()),
-        ..GetOptions::default()
-    };
+    let options = GetOptions::new().with_if_none_match(Some("invalid".to_string()));
     storage.get_opts(&path, options).await.unwrap();
 
     let result = storage.put(&path, "test".into()).await.unwrap();
@@ -595,26 +560,17 @@ pub async fn get_opts(storage: &dyn ObjectStore) {
     let meta = storage.head(&path).await.unwrap();
     assert_eq!(meta.e_tag.unwrap(), new_tag);
 
-    let options = GetOptions {
-        if_match: Some(new_tag),
-        ..GetOptions::default()
-    };
+    let options = GetOptions::new().with_if_match(Some(new_tag.clone()));
     storage.get_opts(&path, options).await.unwrap();
 
-    let options = GetOptions {
-        if_match: Some(tag),
-        ..GetOptions::default()
-    };
+    let options = GetOptions::new().with_if_match(Some(tag));
     let err = storage.get_opts(&path, options).await.unwrap_err();
     assert!(matches!(err, Error::Precondition { .. }), "{err}");
 
     if let Some(version) = meta.version {
         storage.put(&path, "bar".into()).await.unwrap();
 
-        let options = GetOptions {
-            version: Some(version),
-            ..GetOptions::default()
-        };
+        let options = GetOptions::new().with_version(Some(version));
 
         // Can retrieve previous version
         let get_opts = storage.get_opts(&path, options).await.unwrap();
@@ -629,15 +585,8 @@ pub async fn get_opts(storage: &dyn ObjectStore) {
 
 /// Tests conditional writes
 pub async fn put_opts(storage: &dyn ObjectStore, supports_update: bool) {
-    // When using DynamoCommit repeated runs of this test will produce the same sequence of records in DynamoDB
-    // As a result each conditional operation will need to wait for the lease to timeout before proceeding
-    // One solution would be to clear DynamoDB before each test, but this would require non-trivial additional code
-    // so we instead just generate a random suffix for the filenames
-    let rng = rng();
-    let suffix = String::from_utf8(rng.sample_iter(Alphanumeric).take(32).collect()).unwrap();
-
     delete_fixtures(storage).await;
-    let path = Path::from(format!("put_opts_{suffix}"));
+    let path = Path::from("put_opts");
     let v1 = storage
         .put_opts(&path, "a".into(), PutMode::Create.into())
         .await
@@ -695,7 +644,7 @@ pub async fn put_opts(storage: &dyn ObjectStore, supports_update: bool) {
     const NUM_WORKERS: usize = 5;
     const NUM_INCREMENTS: usize = 10;
 
-    let path = Path::from(format!("RACE-{suffix}"));
+    let path = Path::from("RACE");
     let mut futures: FuturesUnordered<_> = (0..NUM_WORKERS)
         .map(|_| async {
             for _ in 0..NUM_INCREMENTS {
@@ -863,7 +812,7 @@ pub async fn list_uses_directories_correctly(storage: &DynObjectStore) {
 
     let prefix = Path::from("foo");
     let content_list = flatten_list_stream(storage, Some(&prefix)).await.unwrap();
-    assert_eq!(content_list, &[location1.clone()]);
+    assert_eq!(content_list, slice::from_ref(&location1));
 
     let result = storage.list_with_delimiter(Some(&prefix)).await.unwrap();
     assert_eq!(result.objects.len(), 1);
@@ -1207,15 +1156,9 @@ pub async fn multipart_out_of_order(storage: &dyn ObjectStore) {
     let path = Path::from("test_multipart_out_of_order");
     let mut multipart_upload = storage.put_multipart(&path).await.unwrap();
 
-    let part1 = std::iter::repeat(b'1')
-        .take(5 * 1024 * 1024)
-        .collect::<Bytes>();
-    let part2 = std::iter::repeat(b'2')
-        .take(5 * 1024 * 1024)
-        .collect::<Bytes>();
-    let part3 = std::iter::repeat(b'3')
-        .take(5 * 1024 * 1024)
-        .collect::<Bytes>();
+    let part1 = std::iter::repeat_n(b'1', 5 * 1024 * 1024).collect::<Bytes>();
+    let part2 = std::iter::repeat_n(b'2', 5 * 1024 * 1024).collect::<Bytes>();
+    let part3 = std::iter::repeat_n(b'3', 5 * 1024 * 1024).collect::<Bytes>();
     let full = [part1.as_ref(), part2.as_ref(), part3.as_ref()].concat();
 
     let fut1 = multipart_upload.put_part(part1.into());

@@ -15,16 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::{http_connector, HttpConnector, TokenCredentialProvider};
+use crate::client::{HttpConnector, TokenCredentialProvider, http_connector};
 use crate::config::ConfigValue;
 use crate::gcp::client::{GoogleCloudStorageClient, GoogleCloudStorageConfig};
 use crate::gcp::credential::{
-    ApplicationDefaultCredentials, InstanceCredentialProvider, ServiceAccountCredentials,
-    DEFAULT_GCS_BASE_URL,
+    ApplicationDefaultCredentials, DEFAULT_GCS_BASE_URL, InstanceCredentialProvider,
+    ServiceAccountCredentials,
 };
 use crate::gcp::{
-    credential, GcpCredential, GcpCredentialProvider, GcpSigningCredential,
-    GcpSigningCredentialProvider, GoogleCloudStorage, STORE,
+    GcpCredential, GcpCredentialProvider, GcpSigningCredential, GcpSigningCredentialProvider,
+    GoogleCloudStorage, STORE, credential,
 };
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use serde::{Deserialize, Serialize};
@@ -162,9 +162,17 @@ pub enum GoogleConfigKey {
     /// Application credentials path
     ///
     /// See [`GoogleCloudStorageBuilder::with_application_credentials`].
+    ///
+    /// Supported keys:
+    /// - `google_application_credentials`
+    /// - `application_credentials`
     ApplicationCredentials,
 
     /// Skip signing request
+    ///
+    /// Supported keys:
+    /// - `google_skip_signature`
+    /// - `skip_signature`
     SkipSignature,
 
     /// Client options
@@ -195,7 +203,9 @@ impl FromStr for GoogleConfigKey {
             | "service_account_path" => Ok(Self::ServiceAccount),
             "google_service_account_key" | "service_account_key" => Ok(Self::ServiceAccountKey),
             "google_bucket" | "google_bucket_name" | "bucket" | "bucket_name" => Ok(Self::Bucket),
-            "google_application_credentials" => Ok(Self::ApplicationCredentials),
+            "google_application_credentials" | "application_credentials" => {
+                Ok(Self::ApplicationCredentials)
+            }
             "google_skip_signature" | "skip_signature" => Ok(Self::SkipSignature),
             _ => match s.strip_prefix("google_").unwrap_or(s).parse() {
                 Ok(key) => Ok(Self::Client(key)),
@@ -674,7 +684,8 @@ mod tests {
         let err = GoogleCloudStorageBuilder::new()
             .with_service_account_path(service_account_path.to_str().unwrap())
             .with_bucket_name("foo")
-            .with_proxy_url("asdf://example.com")
+            // use invalid url
+            .with_proxy_url("dxx:ddd\\example.com")
             .build()
             .unwrap_err()
             .to_string();
@@ -732,7 +743,7 @@ mod tests {
                 config_key
             );
         } else {
-            panic!("{} not propagated as ClientConfigKey", key);
+            panic!("{key} not propagated as ClientConfigKey");
         }
     }
 }

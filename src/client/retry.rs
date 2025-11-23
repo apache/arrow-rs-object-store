@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! A shared HTTP client implementation incorporating retries
+//! [`RetryConfig`] connection retry policy
 
 use crate::client::backoff::{Backoff, BackoffConfig};
 use crate::client::builder::HttpRequestBuilder;
@@ -32,7 +32,7 @@ use tracing::info;
 use web_time::{Duration, Instant};
 
 /// Retry request error
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub struct RetryError(Box<RetryErrorImpl>);
 
 /// Box error to avoid large error variant
@@ -63,6 +63,12 @@ impl std::fmt::Display for RetryError {
             )?;
         }
         write!(f, " - {}", self.0.inner)
+    }
+}
+
+impl std::error::Error for RetryError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0.inner)
     }
 }
 
@@ -102,7 +108,8 @@ impl RetryContext {
 /// The reason a request failed
 #[derive(Debug, thiserror::Error)]
 pub enum RequestError {
-    #[error("Received redirect without LOCATION, this normally indicates an incorrectly configured region"
+    #[error(
+        "Received redirect without LOCATION, this normally indicates an incorrectly configured region"
     )]
     BareRedirect,
 
@@ -396,6 +403,8 @@ impl RetryableRequest {
                         let status = r.status();
                         if ctx.exhausted()
                             || !(status.is_server_error()
+                                || status == StatusCode::TOO_MANY_REQUESTS
+                                || status == StatusCode::REQUEST_TIMEOUT
                                 || (self.retry_on_conflict && status == StatusCode::CONFLICT))
                         {
                             let source = match status.is_client_error() {
@@ -413,7 +422,8 @@ impl RetryableRequest {
 
                         let sleep = ctx.backoff();
                         info!(
-                            "Encountered server error, backing off for {} seconds, retry {} of {}",
+                            "Encountered server error with status {}, backing off for {} seconds, retry {} of {}",
+                            status,
                             sleep.as_secs_f32(),
                             ctx.retries,
                             ctx.max_retries,
@@ -437,7 +447,8 @@ impl RetryableRequest {
                     }
                     let sleep = ctx.backoff();
                     info!(
-                        "Encountered transport error backing off for {} seconds, retry {} of {}: {}",
+                        "Encountered transport error of kind {:?}, backing off for {} seconds, retry {} of {}: {}",
+                        e.kind(),
                         sleep.as_secs_f32(),
                         ctx.retries,
                         ctx.max_retries,
@@ -498,13 +509,21 @@ impl RetryExt for HttpRequestBuilder {
 #[cfg(test)]
 mod tests {
     use crate::client::mock_server::MockServer;
-    use crate::client::retry::{body_contains_error, RequestError, RetryExt};
-    use crate::client::HttpClient;
+    use crate::client::retry::{body_contains_error, RequestError, RetryContext, RetryExt};
+    use crate::client::{HttpClient, HttpResponse};
     use crate::RetryConfig;
+    use http::StatusCode;
     use hyper::header::LOCATION;
+    use hyper::server::conn::http1;
+    use hyper::service::service_fn;
     use hyper::Response;
-    use reqwest::{Client, Method, StatusCode};
+    use hyper_util::rt::TokioIo;
+    use reqwest::{Client, Method};
+    use std::convert::Infallible;
+    use std::error::Error;
     use std::time::Duration;
+    use tokio::net::TcpListener;
+    use tokio::time::timeout;
 
     #[test]
     fn test_body_contains_error() {
@@ -586,6 +605,28 @@ mod tests {
         let r = do_request().await.unwrap();
         assert_eq!(r.status(), StatusCode::OK);
 
+        // Should retry 429 Too Many Requests
+        mock.push(
+            Response::builder()
+                .status(StatusCode::TOO_MANY_REQUESTS)
+                .body(String::new())
+                .unwrap(),
+        );
+
+        let r = do_request().await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+
+        // Should retry 408 Request Timeout
+        mock.push(
+            Response::builder()
+                .status(StatusCode::REQUEST_TIMEOUT)
+                .body(String::new())
+                .unwrap(),
+        );
+
+        let r = do_request().await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+
         // Accepts 204 status code
         mock.push(
             Response::builder()
@@ -645,7 +686,10 @@ mod tests {
 
         let e = do_request().await.unwrap_err();
         assert!(matches!(e.inner(), RequestError::BareRedirect));
-        assert_eq!(e.inner().to_string(), "Received redirect without LOCATION, this normally indicates an incorrectly configured region");
+        assert_eq!(
+            e.inner().to_string(),
+            "Received redirect without LOCATION, this normally indicates an incorrectly configured region"
+        );
 
         // Gives up after the retrying the specified number of times
         for _ in 0..=retry.max_retries {
@@ -657,10 +701,15 @@ mod tests {
             );
         }
 
-        let e = do_request().await.unwrap_err().to_string();
+        let e = do_request().await.unwrap_err();
         assert!(
-            e.contains(" after 2 retries, max_retries: 2, retry_timeout: 1000s  - Server returned non-2xx status code: 502 Bad Gateway"),
+            e.to_string().contains(" after 2 retries, max_retries: 2, retry_timeout: 1000s  - Server returned non-2xx status code: 502 Bad Gateway"),
             "{e}"
+        );
+        // verify e.source() is available as well for users who need programmatic access
+        assert_eq!(
+            e.source().unwrap().to_string(),
+            "Server returned non-2xx status code: 502 Bad Gateway: ",
         );
 
         // Panic results in an incomplete message error in the client
@@ -672,10 +721,15 @@ mod tests {
         for _ in 0..=retry.max_retries {
             mock.push_fn::<_, String>(|_| panic!());
         }
-        let e = do_request().await.unwrap_err().to_string();
+        let e = do_request().await.unwrap_err();
         assert!(
-            e.contains("after 2 retries, max_retries: 2, retry_timeout: 1000s  - HTTP error: error sending request"),
+            e.to_string().contains("after 2 retries, max_retries: 2, retry_timeout: 1000s  - HTTP error: error sending request"),
             "{e}"
+        );
+        // verify e.source() is available as well for users who need programmatic access
+        assert_eq!(
+            e.source().unwrap().to_string(),
+            "HTTP error: error sending request",
         );
 
         // Retries on client timeout
@@ -827,5 +881,56 @@ mod tests {
         );
 
         mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_connection_reset_is_retried() {
+        let retry = RetryConfig {
+            backoff: Default::default(),
+            max_retries: 2,
+            retry_timeout: Duration::from_secs(1),
+        };
+        assert!(retry.max_retries > 0);
+
+        // Setup server which resets a connection and then quits
+        let listener = TcpListener::bind("::1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let handle = tokio::spawn(async move {
+            // Reset the connection on the first n-1 attempts
+            for _ in 0..retry.max_retries {
+                let (stream, _) = listener.accept().await.unwrap();
+                stream.set_linger(Some(Duration::from_secs(0))).unwrap();
+            }
+            // Succeed on the last attempt
+            let (stream, _) = listener.accept().await.unwrap();
+            http1::Builder::new()
+                // we want the connection to end after responding
+                .keep_alive(false)
+                .serve_connection(
+                    TokioIo::new(stream),
+                    service_fn(move |_req| async {
+                        Ok::<_, Infallible>(HttpResponse::new("Success!".to_string().into()))
+                    }),
+                )
+                .await
+                .unwrap();
+        });
+
+        // Perform the request
+        let client = HttpClient::new(reqwest::Client::new());
+        let ctx = &mut RetryContext::new(&retry);
+        let res = client
+            .get(url)
+            .retryable_request()
+            .send(ctx)
+            .await
+            .expect("request should eventually succeed");
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(ctx.exhausted());
+
+        // Wait for server to shutdown
+        let _ = timeout(Duration::from_secs(1), handle)
+            .await
+            .expect("shutdown shouldn't hang");
     }
 }

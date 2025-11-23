@@ -24,11 +24,11 @@ use crate::aws::{
     AmazonS3, AwsCredential, AwsCredentialProvider, Checksum, S3ConditionalPut, S3CopyIfNotExists,
     STORE,
 };
-use crate::client::{http_connector, HttpConnector, TokenCredentialProvider};
+use crate::client::{HttpConnector, TokenCredentialProvider, http_connector};
 use crate::config::ConfigValue;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
-use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
 use itertools::Itertools;
 use md5::{Digest, Md5};
 use reqwest::header::{HeaderMap, HeaderValue};
@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::info;
+use tracing::debug;
 use url::Url;
 
 /// Default metadata endpoint
@@ -75,7 +75,10 @@ enum Error {
     #[error("Invalid Zone suffix for bucket '{bucket}'")]
     ZoneSuffix { bucket: String },
 
-    #[error("Invalid encryption type: {}. Valid values are \"AES256\", \"sse:kms\", \"sse:kms:dsse\" and \"sse-c\".", passed)]
+    #[error(
+        "Invalid encryption type: {}. Valid values are \"AES256\", \"sse:kms\", \"sse:kms:dsse\" and \"sse-c\".",
+        passed
+    )]
     InvalidEncryptionType { passed: String },
 
     #[error(
@@ -156,6 +159,14 @@ pub struct AmazonS3Builder {
     container_credentials_full_uri: Option<String>,
     /// Container authorization token file, see <https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html>
     container_authorization_token_file: Option<String>,
+    /// Web identity token file path for AssumeRoleWithWebIdentity
+    web_identity_token_file: Option<String>,
+    /// Role ARN to assume when using web identity token
+    role_arn: Option<String>,
+    /// Session name for web identity role assumption
+    role_session_name: Option<String>,
+    /// Custom STS endpoint for web identity token exchange
+    sts_endpoint: Option<String>,
     /// Client options
     client_options: ClientOptions,
     /// Credentials
@@ -307,29 +318,81 @@ pub enum AmazonS3ConfigKey {
     /// Set the container credentials relative URI when used in ECS
     ///
     /// <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
+    ///
+    /// Supported keys:
+    /// - `aws_container_credentials_relative_uri`
+    /// - `container_credentials_relative_uri`
     ContainerCredentialsRelativeUri,
 
     /// Set the container credentials full URI when used in EKS
     ///
     /// <https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html>
+    ///
+    /// Supported keys:
+    /// - `aws_container_credentials_full_uri`
+    /// - `container_credentials_full_uri`
     ContainerCredentialsFullUri,
 
     /// Set the authorization token in plain text when used in EKS to authenticate with ContainerCredentialsFullUri
     ///
     /// <https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html>
+    ///
+    /// Supported keys:
+    /// - `aws_container_authorization_token_file`
+    /// - `container_authorization_token_file`
     ContainerAuthorizationTokenFile,
+
+    /// Web identity token file path for AssumeRoleWithWebIdentity
+    ///
+    /// Supported keys:
+    /// - `aws_web_identity_token_file`
+    /// - `web_identity_token_file`
+    WebIdentityTokenFile,
+
+    /// Role ARN to assume when using web identity token
+    ///
+    /// Supported keys:
+    /// - `aws_role_arn`
+    /// - `role_arn`
+    RoleArn,
+
+    /// Session name for web identity role assumption
+    ///
+    /// Supported keys:
+    /// - `aws_role_session_name`
+    /// - `role_session_name`
+    RoleSessionName,
+
+    /// Custom STS endpoint for web identity token exchange
+    ///
+    /// Supported keys:
+    /// - `aws_endpoint_url_sts`
+    /// - `endpoint_url_sts`
+    StsEndpoint,
 
     /// Configure how to provide `copy_if_not_exists`
     ///
     /// See [`S3CopyIfNotExists`]
+    ///
+    /// Supported keys:
+    /// - `aws_copy_if_not_exists`
+    /// - `copy_if_not_exists`
     CopyIfNotExists,
 
     /// Configure how to provide conditional put operations
     ///
     /// See [`S3ConditionalPut`]
+    ///
+    /// Supported keys:
+    /// - `aws_conditional_put`
+    /// - `conditional_put`
     ConditionalPut,
 
     /// Skip signing request
+    ///
+    /// Supported keys:
+    /// - `aws_skip_signature`
+    /// - `skip_signature`
     SkipSignature,
 
     /// Disable tagging objects
@@ -381,6 +444,10 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::ContainerCredentialsRelativeUri => "aws_container_credentials_relative_uri",
             Self::ContainerCredentialsFullUri => "aws_container_credentials_full_uri",
             Self::ContainerAuthorizationTokenFile => "aws_container_authorization_token_file",
+            Self::WebIdentityTokenFile => "aws_web_identity_token_file",
+            Self::RoleArn => "aws_role_arn",
+            Self::RoleSessionName => "aws_role_session_name",
+            Self::StsEndpoint => "aws_endpoint_url_sts",
             Self::SkipSignature => "aws_skip_signature",
             Self::CopyIfNotExists => "aws_copy_if_not_exists",
             Self::ConditionalPut => "aws_conditional_put",
@@ -412,9 +479,21 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_metadata_endpoint" | "metadata_endpoint" => Ok(Self::MetadataEndpoint),
             "aws_unsigned_payload" | "unsigned_payload" => Ok(Self::UnsignedPayload),
             "aws_checksum_algorithm" | "checksum_algorithm" => Ok(Self::Checksum),
-            "aws_container_credentials_relative_uri" => Ok(Self::ContainerCredentialsRelativeUri),
-            "aws_container_credentials_full_uri" => Ok(Self::ContainerCredentialsFullUri),
-            "aws_container_authorization_token_file" => Ok(Self::ContainerAuthorizationTokenFile),
+            "aws_container_credentials_relative_uri" | "container_credentials_relative_uri" => {
+                Ok(Self::ContainerCredentialsRelativeUri)
+            }
+            "aws_container_credentials_full_uri" | "container_credentials_full_uri" => {
+                Ok(Self::ContainerCredentialsFullUri)
+            }
+            "aws_container_authorization_token_file" | "container_authorization_token_file" => {
+                Ok(Self::ContainerAuthorizationTokenFile)
+            }
+            "aws_web_identity_token_file" | "web_identity_token_file" => {
+                Ok(Self::WebIdentityTokenFile)
+            }
+            "aws_role_arn" | "role_arn" => Ok(Self::RoleArn),
+            "aws_role_session_name" | "role_session_name" => Ok(Self::RoleSessionName),
+            "aws_endpoint_url_sts" | "endpoint_url_sts" => Ok(Self::StsEndpoint),
             "aws_skip_signature" | "skip_signature" => Ok(Self::SkipSignature),
             "aws_copy_if_not_exists" | "copy_if_not_exists" => Ok(Self::CopyIfNotExists),
             "aws_conditional_put" | "conditional_put" => Ok(Self::ConditionalPut),
@@ -422,14 +501,16 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_request_payer" | "request_payer" => Ok(Self::RequestPayer),
             // Backwards compatibility
             "aws_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
-            "aws_server_side_encryption" => Ok(Self::Encryption(
+            "aws_server_side_encryption" | "server_side_encryption" => Ok(Self::Encryption(
                 S3EncryptionConfigKey::ServerSideEncryption,
             )),
-            "aws_sse_kms_key_id" => Ok(Self::Encryption(S3EncryptionConfigKey::KmsKeyId)),
-            "aws_sse_bucket_key_enabled" => {
+            "aws_sse_kms_key_id" | "sse_kms_key_id" => {
+                Ok(Self::Encryption(S3EncryptionConfigKey::KmsKeyId))
+            }
+            "aws_sse_bucket_key_enabled" | "sse_bucket_key_enabled" => {
                 Ok(Self::Encryption(S3EncryptionConfigKey::BucketKeyEnabled))
             }
-            "aws_sse_customer_key_base64" => Ok(Self::Encryption(
+            "aws_sse_customer_key_base64" | "sse_customer_key_base64" => Ok(Self::Encryption(
                 S3EncryptionConfigKey::CustomerEncryptionKey,
             )),
             _ => match s.strip_prefix("aws_").unwrap_or(s).parse() {
@@ -458,6 +539,10 @@ impl AmazonS3Builder {
     /// * `AWS_DEFAULT_REGION` -> region
     /// * `AWS_ENDPOINT` -> endpoint
     /// * `AWS_SESSION_TOKEN` -> token
+    /// * `AWS_WEB_IDENTITY_TOKEN_FILE` -> path to file containing web identity token for AssumeRoleWithWebIdentity
+    /// * `AWS_ROLE_ARN` -> ARN of the role to assume when using web identity token
+    /// * `AWS_ROLE_SESSION_NAME` -> optional session name for web identity role assumption (defaults to "WebIdentitySession")
+    /// * `AWS_ENDPOINT_URL_STS` -> optional custom STS endpoint for web identity token exchange (defaults to "https://sts.{region}.amazonaws.com")
     /// * `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` -> <https://docs.aws.amazon.com/AmazonECS/latest/developerguide/task-iam-roles.html>
     /// * `AWS_CONTAINER_CREDENTIALS_FULL_URI` -> <https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html>
     /// * `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE` -> <https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html>
@@ -543,6 +628,18 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::ContainerAuthorizationTokenFile => {
                 self.container_authorization_token_file = Some(value.into());
             }
+            AmazonS3ConfigKey::WebIdentityTokenFile => {
+                self.web_identity_token_file = Some(value.into());
+            }
+            AmazonS3ConfigKey::RoleArn => {
+                self.role_arn = Some(value.into());
+            }
+            AmazonS3ConfigKey::RoleSessionName => {
+                self.role_session_name = Some(value.into());
+            }
+            AmazonS3ConfigKey::StsEndpoint => {
+                self.sts_endpoint = Some(value.into());
+            }
             AmazonS3ConfigKey::Client(key) => {
                 self.client_options = self.client_options.with_config(key, value)
             }
@@ -612,6 +709,10 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::ContainerAuthorizationTokenFile => {
                 self.container_authorization_token_file.clone()
             }
+            AmazonS3ConfigKey::WebIdentityTokenFile => self.web_identity_token_file.clone(),
+            AmazonS3ConfigKey::RoleArn => self.role_arn.clone(),
+            AmazonS3ConfigKey::RoleSessionName => self.role_session_name.clone(),
+            AmazonS3ConfigKey::StsEndpoint => self.sts_endpoint.clone(),
             AmazonS3ConfigKey::SkipSignature => Some(self.skip_signature.to_string()),
             AmazonS3ConfigKey::CopyIfNotExists => {
                 self.copy_if_not_exists.as_ref().map(ToString::to_string)
@@ -658,6 +759,10 @@ impl AmazonS3Builder {
                     if let Some(bucket) = bucket {
                         self.bucket_name = Some(bucket.into());
                     }
+                }
+                Some((bucket, "s3", "amazonaws", "com")) => {
+                    self.bucket_name = Some(bucket.to_string());
+                    self.virtual_hosted_style_request = true.into();
                 }
                 Some((bucket, "s3", region, "amazonaws.com")) => {
                     self.bucket_name = Some(bucket.to_string());
@@ -943,7 +1048,7 @@ impl AmazonS3Builder {
         } else if self.access_key_id.is_some() || self.secret_access_key.is_some() {
             match (self.access_key_id, self.secret_access_key, self.token) {
                 (Some(key_id), Some(secret_key), token) => {
-                    info!("Using Static credential provider");
+                    debug!("Using Static credential provider");
                     let credential = AwsCredential {
                         key_id,
                         secret_key,
@@ -955,25 +1060,28 @@ impl AmazonS3Builder {
                 (Some(_), None, _) => return Err(Error::MissingSecretAccessKey.into()),
                 (None, None, _) => unreachable!(),
             }
-        } else if let (Ok(token_path), Ok(role_arn)) = (
-            std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE"),
-            std::env::var("AWS_ROLE_ARN"),
-        ) {
-            // TODO: Replace with `AmazonS3Builder::credentials_from_env`
-            info!("Using WebIdentity credential provider");
+        } else if let (Some(token_path), Some(role_arn)) =
+            (self.web_identity_token_file, self.role_arn)
+        {
+            debug!("Using WebIdentity credential provider");
 
-            let session_name = std::env::var("AWS_ROLE_SESSION_NAME")
-                .unwrap_or_else(|_| "WebIdentitySession".to_string());
+            let session_name = self
+                .role_session_name
+                .clone()
+                .unwrap_or_else(|| "WebIdentitySession".to_string());
 
-            let endpoint = format!("https://sts.{region}.amazonaws.com");
+            let endpoint = self
+                .sts_endpoint
+                .clone()
+                .unwrap_or_else(|| format!("https://sts.{region}.amazonaws.com"));
 
             // Disallow non-HTTPs requests
             let options = self.client_options.clone().with_allow_http(false);
 
             let token = WebIdentityProvider {
-                token_path,
+                token_path: token_path.clone(),
                 session_name,
-                role_arn,
+                role_arn: role_arn.clone(),
                 endpoint,
             };
 
@@ -983,7 +1091,7 @@ impl AmazonS3Builder {
                 self.retry_config.clone(),
             )) as _
         } else if let Some(uri) = self.container_credentials_relative_uri {
-            info!("Using Task credential provider");
+            debug!("Using Task credential provider");
 
             let options = self.client_options.clone().with_allow_http(true);
 
@@ -998,7 +1106,7 @@ impl AmazonS3Builder {
             self.container_credentials_full_uri,
             self.container_authorization_token_file,
         ) {
-            info!("Using EKS Pod Identity credential provider");
+            debug!("Using EKS Pod Identity credential provider");
 
             let options = self.client_options.clone().with_allow_http(true);
 
@@ -1010,7 +1118,7 @@ impl AmazonS3Builder {
                 cache: Default::default(),
             }) as _
         } else {
-            info!("Using Instance credential provider");
+            debug!("Using Instance credential provider");
 
             let token = InstanceCredentialProvider {
                 imdsv1_fallback: self.imdsv1_fallback.get()?,
@@ -1079,7 +1187,6 @@ impl AmazonS3Builder {
 
         let config = S3Config {
             region,
-            endpoint: self.endpoint,
             bucket,
             bucket_endpoint,
             credentials,
@@ -1122,17 +1229,41 @@ fn parse_bucket_az(bucket: &str) -> Option<&str> {
 #[derive(PartialEq, Eq, Hash, Clone, Debug, Copy, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum S3EncryptionConfigKey {
-    /// Type of encryption to use. If set, must be one of "AES256" (SSE-S3), "aws:kms" (SSE-KMS), "aws:kms:dsse" (DSSE-KMS) or "sse-c".
+    /// Type of encryption to use.
+    ///
+    /// If set, must be one of
+    /// - "AES256" (SSE-S3),
+    /// - "aws:kms" (SSE-KMS),
+    /// - "aws:kms:dsse" (DSSE-KMS) or
+    /// - "sse-c"
+    ///
+    /// Supported keys:
+    /// - `aws_server_side_encryption`
+    /// - `server_side_encryption`
     ServerSideEncryption,
-    /// The KMS key ID to use for server-side encryption. If set, ServerSideEncryption
-    /// must be "aws:kms" or "aws:kms:dsse".
+    /// The KMS key ID to use for server-side encryption.
+    ///
+    /// If set, [ServerSideEncryption](Self::ServerSideEncryption) must be "aws:kms" or "aws:kms:dsse".
+    ///
+    /// Supported keys:
+    /// - `aws_sse_kms_key_id`
+    /// - `sse_kms_key_id`
     KmsKeyId,
     /// If set to true, will use the bucket's default KMS key for server-side encryption.
     /// If set to false, will disable the use of the bucket's default KMS key for server-side encryption.
+    ///
+    /// Supported keys:
+    /// - `aws_sse_bucket_key_enabled`
+    /// - `sse_bucket_key_enabled`
     BucketKeyEnabled,
 
     /// The base64 encoded, 256-bit customer encryption key to use for server-side encryption.
-    /// If set, ServerSideEncryption must be "sse-c".
+    ///
+    /// If set, [ServerSideEncryption](Self::ServerSideEncryption) must be "sse-c".
+    ///
+    /// Supported keys:
+    /// - `aws_sse_customer_key_base64`
+    /// - `sse_customer_key_base64`
     CustomerEncryptionKey,
 }
 
@@ -1475,6 +1606,13 @@ mod tests {
 
         let mut builder = AmazonS3Builder::new();
         builder
+            .parse_url("https://bucket.s3.amazonaws.com")
+            .unwrap();
+        assert_eq!(builder.bucket_name, Some("bucket".to_string()));
+        assert!(builder.virtual_hosted_style_request.get().unwrap());
+
+        let mut builder = AmazonS3Builder::new();
+        builder
             .parse_url("https://bucket.s3.region.amazonaws.com")
             .unwrap();
         assert_eq!(builder.bucket_name, Some("bucket".to_string()));
@@ -1526,7 +1664,8 @@ mod tests {
             .with_region("region")
             .with_bucket_name("bucket_name")
             .with_allow_http(true)
-            .with_proxy_url("asdf://example.com")
+            // use invalid url
+            .with_proxy_url("dxx:ddd\\example.com")
             .build()
             .unwrap_err()
             .to_string();
@@ -1586,7 +1725,7 @@ mod tests {
                 config_key
             );
         } else {
-            panic!("{} not propagated as ClientConfigKey", key);
+            panic!("{key} not propagated as ClientConfigKey");
         }
     }
 
@@ -1605,10 +1744,62 @@ mod tests {
 
         let s3 = builder.build().expect("should build successfully");
         let creds = &s3.client.config.credentials;
-        let debug_str = format!("{:?}", creds);
+        let debug_str = format!("{creds:?}");
         assert!(
             debug_str.contains("EKSPodCredentialProvider"),
             "expected EKS provider but got: {debug_str}"
+        );
+    }
+
+    #[test]
+    fn test_builder_web_identity_with_config() {
+        let builder = AmazonS3Builder::new()
+            .with_bucket_name("some-bucket")
+            .with_config(
+                AmazonS3ConfigKey::WebIdentityTokenFile,
+                "/tmp/fake-token-file",
+            )
+            .with_config(
+                AmazonS3ConfigKey::RoleArn,
+                "arn:aws:iam::123456789012:role/test-role",
+            )
+            .with_config(AmazonS3ConfigKey::RoleSessionName, "TestSession")
+            .with_config(
+                AmazonS3ConfigKey::StsEndpoint,
+                "https://sts.us-west-2.amazonaws.com",
+            );
+
+        assert_eq!(
+            builder
+                .get_config_value(&AmazonS3ConfigKey::WebIdentityTokenFile)
+                .unwrap(),
+            "/tmp/fake-token-file"
+        );
+        assert_eq!(
+            builder
+                .get_config_value(&AmazonS3ConfigKey::RoleArn)
+                .unwrap(),
+            "arn:aws:iam::123456789012:role/test-role"
+        );
+        assert_eq!(
+            builder
+                .get_config_value(&AmazonS3ConfigKey::RoleSessionName)
+                .unwrap(),
+            "TestSession"
+        );
+        assert_eq!(
+            builder
+                .get_config_value(&AmazonS3ConfigKey::StsEndpoint)
+                .unwrap(),
+            "https://sts.us-west-2.amazonaws.com"
+        );
+
+        let s3 = builder.build().expect("should build successfully");
+        let creds = &s3.client.config.credentials;
+        let debug_str = format!("{creds:?}");
+        assert!(
+            debug_str.contains("TokenCredentialProvider"),
+            "expected TokenCredentialProvider but got: {debug_str}"
         );
     }
 }

@@ -16,23 +16,23 @@
 // under the License.
 
 use super::client::UserDelegationKey;
+use crate::RetryConfig;
 use crate::azure::STORE;
-use crate::client::builder::{add_query_pairs, HttpRequestBuilder};
+use crate::client::builder::{HttpRequestBuilder, add_query_pairs};
 use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
 use crate::client::{CredentialProvider, HttpClient, HttpError, HttpRequest, TokenProvider};
 use crate::util::hmac_sha256;
-use crate::RetryConfig;
 use async_trait::async_trait;
-use base64::prelude::{BASE64_STANDARD, BASE64_URL_SAFE_NO_PAD};
 use base64::Engine;
+use base64::prelude::{BASE64_STANDARD, BASE64_URL_SAFE_NO_PAD};
 use chrono::{DateTime, SecondsFormat, Utc};
+use http::Method;
 use http::header::{
-    HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_LANGUAGE,
-    CONTENT_LENGTH, CONTENT_TYPE, DATE, IF_MATCH, IF_MODIFIED_SINCE, IF_NONE_MATCH,
+    ACCEPT, AUTHORIZATION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH, CONTENT_TYPE, DATE,
+    HeaderMap, HeaderName, HeaderValue, IF_MATCH, IF_MODIFIED_SINCE, IF_NONE_MATCH,
     IF_UNMODIFIED_SINCE, RANGE,
 };
-use http::Method;
 use serde::Deserialize;
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -261,7 +261,7 @@ impl<'a> AzureAuthorizer<'a> {
             AzureCredential::BearerToken(token) => {
                 request.headers_mut().append(
                     AUTHORIZATION,
-                    HeaderValue::from_str(format!("Bearer {}", token).as_str()).unwrap(),
+                    HeaderValue::from_str(format!("Bearer {token}").as_str()).unwrap(),
                 );
             }
             AzureCredential::SASToken(query_pairs) => {
@@ -507,7 +507,7 @@ fn string_to_sign(h: &HeaderMap, u: &Url, method: &Method, account: &str) -> Str
 fn canonicalize_header(headers: &HeaderMap) -> String {
     let mut names = headers
         .iter()
-        .filter(|&(k, _)| (k.as_str().starts_with("x-ms")))
+        .filter(|&(k, _)| k.as_str().starts_with("x-ms"))
         // TODO remove unwraps
         .map(|(k, _)| (k.as_str(), headers.get(k).unwrap().to_str().unwrap()))
         .collect::<Vec<_>>();
@@ -1073,13 +1073,13 @@ mod tests {
     use super::*;
     use crate::azure::MicrosoftAzureBuilder;
     use crate::client::mock_server::MockServer;
-    use crate::{ObjectStore, Path};
+    use crate::{ObjectStoreExt, Path};
 
     #[tokio::test]
     async fn test_managed_identity() {
         let server = MockServer::new().await;
 
-        std::env::set_var(MSI_SECRET_ENV_KEY, "env-secret");
+        unsafe { std::env::set_var(MSI_SECRET_ENV_KEY, "env-secret") };
 
         let endpoint = server.url();
         let client = HttpClient::new(Client::new());

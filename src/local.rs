@@ -16,7 +16,7 @@
 // under the License.
 
 //! An object store implementation for a local filesystem
-use std::fs::{metadata, symlink_metadata, File, Metadata, OpenOptions};
+use std::fs::{File, Metadata, OpenOptions, metadata, symlink_metadata};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
 use std::sync::Arc;
@@ -27,18 +27,18 @@ use std::{collections::VecDeque, path::PathBuf};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{stream::BoxStream, StreamExt};
 use futures::{FutureExt, TryStreamExt};
+use futures::{StreamExt, stream::BoxStream};
 use parking_lot::Mutex;
 use url::Url;
 use walkdir::{DirEntry, WalkDir};
 
 use crate::{
-    maybe_spawn_blocking,
-    path::{absolute_path_to_url, Path},
-    util::InvalidGetRange,
     Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result, UploadPart,
+    ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
+    UploadPart, maybe_spawn_blocking,
+    path::{Path, absolute_path_to_url},
+    util::InvalidGetRange,
 };
 
 /// A specialized `Error` for filesystem object store-related errors
@@ -247,28 +247,7 @@ impl LocalFileSystem {
 
     /// Return an absolute filesystem path of the given file location
     pub fn path_to_filesystem(&self, location: &Path) -> Result<PathBuf> {
-        if !is_valid_file_path(location) {
-            let path = location.as_ref().into();
-            let error = Error::InvalidPath { path };
-            return Err(error.into());
-        }
-
-        let path = self.config.prefix_to_filesystem(location)?;
-
-        #[cfg(target_os = "windows")]
-        let path = {
-            let path = path.to_string_lossy();
-
-            // Assume the first char is the drive letter and the next is a colon.
-            let mut out = String::new();
-            let drive = &path[..2]; // The drive letter and colon (e.g., "C:")
-            let filepath = &path[2..].replace(':', "%3A"); // Replace subsequent colons
-            out.push_str(drive);
-            out.push_str(filepath);
-            PathBuf::from(out)
-        };
-
-        Ok(path)
+        self.config.path_to_filesystem(location)
     }
 
     /// Enable automatic cleanup of empty directories when deleting files
@@ -291,6 +270,32 @@ impl Config {
 
         url.to_file_path()
             .map_err(|_| Error::InvalidUrl { url }.into())
+    }
+
+    /// Return an absolute filesystem path of the given file location
+    fn path_to_filesystem(&self, location: &Path) -> Result<PathBuf> {
+        if !is_valid_file_path(location) {
+            let path = location.as_ref().into();
+            let error = Error::InvalidPath { path };
+            return Err(error.into());
+        }
+
+        let path = self.prefix_to_filesystem(location)?;
+
+        #[cfg(target_os = "windows")]
+        let path = {
+            let path = path.to_string_lossy();
+
+            // Assume the first char is the drive letter and the next is a colon.
+            let mut out = String::new();
+            let drive = &path[..2]; // The drive letter and colon (e.g., "C:")
+            let filepath = &path[2..].replace(':', "%3A"); // Replace subsequent colons
+            out.push_str(drive);
+            out.push_str(filepath);
+            PathBuf::from(out)
+        };
+
+        Ok(path)
     }
 
     /// Resolves the provided absolute filesystem path to a [`Path`] prefix
@@ -388,7 +393,7 @@ impl ObjectStore for LocalFileSystem {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
         if !opts.attributes.is_empty() {
             return Err(crate::Error::NotImplemented);
@@ -424,15 +429,6 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn get_range(&self, location: &Path, range: Range<u64>) -> Result<Bytes> {
-        let path = self.path_to_filesystem(location)?;
-        maybe_spawn_blocking(move || {
-            let (mut file, _) = open_file(&path)?;
-            read_range(&mut file, &path, range)
-        })
-        .await
-    }
-
     async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
         let path = self.path_to_filesystem(location)?;
         let ranges = ranges.to_vec();
@@ -449,41 +445,33 @@ impl ObjectStore for LocalFileSystem {
 
     async fn delete(&self, location: &Path) -> Result<()> {
         let config = Arc::clone(&self.config);
-        let path = self.path_to_filesystem(location)?;
-        let automactic_cleanup = self.automatic_cleanup;
-        maybe_spawn_blocking(move || {
-            if let Err(e) = std::fs::remove_file(&path) {
-                Err(match e.kind() {
-                    ErrorKind::NotFound => Error::NotFound { path, source: e }.into(),
-                    _ => Error::UnableToDeleteFile { path, source: e }.into(),
+        let automatic_cleanup = self.automatic_cleanup;
+        let location = location.clone();
+        maybe_spawn_blocking(move || Self::delete_location(config, automatic_cleanup, &location))
+            .await
+    }
+
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
+        let config = Arc::clone(&self.config);
+        let automatic_cleanup = self.automatic_cleanup;
+        locations
+            .map(move |location| {
+                let config = Arc::clone(&config);
+                maybe_spawn_blocking(move || {
+                    let location = location?;
+                    Self::delete_location(config, automatic_cleanup, &location)?;
+                    Ok(location)
                 })
-            } else if automactic_cleanup {
-                let root = &config.root;
-                let root = root
-                    .to_file_path()
-                    .map_err(|_| Error::InvalidUrl { url: root.clone() })?;
-
-                // here we will try to traverse up and delete an empty dir if possible until we reach the root or get an error
-                let mut parent = path.parent();
-
-                while let Some(loc) = parent {
-                    if loc != root && std::fs::remove_dir(loc).is_ok() {
-                        parent = loc.parent();
-                    } else {
-                        break;
-                    }
-                }
-
-                Ok(())
-            } else {
-                Ok(())
-            }
-        })
-        .await
+            })
+            .buffered(10)
+            .boxed()
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.list_with_maybe_offset(prefix, None)
+        Self::list_with_maybe_offset(Arc::clone(&self.config), prefix, None)
     }
 
     fn list_with_offset(
@@ -491,7 +479,7 @@ impl ObjectStore for LocalFileSystem {
         prefix: Option<&Path>,
         offset: &Path,
     ) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.list_with_maybe_offset(prefix, Some(offset))
+        Self::list_with_maybe_offset(Arc::clone(&self.config), prefix, Some(offset))
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
@@ -555,23 +543,25 @@ impl ObjectStore for LocalFileSystem {
         // - atomically rename this temporary file into place
         //
         // This is necessary because hard_link returns an error if the destination already exists
-        maybe_spawn_blocking(move || loop {
-            let staged = staged_upload_path(&to, &id.to_string());
-            match std::fs::hard_link(&from, &staged) {
-                Ok(_) => {
-                    return std::fs::rename(&staged, &to).map_err(|source| {
-                        let _ = std::fs::remove_file(&staged); // Attempt to clean up
-                        Error::UnableToCopyFile { from, to, source }.into()
-                    });
-                }
-                Err(source) => match source.kind() {
-                    ErrorKind::AlreadyExists => id += 1,
-                    ErrorKind::NotFound => match from.exists() {
-                        true => create_parent_dirs(&to, source)?,
-                        false => return Err(Error::NotFound { path: from, source }.into()),
+        maybe_spawn_blocking(move || {
+            loop {
+                let staged = staged_upload_path(&to, &id.to_string());
+                match std::fs::hard_link(&from, &staged) {
+                    Ok(_) => {
+                        return std::fs::rename(&staged, &to).map_err(|source| {
+                            let _ = std::fs::remove_file(&staged); // Attempt to clean up
+                            Error::UnableToCopyFile { from, to, source }.into()
+                        });
+                    }
+                    Err(source) => match source.kind() {
+                        ErrorKind::AlreadyExists => id += 1,
+                        ErrorKind::NotFound => match from.exists() {
+                            true => create_parent_dirs(&to, source)?,
+                            false => return Err(Error::NotFound { path: from, source }.into()),
+                        },
+                        _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
                     },
-                    _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
-                },
+                }
             }
         })
         .await
@@ -580,16 +570,18 @@ impl ObjectStore for LocalFileSystem {
     async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
         let from = self.path_to_filesystem(from)?;
         let to = self.path_to_filesystem(to)?;
-        maybe_spawn_blocking(move || loop {
-            match std::fs::rename(&from, &to) {
-                Ok(_) => return Ok(()),
-                Err(source) => match source.kind() {
-                    ErrorKind::NotFound => match from.exists() {
-                        true => create_parent_dirs(&to, source)?,
-                        false => return Err(Error::NotFound { path: from, source }.into()),
+        maybe_spawn_blocking(move || {
+            loop {
+                match std::fs::rename(&from, &to) {
+                    Ok(_) => return Ok(()),
+                    Err(source) => match source.kind() {
+                        ErrorKind::NotFound => match from.exists() {
+                            true => create_parent_dirs(&to, source)?,
+                            false => return Err(Error::NotFound { path: from, source }.into()),
+                        },
+                        _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
                     },
-                    _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
-                },
+                }
             }
         })
         .await
@@ -599,23 +591,25 @@ impl ObjectStore for LocalFileSystem {
         let from = self.path_to_filesystem(from)?;
         let to = self.path_to_filesystem(to)?;
 
-        maybe_spawn_blocking(move || loop {
-            match std::fs::hard_link(&from, &to) {
-                Ok(_) => return Ok(()),
-                Err(source) => match source.kind() {
-                    ErrorKind::AlreadyExists => {
-                        return Err(Error::AlreadyExists {
-                            path: to.to_str().unwrap().to_string(),
-                            source,
+        maybe_spawn_blocking(move || {
+            loop {
+                match std::fs::hard_link(&from, &to) {
+                    Ok(_) => return Ok(()),
+                    Err(source) => match source.kind() {
+                        ErrorKind::AlreadyExists => {
+                            return Err(Error::AlreadyExists {
+                                path: to.to_str().unwrap().to_string(),
+                                source,
+                            }
+                            .into());
                         }
-                        .into())
-                    }
-                    ErrorKind::NotFound => match from.exists() {
-                        true => create_parent_dirs(&to, source)?,
-                        false => return Err(Error::NotFound { path: from, source }.into()),
+                        ErrorKind::NotFound => match from.exists() {
+                            true => create_parent_dirs(&to, source)?,
+                            false => return Err(Error::NotFound { path: from, source }.into()),
+                        },
+                        _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
                     },
-                    _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
-                },
+                }
             }
         })
         .await
@@ -623,13 +617,45 @@ impl ObjectStore for LocalFileSystem {
 }
 
 impl LocalFileSystem {
+    fn delete_location(
+        config: Arc<Config>,
+        automatic_cleanup: bool,
+        location: &Path,
+    ) -> Result<()> {
+        let path = config.path_to_filesystem(location)?;
+        if let Err(e) = std::fs::remove_file(&path) {
+            Err(match e.kind() {
+                ErrorKind::NotFound => Error::NotFound { path, source: e }.into(),
+                _ => Error::UnableToDeleteFile { path, source: e }.into(),
+            })
+        } else if automatic_cleanup {
+            let root = &config.root;
+            let root = root
+                .to_file_path()
+                .map_err(|_| Error::InvalidUrl { url: root.clone() })?;
+
+            // here we will try to traverse up and delete an empty dir if possible until we reach the root or get an error
+            let mut parent = path.parent();
+
+            while let Some(loc) = parent {
+                if loc != root && std::fs::remove_dir(loc).is_ok() {
+                    parent = loc.parent();
+                } else {
+                    break;
+                }
+            }
+
+            Ok(())
+        } else {
+            Ok(())
+        }
+    }
+
     fn list_with_maybe_offset(
-        &self,
+        config: Arc<Config>,
         prefix: Option<&Path>,
         maybe_offset: Option<&Path>,
     ) -> BoxStream<'static, Result<ObjectMeta>> {
-        let config = Arc::clone(&self.config);
-
         let root_path = match prefix {
             Some(prefix) => match config.prefix_to_filesystem(prefix) {
                 Ok(path) => path,
@@ -1089,7 +1115,7 @@ mod tests {
     #[cfg(target_family = "unix")]
     use tempfile::NamedTempFile;
 
-    use crate::integration::*;
+    use crate::{ObjectStoreExt, integration::*};
 
     use super::*;
 
@@ -1497,7 +1523,7 @@ mod tests {
 
         let root_path = root.path();
         for i in 0..5 {
-            let filename = format!("test{}.parquet", i);
+            let filename = format!("test{i}.parquet");
             let file = root_path.join(filename);
             std::fs::write(file, "test").unwrap();
         }
@@ -1613,7 +1639,10 @@ mod tests {
 
         let b = Path::parse("bar#123").unwrap();
         let err = integration.get(&b).await.unwrap_err().to_string();
-        assert_eq!(err, "Generic LocalFileSystem error: Filenames containing trailing '/#\\d+/' are not supported: bar#123");
+        assert_eq!(
+            err,
+            "Generic LocalFileSystem error: Filenames containing trailing '/#\\d+/' are not supported: bar#123"
+        );
 
         let c = Path::parse("foo#123.txt").unwrap();
         integration.put(&c, "test".into()).await.unwrap();
@@ -1681,7 +1710,7 @@ mod not_wasm_tests {
     use tempfile::TempDir;
 
     use crate::local::LocalFileSystem;
-    use crate::{ObjectStore, Path, PutPayload};
+    use crate::{ObjectStoreExt, Path, PutPayload};
 
     #[tokio::test]
     async fn test_cleanup_intermediate_files() {
@@ -1718,7 +1747,7 @@ mod unix_test {
     use tempfile::TempDir;
 
     use crate::local::LocalFileSystem;
-    use crate::{ObjectStore, Path};
+    use crate::{ObjectStoreExt, Path};
 
     #[tokio::test]
     async fn test_fifo() {

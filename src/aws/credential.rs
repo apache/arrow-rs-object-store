@@ -25,7 +25,7 @@ use crate::{CredentialProvider, Result, RetryConfig};
 use async_trait::async_trait;
 use bytes::Buf;
 use chrono::{DateTime, Utc};
-use http::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
+use http::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use http::{Method, StatusCode};
 use percent_encoding::utf8_percent_encode;
 use serde::Deserialize;
@@ -414,6 +414,18 @@ fn canonicalize_query(url: &Url) -> String {
     encoded
 }
 
+fn append_normalized_whitespace_value(headers: &'_ mut String, input: &str) {
+    let mut iter = input.split_whitespace();
+
+    if let Some(first) = iter.next() {
+        headers.push_str(first);
+        for word in iter {
+            headers.push(' ');
+            headers.push_str(word);
+        }
+    }
+}
+
 /// Canonicalizes headers into the AWS Canonical Form.
 ///
 /// <https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html>
@@ -452,7 +464,7 @@ fn canonicalize_headers(header_map: &HeaderMap) -> (String, String) {
             if value_idx != 0 {
                 canonical_headers.push(',');
             }
-            canonical_headers.push_str(value.trim());
+            append_normalized_whitespace_value(&mut canonical_headers, value.trim());
         }
         canonical_headers.push('\n');
     }
@@ -851,8 +863,8 @@ struct CreateSessionOutput {
 mod tests {
     use super::*;
     use crate::aws::{AmazonS3Builder, AmazonS3ConfigKey};
-    use crate::client::mock_server::MockServer;
     use crate::client::HttpClient;
+    use crate::client::mock_server::MockServer;
     use http::Response;
     use reqwest::{Client, Method};
     use std::env;
@@ -896,7 +908,10 @@ mod tests {
         };
 
         signer.authorize(&mut request, None);
-        assert_eq!(request.headers().get(&AUTHORIZATION).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=a3c787a7ed37f7fdfbfd2d7056a3d7c9d85e6d52a2bfbec73793c0be6e7862d4")
+        assert_eq!(
+            request.headers().get(&AUTHORIZATION).unwrap(),
+            "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=a3c787a7ed37f7fdfbfd2d7056a3d7c9d85e6d52a2bfbec73793c0be6e7862d4"
+        )
     }
 
     #[test]
@@ -937,7 +952,10 @@ mod tests {
         };
 
         signer.authorize(&mut request, None);
-        assert_eq!(request.headers().get(&AUTHORIZATION).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-request-payer, Signature=7030625a9e9b57ed2a40e63d749f4a4b7714b6e15004cab026152f870dd8565d")
+        assert_eq!(
+            request.headers().get(&AUTHORIZATION).unwrap(),
+            "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-request-payer, Signature=7030625a9e9b57ed2a40e63d749f4a4b7714b6e15004cab026152f870dd8565d"
+        )
     }
 
     #[test]
@@ -978,7 +996,10 @@ mod tests {
         };
 
         authorizer.authorize(&mut request, None);
-        assert_eq!(request.headers().get(&AUTHORIZATION).unwrap(), "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=653c3d8ea261fd826207df58bc2bb69fbb5003e9eb3c0ef06e4a51f2a81d8699");
+        assert_eq!(
+            request.headers().get(&AUTHORIZATION).unwrap(),
+            "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=653c3d8ea261fd826207df58bc2bb69fbb5003e9eb3c0ef06e4a51f2a81d8699"
+        );
     }
 
     #[test]
@@ -1101,7 +1122,10 @@ mod tests {
         };
 
         authorizer.authorize(&mut request, None);
-        assert_eq!(request.headers().get(&AUTHORIZATION).unwrap(), "AWS4-HMAC-SHA256 Credential=H20ABqCkLZID4rLe/20220809/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=9ebf2f92872066c99ac94e573b4e1b80f4dbb8a32b1e8e23178318746e7d1b4d")
+        assert_eq!(
+            request.headers().get(&AUTHORIZATION).unwrap(),
+            "AWS4-HMAC-SHA256 Credential=H20ABqCkLZID4rLe/20220809/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=9ebf2f92872066c99ac94e573b4e1b80f4dbb8a32b1e8e23178318746e7d1b4d"
+        )
     }
 
     #[tokio::test]
@@ -1284,7 +1308,7 @@ mod tests {
             token: Some("temp_token".to_string()),
         };
 
-        let debug_output = format!("{:?}", cred);
+        let debug_output = format!("{cred:?}");
 
         assert!(debug_output.contains("key_id: \"AKIAXXX\""));
         assert!(debug_output.contains("secret_key: \"******\""));
@@ -1292,5 +1316,64 @@ mod tests {
 
         assert!(!debug_output.contains("super_secret"));
         assert!(!debug_output.contains("temp_token"));
+    }
+
+    #[test]
+    fn test_normalize_whitespace() {
+        // test cases from minio: https://github.com/minio/minio/blob/05e569960ac584c8927a9af76755708d20f16129/cmd/signature-v4-utils_test.go#L307-L324
+        let test_cases = vec![
+            // input, expected
+            ("本語", "本語"),
+            (" abc ", "abc"),
+            (" a b ", "a b"),
+            ("a b ", "a b"),
+            ("a  b", "a b"),
+            ("a   b", "a b"),
+            ("   a   b  c   ", "a b c"),
+            ("a \t b  c   ", "a b c"),
+            ("\"a \t b  c   ", "\"a b c"),
+            (
+                " \t\n\u{000b}\r\u{000c}a \t\n\u{000b}\r\u{000c} b \t\n\u{000b}\r\u{000c} c \t\n\u{000b}\r\u{000c}",
+                "a b c",
+            ),
+        ];
+
+        for (input, expected) in test_cases {
+            let mut headers = String::new();
+
+            append_normalized_whitespace_value(&mut headers, input);
+            assert_eq!(headers, expected);
+        }
+    }
+
+    #[test]
+    fn test_canonicalize_headers_whitespace_normalization() {
+        use http::header::HeaderMap;
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-amz-meta-example", "  foo   bar  ".parse().unwrap());
+        headers.insert(
+            "x-amz-meta-another",
+            "  multiple                  spaces here  ".parse().unwrap(),
+        );
+        headers.insert(
+            "x-amz-meta-and-another-one",
+            "foo\t\t\t bar".parse().unwrap(),
+        );
+        // ignored headers
+        headers.insert("authorization", "SHOULD_BE_IGNORED".parse().unwrap());
+        headers.insert("content-length", "1337".parse().unwrap());
+
+        let (signed_headers, canonical_headers) = super::canonicalize_headers(&headers);
+
+        assert_eq!(
+            signed_headers,
+            "x-amz-meta-and-another-one;x-amz-meta-another;x-amz-meta-example"
+        );
+
+        let expected_canonical_headers = "x-amz-meta-and-another-one:foo bar\n\
+            x-amz-meta-another:multiple spaces here\n\
+            x-amz-meta-example:foo bar\n";
+        assert_eq!(canonical_headers, expected_canonical_headers);
     }
 }

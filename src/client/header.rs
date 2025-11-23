@@ -17,11 +17,11 @@
 
 //! Logic for extracting ObjectMeta from headers used by AWS, GCP and Azure
 
-use crate::path::Path;
 use crate::ObjectMeta;
+use crate::path::Path;
 use chrono::{DateTime, TimeZone, Utc};
-use http::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
 use http::HeaderMap;
+use http::header::{CONTENT_LENGTH, ETAG, LAST_MODIFIED};
 
 #[derive(Debug, Copy, Clone)]
 /// Configuration for header extraction

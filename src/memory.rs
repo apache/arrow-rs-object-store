@@ -23,15 +23,15 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{stream::BoxStream, StreamExt};
+use futures::{StreamExt, stream::BoxStream};
 use parking_lot::RwLock;
 
 use crate::multipart::{MultipartStore, PartId};
 use crate::util::InvalidGetRange;
 use crate::{
-    path::Path, Attributes, GetRange, GetResult, GetResultPayload, ListResult, MultipartId,
-    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOpts, PutOptions, PutResult,
-    Result, UpdateVersion, UploadPart,
+    Attributes, GetRange, GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload,
+    ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutResult, Result,
+    UpdateVersion, UploadPart, path::Path,
 };
 use crate::{GetOptions, PutPayload};
 
@@ -224,7 +224,7 @@ impl ObjectStore for InMemory {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
         Ok(Box::new(InMemoryUpload {
             location: location.clone(),
@@ -294,21 +294,23 @@ impl ObjectStore for InMemory {
             .collect()
     }
 
-    async fn head(&self, location: &Path) -> Result<ObjectMeta> {
-        let entry = self.entry(location)?;
-
-        Ok(ObjectMeta {
-            location: location.clone(),
-            last_modified: entry.last_modified,
-            size: entry.data.len() as u64,
-            e_tag: Some(entry.e_tag.to_string()),
-            version: None,
-        })
-    }
-
     async fn delete(&self, location: &Path) -> Result<()> {
         self.storage.write().map.remove(location);
         Ok(())
+    }
+
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
+        let storage = Arc::clone(&self.storage);
+        locations
+            .map(move |location| {
+                let location = location?;
+                storage.write().map.remove(&location);
+                Ok(location)
+            })
+            .boxed()
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
@@ -536,7 +538,7 @@ impl MultipartUpload for InMemoryUpload {
 
 #[cfg(test)]
 mod tests {
-    use crate::integration::*;
+    use crate::{ObjectStoreExt, integration::*};
 
     use super::*;
 

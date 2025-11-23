@@ -20,7 +20,7 @@
 //! ## Multipart uploads
 //!
 //! [Multipart uploads](https://cloud.google.com/storage/docs/multipart-uploads)
-//! can be initiated with the [ObjectStore::put_multipart] method. If neither
+//! can be initiated with the [`ObjectStore::put_multipart_opts`] method. If neither
 //! [`MultipartUpload::complete`] nor [`MultipartUpload::abort`] is invoked, you may
 //! have parts uploaded to GCS but not used, that you will be charged for. It is recommended
 //! you configure a [lifecycle rule] to abort incomplete multipart uploads after a certain
@@ -41,13 +41,13 @@ use crate::client::CredentialProvider;
 use crate::gcp::credential::GCSAuthorizer;
 use crate::signer::Signer;
 use crate::{
-    multipart::PartId, path::Path, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, PutMultipartOpts, PutOptions, PutPayload, PutResult, Result,
-    UploadPart,
+    GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart, multipart::PartId,
+    path::Path,
 };
 use async_trait::async_trait;
 use client::GoogleCloudStorageClient;
-use futures::stream::BoxStream;
+use futures::stream::{BoxStream, StreamExt};
 use http::Method;
 use url::Url;
 
@@ -161,7 +161,7 @@ impl ObjectStore for GoogleCloudStorage {
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        opts: PutMultipartOpts,
+        opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
         let upload_id = self.client.multipart_initiate(location, opts).await?;
 
@@ -182,6 +182,24 @@ impl ObjectStore for GoogleCloudStorage {
 
     async fn delete(&self, location: &Path) -> Result<()> {
         self.client.delete_request(location).await
+    }
+
+    fn delete_stream(
+        &self,
+        locations: BoxStream<'static, Result<Path>>,
+    ) -> BoxStream<'static, Result<Path>> {
+        let client = Arc::clone(&self.client);
+        locations
+            .map(move |location| {
+                let client = Arc::clone(&client);
+                async move {
+                    let location = location?;
+                    client.delete_request(&location).await?;
+                    Ok(location)
+                }
+            })
+            .buffered(10)
+            .boxed()
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
@@ -213,7 +231,7 @@ impl ObjectStore for GoogleCloudStorage {
 impl MultipartStore for GoogleCloudStorage {
     async fn create_multipart(&self, path: &Path) -> Result<MultipartId> {
         self.client
-            .multipart_initiate(path, PutMultipartOpts::default())
+            .multipart_initiate(path, PutMultipartOptions::default())
             .await
     }
 
@@ -282,9 +300,9 @@ impl PaginatedListStore for GoogleCloudStorage {
 
 #[cfg(test)]
 mod test {
-
     use credential::DEFAULT_GCS_BASE_URL;
 
+    use crate::ObjectStoreExt;
     use crate::integration::*;
     use crate::tests::*;
 

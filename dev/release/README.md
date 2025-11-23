@@ -17,24 +17,24 @@
   under the License.
 -->
 
-
 # Release Process
 
 ## Overview
 
 This file documents the release process for the `object_store` crate.
 
-We release a new version of `object_store` according to the schedule listed in 
+We release a new version of `object_store` according to the schedule listed in
 the [main README.md]
 
-[main README.md]: https://github.com/apache/arrow-rs?tab=readme-ov-file#object_store-crate
+[main README.md]: https://github.com/apache/arrow-rs-object-store?tab=readme-ov-file#release-schedule
 
-As we are still in an early phase, we use the 0.x version scheme. If any code has 
+As we are still in an early phase, we use the 0.x version scheme. If any code has
 been merged to main that has a breaking API change, as defined in [Rust RFC 1105]
-the minor version number is incremented changed (e.g. `0.3.0` to `0.4.0`). 
+the minor version number is incremented changed (e.g. `0.3.0` to `0.4.0`).
 Otherwise the patch version is incremented (e.g. `0.3.0` to `0.3.1`).
 
 [Rust RFC 1105]: https://github.com/rust-lang/rfcs/blob/master/text/1105-api-evolution.md
+
 # Release Mechanics
 
 ## Process Overview
@@ -48,7 +48,7 @@ crates.io, the Rust ecosystem's package manager.
 We create a `CHANGELOG.md` so our users know what has been changed between releases.
 
 The CHANGELOG is created automatically using
-[update_change_log.sh](https://github.com/apache/arrow-rs/blob/main/object_store/dev/release/update_change_log.sh)
+[update_change_log.sh](https://github.com/apache/arrow-rs-object-store/blob/main/dev/release/update_change_log.sh)
 
 This script creates a changelog using github issues and the
 labels associated with them.
@@ -57,14 +57,11 @@ labels associated with them.
 
 Now prepare a PR to update `CHANGELOG.md` and versions on `main` to reflect the planned release.
 
-Note  this process is done in the `object_store` directory. See [#6227] for an example
+See [#437] for an example.
 
-[#6227]: https://github.com/apache/arrow-rs/pull/6227
+[#437]: https://github.com/apache/arrow-rs-object-store/pull/437
 
 ```bash
-# NOTE: Run commands in object_store sub directory (not main repo checkout)
-# cd object_store
-
 git checkout main
 git pull
 git checkout -b <RELEASE_BRANCH>
@@ -170,20 +167,20 @@ The vote will be open for at least 72 hours.
 [ ] +0
 [ ] -1 Do not release this as Apache Arrow Rust Object Store  because...
 
-[1]: https://github.com/apache/arrow-rs/tree/b945b15de9085f5961a478d4f35b0c5c3427e248
-[2]: https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-object-store-rs-0.11.1-rc1
-[3]: https://github.com/apache/arrow-rs/blob/b945b15de9085f5961a478d4f35b0c5c3427e248/object_store/CHANGELOG.md
-[4]: https://github.com/apache/arrow-rs/blob/main/object_store/dev/release/verify-release-candidate.sh
+[1]: https://github.com/apache/arrow-rs-object-store/tree/b945b15de9085f5961a478d4f35b0c5c3427e248
+[2]: https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-object-store-rs-0.11.1-rc1/
+[3]: https://github.com/apache/arrow-rs-object-store/blob/b945b15de9085f5961a478d4f35b0c5c3427e248/CHANGELOG.md
+[4]: https://github.com/apache/arrow-rs-object-store/blob/main/dev/release/verify-release-candidate.sh
 ```
 
 For the release to become "official" it needs at least three Apache Arrow PMC members to vote +1 on it.
 
 ## Verifying release candidates
 
-The `object_store/dev/release/verify-release-candidate.sh` script can assist in the verification process. Run it like:
+The `dev/release/verify-release-candidate.sh` script can assist in the verification process. Run it like:
 
 ```
-./object_store/dev/release/verify-release-candidate.sh 0.11.0 1
+./dev/release/verify-release-candidate.sh 0.11.0 1
 ```
 
 #### If the release is not approved
@@ -192,11 +189,10 @@ If the release is not approved, fix whatever the problem is and try again with t
 
 ### If the release is approved,
 
-Move tarball to the release location in SVN, e.g. https://dist.apache.org/repos/dist/release/arrow/arrow-4.1.0/, using the `release-tarball.sh` script:
-
+Move tarball to the release location in SVN, e.g. https://dist.apache.org/repos/dist/release/arrow/apache-arrow-object-store-rs-4.1.0-rc4/, using the `release-tarball.sh` script:
 
 ```shell
-./object_store/dev/release/release-tarball.sh 4.1.0 2
+./dev/release/release-tarball.sh 4.1.0 2
 ```
 
 Congratulations! The release is now official!
@@ -213,7 +209,7 @@ been made to crates.io using the following instructions.
 Follow [these
 instructions](https://doc.rust-lang.org/cargo/reference/publishing.html) to
 create an account and login to crates.io before asking to be added as an owner
-of the [arrow crate](https://crates.io/crates/arrow).
+of the [object store crate](https://crates.io/crates/object_store).
 
 Download and unpack the official release tarball
 
@@ -221,8 +217,6 @@ Verify that the Cargo.toml in the tarball contains the correct version
 (e.g. `version = "0.11.0"`) and then publish the crate with the
 following commands
 
-
 ```shell
 cargo publish
 ```
-

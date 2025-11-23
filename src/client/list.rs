@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::Result;
 use crate::client::pagination::stream_paginated;
 use crate::list::{PaginatedListOptions, PaginatedListResult};
-use crate::path::{Path, DELIMITER};
-use crate::Result;
+use crate::path::{DELIMITER, Path};
 use crate::{ListResult, ObjectMeta};
 use async_trait::async_trait;
 use futures::stream::BoxStream;

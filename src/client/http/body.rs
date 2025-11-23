@@ -16,10 +16,10 @@
 // under the License.
 
 use crate::client::{HttpError, HttpErrorKind};
-use crate::{collect_bytes, PutPayload};
+use crate::{PutPayload, collect_bytes};
 use bytes::Bytes;
-use futures::stream::BoxStream;
 use futures::StreamExt;
+use futures::stream::BoxStream;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Body, Frame, SizeHint};

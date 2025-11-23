@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::ObjectStore;
 #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 use crate::local::LocalFileSystem;
 use crate::memory::InMemory;
 use crate::path::Path;
-use crate::ObjectStore;
 use url::Url;
 
 #[derive(Debug, thiserror::Error)]
@@ -92,7 +92,7 @@ impl ObjectStoreScheme {
     /// assert_eq!(scheme, ObjectStoreScheme::Local);
     /// assert_eq!(path.as_ref(), "path/to/my/file");
     ///
-    /// let url: Url = "https://blob.core.windows.net/path/to/my/file".parse().unwrap();
+    /// let url: Url = "https://blob.core.windows.net/container/path/to/my/file".parse().unwrap();
     /// let (scheme, path) = ObjectStoreScheme::parse(&url).unwrap();
     /// assert_eq!(scheme, ObjectStoreScheme::MicrosoftAzure);
     /// assert_eq!(path.as_ref(), "path/to/my/file");
@@ -110,9 +110,8 @@ impl ObjectStoreScheme {
             ("memory", None) => (Self::Memory, url.path()),
             ("s3" | "s3a", Some(_)) => (Self::AmazonS3, url.path()),
             ("gs", Some(_)) => (Self::GoogleCloudStorage, url.path()),
-            ("az" | "adl" | "azure" | "abfs" | "abfss", Some(_)) => {
-                (Self::MicrosoftAzure, url.path())
-            }
+            ("az", Some(_)) => (Self::MicrosoftAzure, strip_bucket().unwrap_or_default()),
+            ("adl" | "azure" | "abfs" | "abfss", Some(_)) => (Self::MicrosoftAzure, url.path()),
             ("http", Some(_)) => (Self::Http, url.path()),
             ("https", Some(host)) => {
                 if host.ends_with("dfs.core.windows.net")
@@ -120,7 +119,7 @@ impl ObjectStoreScheme {
                     || host.ends_with("dfs.fabric.microsoft.com")
                     || host.ends_with("blob.fabric.microsoft.com")
                 {
-                    (Self::MicrosoftAzure, url.path())
+                    (Self::MicrosoftAzure, strip_bucket().unwrap_or_default())
                 } else if host.ends_with("amazonaws.com") {
                     match host.starts_with("s3") {
                         true => (Self::AmazonS3, strip_bucket().unwrap_or_default()),
@@ -220,6 +219,7 @@ where
             builder_opts!(crate::http::HttpBuilder, url, _options)
         }
         #[cfg(not(all(
+            feature = "fs",
             feature = "aws",
             feature = "azure",
             feature = "gcp",
@@ -230,7 +230,7 @@ where
             return Err(super::Error::Generic {
                 store: "parse_url",
                 source: format!("feature for {s:?} not enabled").into(),
-            })
+            });
         }
     };
 
@@ -287,8 +287,24 @@ mod tests {
                 (ObjectStoreScheme::MicrosoftAzure, ""),
             ),
             (
+                "https://account.dfs.core.windows.net/container/path",
+                (ObjectStoreScheme::MicrosoftAzure, "path"),
+            ),
+            (
                 "https://account.blob.core.windows.net",
                 (ObjectStoreScheme::MicrosoftAzure, ""),
+            ),
+            (
+                "https://account.blob.core.windows.net/container/path",
+                (ObjectStoreScheme::MicrosoftAzure, "path"),
+            ),
+            (
+                "az://account/container",
+                (ObjectStoreScheme::MicrosoftAzure, ""),
+            ),
+            (
+                "az://account/container/path",
+                (ObjectStoreScheme::MicrosoftAzure, "path"),
             ),
             (
                 "gs://bucket/path",
@@ -335,7 +351,11 @@ mod tests {
             ),
             (
                 "https://account.dfs.fabric.microsoft.com/container",
-                (ObjectStoreScheme::MicrosoftAzure, "container"),
+                (ObjectStoreScheme::MicrosoftAzure, ""),
+            ),
+            (
+                "https://account.dfs.fabric.microsoft.com/container/path",
+                (ObjectStoreScheme::MicrosoftAzure, "path"),
             ),
             (
                 "https://account.blob.fabric.microsoft.com/",
@@ -343,7 +363,11 @@ mod tests {
             ),
             (
                 "https://account.blob.fabric.microsoft.com/container",
-                (ObjectStoreScheme::MicrosoftAzure, "container"),
+                (ObjectStoreScheme::MicrosoftAzure, ""),
+            ),
+            (
+                "https://account.blob.fabric.microsoft.com/container/path",
+                (ObjectStoreScheme::MicrosoftAzure, "path"),
             ),
         ];
 
@@ -377,8 +401,8 @@ mod tests {
     #[tokio::test]
     #[cfg(all(feature = "http", not(target_arch = "wasm32")))]
     async fn test_url_http() {
-        use crate::client::mock_server::MockServer;
-        use http::{header::USER_AGENT, Response};
+        use crate::{ObjectStoreExt, client::mock_server::MockServer};
+        use http::{Response, header::USER_AGENT};
 
         let server = MockServer::new().await;
 

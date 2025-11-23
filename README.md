@@ -85,11 +85,18 @@ There following community maintained crates provide additional functionality for
 The [`object_store`] crate follows [Semantic Versioning]. We aim to release new
 versions approximately every 2 months.
 
+Please see [the release tracker] for an up to date release schedule and to track
+the progress of upcoming releases.
+
 [`object_store`]: https://crates.io/crates/object_store
 [semantic versioning]: https://semver.org/
+[the release tracker]: https://github.com/apache/arrow-rs-object-store/issues/392
 
 Planned Release Schedule
 
 | Approximate Date | Version  | Notes                          | Ticket                                                             |
-|------------------|----------| ------------------------------ |:-------------------------------------------------------------------|
-| June 2025        | `0.12.2` | Minor, NO breaking API changes | [#307](https://github.com/apache/arrow-rs-object-store/issues/307) |
+|------------------|----------|--------------------------------|:-------------------------------------------------------------------|
+| July 2025        | `0.12.3` | Minor, NO breaking API changes | [#428](https://github.com/apache/arrow-rs-object-store/issues/428) |
+| Sep 2025         | `0.12.4` | Minor, NO breaking API changes | [#498](https://github.com/apache/arrow-rs-object-store/issues/489) |
+| Nov 2025         | `0.13.0` | Major, breaking API changes    | [#367](https://github.com/apache/arrow-rs-object-store/issues/367) |
+| TBD              | `0.13.1` | Minor, NO breaking API changes | [#393](https://github.com/apache/arrow-rs-object-store/issues/393) |

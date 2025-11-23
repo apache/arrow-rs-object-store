@@ -21,11 +21,11 @@ use crate::client::retry::RetryExt;
 use crate::client::token::TemporaryToken;
 use crate::client::{HttpClient, HttpError, TokenProvider};
 use crate::gcp::{GcpSigningCredentialProvider, STORE};
-use crate::util::{hex_digest, hex_encode, STRICT_ENCODE_SET};
+use crate::util::{STRICT_ENCODE_SET, hex_digest, hex_encode};
 use crate::{RetryConfig, StaticCredentialProvider};
 use async_trait::async_trait;
-use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 use futures::TryFutureExt;
 use http::{HeaderMap, Method};
@@ -89,6 +89,9 @@ pub enum Error {
 
     #[error("Error getting token response body: {}", source)]
     TokenResponseBody { source: HttpError },
+
+    #[error("Error reading pem file: {}", source)]
+    ReadPem { source: std::io::Error },
 }
 
 impl From<Error> for crate::Error {
@@ -130,11 +133,13 @@ impl ServiceAccountKey {
         let mut cursor = Cursor::new(encoded);
         let mut reader = BufReader::new(&mut cursor);
 
-        // Reading from string is infallible
-        match rustls_pemfile::read_one(&mut reader).unwrap() {
-            Some(Item::Pkcs8Key(key)) => Self::from_pkcs8(key.secret_pkcs8_der()),
-            Some(Item::Pkcs1Key(key)) => Self::from_der(key.secret_pkcs1_der()),
-            _ => Err(Error::MissingKey),
+        match rustls_pemfile::read_one(&mut reader) {
+            Ok(item) => match item {
+                Some(Item::Pkcs8Key(key)) => Self::from_pkcs8(key.secret_pkcs8_der()),
+                Some(Item::Pkcs1Key(key)) => Self::from_der(key.secret_pkcs1_der()),
+                _ => Err(Error::MissingKey),
+            },
+            Err(e) => Err(Error::ReadPem { source: e }),
         }
     }
 
@@ -769,7 +774,7 @@ impl GCSAuthorizer {
         let email = &self.credential.email;
         let date = self.date.unwrap_or_else(Utc::now);
         let scope = self.scope(date);
-        let credential_with_scope = format!("{}/{}", email, scope);
+        let credential_with_scope = format!("{email}/{scope}");
 
         let mut headers = HeaderMap::new();
         headers.insert("host", DEFAULT_GCS_SIGN_BLOB_HOST.parse().unwrap());
@@ -821,8 +826,7 @@ impl GCSAuthorizer {
         let (canonical_headers, signed_headers) = Self::canonicalize_headers(headers);
 
         format!(
-            "{}\n{}\n{}\n{}\n\n{}\n{}",
-            verb, path, query, canonical_headers, signed_headers, DEFAULT_GCS_PLAYLOAD_STRING
+            "{verb}\n{path}\n{query}\n{canonical_headers}\n\n{signed_headers}\n{DEFAULT_GCS_PLAYLOAD_STRING}"
         )
     }
 

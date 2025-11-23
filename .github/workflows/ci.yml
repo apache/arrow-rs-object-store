@@ -16,7 +16,6 @@
 # under the License.
 
 ---
-
 name: CI
 
 concurrency:
@@ -37,7 +36,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Setup Clippy
         run: rustup component add clippy
       # Run different tests for the library on its own as well as
@@ -72,7 +71,7 @@ jobs:
     env:
       RUSTDOCFLAGS: "-Dwarnings"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Run cargo doc
         run: cargo doc --document-private-items --no-deps --all-features
 
@@ -100,15 +99,15 @@ jobs:
       AWS_SECRET_ACCESS_KEY: test
       AWS_ENDPOINT: http://localhost:4566
       AWS_ALLOW_HTTP: true
-      AWS_COPY_IF_NOT_EXISTS: dynamo:test-table:2000
-      AWS_CONDITIONAL_PUT: dynamo:test-table:2000
+      AWS_COPY_IF_NOT_EXISTS: multipart
+      AWS_CONDITIONAL_PUT: etag
       AWS_SERVER_SIDE_ENCRYPTION: aws:kms
       HTTP_URL: "http://localhost:8080"
       GOOGLE_BUCKET: test-bucket
       GOOGLE_SERVICE_ACCOUNT: "/tmp/gcs.json"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # We are forced to use docker commands instead of service containers as we need to override the entrypoints
       # which is currently not supported - https://github.com/actions/runner/discussions/1872
@@ -132,7 +131,6 @@ jobs:
           aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-for-spawn
           aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-for-checksum
           aws --endpoint-url=http://localhost:4566 s3api create-bucket --bucket test-object-lock --object-lock-enabled-for-bucket
-          aws --endpoint-url=http://localhost:4566 dynamodb create-table --table-name test-table --key-schema AttributeName=path,KeyType=HASH AttributeName=etag,KeyType=RANGE --attribute-definitions AttributeName=path,AttributeType=S AttributeName=etag,AttributeType=S --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
 
           KMS_KEY=$(aws --endpoint-url=http://localhost:4566 kms create-key --description "test key")
           echo "AWS_SSE_KMS_KEY_ID=$(echo $KMS_KEY | jq -r .KeyMetadata.KeyId)" >> $GITHUB_ENV
@@ -182,7 +180,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
       - name: Install clang (needed for ring)
@@ -197,7 +195,7 @@ jobs:
         run: cargo build --all-features --target wasm32-wasip1
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 20
       - name: Run wasm32-unknown-unknown tests (via Node)
@@ -207,7 +205,7 @@ jobs:
     name: cargo test LocalFileSystem (win64)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           submodules: true
       - name: Run LocalFileSystem tests

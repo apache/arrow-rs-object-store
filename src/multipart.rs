@@ -35,11 +35,11 @@ pub struct PartId {
 
 /// A low-level interface for interacting with multipart upload APIs
 ///
-/// Most use-cases should prefer [`ObjectStore::put_multipart`] as this is supported by more
+/// Most use-cases should prefer [`ObjectStore::put_multipart_opts`] as this is supported by more
 /// backends, including [`LocalFileSystem`], and automatically handles uploading fixed
 /// size parts of sufficient size in parallel
 ///
-/// [`ObjectStore::put_multipart`]: crate::ObjectStore::put_multipart
+/// [`ObjectStore::put_multipart_opts`]: crate::ObjectStore::put_multipart_opts
 /// [`LocalFileSystem`]: crate::local::LocalFileSystem
 #[async_trait]
 pub trait MultipartStore: Send + Sync + 'static {
