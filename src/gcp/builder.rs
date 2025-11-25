@@ -491,8 +491,15 @@ impl GoogleCloudStorageBuilder {
             };
 
         // Then try to initialize from the application credentials file, or the environment.
+        // Only attempt to read ADC if no explicit credentials were provided
         let application_default_credentials =
-            ApplicationDefaultCredentials::read(self.application_credentials_path.as_deref())?;
+            if service_account_credentials.is_none() && self.credentials.is_none() {
+                // No explicit credentials, so try ADC and propagate errors
+                ApplicationDefaultCredentials::read(self.application_credentials_path.as_deref())?
+            } else {
+                // Explicit credentials provided, skip ADC reading entirely
+                None
+            };
 
         let disable_oauth = service_account_credentials
             .as_ref()
@@ -745,5 +752,113 @@ mod tests {
         } else {
             panic!("{key} not propagated as ClientConfigKey");
         }
+    }
+
+    #[test]
+    fn gcs_test_explicit_creds_skip_invalid_adc() {
+        // Create a valid service account key file
+        let mut valid_key_file = NamedTempFile::new().unwrap();
+        write!(valid_key_file, "{FAKE_KEY}").unwrap();
+
+        // Create invalid ADC file with unsupported credential type
+        let mut invalid_adc_file = NamedTempFile::new().unwrap();
+        invalid_adc_file
+            .write_all(br#"{"type": "external_account_authorized_user", "audience": "test"}"#)
+            .unwrap();
+
+        // Build should succeed because explicit credentials are provided
+        // and ADC errors should be ignored
+        let result = GoogleCloudStorageBuilder::new()
+            .with_service_account_path(valid_key_file.path().to_str().unwrap())
+            .with_application_credentials(invalid_adc_file.path().to_str().unwrap())
+            .with_bucket_name("test-bucket")
+            .build();
+
+        // Should succeed - ADC errors should be ignored when explicit creds provided
+        assert!(
+            result.is_ok(),
+            "Build should succeed with explicit credentials despite invalid ADC: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn gcs_test_explicit_creds_with_service_account_key_skip_invalid_adc() {
+        // Create invalid ADC file with unsupported credential type
+        let mut invalid_adc_file = NamedTempFile::new().unwrap();
+        invalid_adc_file
+            .write_all(br#"{"type": "external_account_authorized_user", "audience": "test"}"#)
+            .unwrap();
+
+        // Build should succeed with service account key (not path)
+        let result = GoogleCloudStorageBuilder::new()
+            .with_service_account_key(FAKE_KEY)
+            .with_application_credentials(invalid_adc_file.path().to_str().unwrap())
+            .with_bucket_name("test-bucket")
+            .build();
+
+        // Should succeed - ADC errors should be ignored when explicit creds provided
+        assert!(
+            result.is_ok(),
+            "Build should succeed with service account key despite invalid ADC: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn gcs_test_adc_error_propagated_without_explicit_creds() {
+        // Create invalid ADC file with unsupported credential type
+        let mut invalid_adc_file = NamedTempFile::new().unwrap();
+        invalid_adc_file
+            .write_all(br#"{"type": "external_account_authorized_user", "audience": "test"}"#)
+            .unwrap();
+
+        // Build should fail because no explicit credentials and ADC is invalid
+        let result = GoogleCloudStorageBuilder::new()
+            .with_application_credentials(invalid_adc_file.path().to_str().unwrap())
+            .with_bucket_name("test-bucket")
+            .build();
+
+        // Should fail - ADC errors should be propagated when no explicit creds
+        assert!(
+            result.is_err(),
+            "Build should fail without explicit credentials and invalid ADC"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("external_account_authorized_user"),
+            "Error should mention unsupported credential type: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn gcs_test_with_credentials_skip_invalid_adc() {
+        use crate::StaticCredentialProvider;
+
+        // Create invalid ADC file with unsupported credential type
+        let mut invalid_adc_file = NamedTempFile::new().unwrap();
+        invalid_adc_file
+            .write_all(br#"{"type": "external_account_authorized_user", "audience": "test"}"#)
+            .unwrap();
+
+        // Create a custom credential provider
+        let custom_creds = Arc::new(StaticCredentialProvider::new(GcpCredential {
+            bearer: "custom-token".to_string(),
+        }));
+
+        // Build should succeed with custom credentials provider despite invalid ADC
+        let result = GoogleCloudStorageBuilder::new()
+            .with_credentials(custom_creds)
+            .with_application_credentials(invalid_adc_file.path().to_str().unwrap())
+            .with_bucket_name("test-bucket")
+            .build();
+
+        // Should succeed - ADC errors should be ignored when explicit creds provided via with_credentials
+        assert!(
+            result.is_ok(),
+            "Build should succeed with custom credentials despite invalid ADC: {:?}",
+            result.err()
+        );
     }
 }
