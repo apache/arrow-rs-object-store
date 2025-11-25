@@ -618,7 +618,7 @@ pub type DynObjectStore = dyn ObjectStore;
 /// Id type for multipart uploads.
 pub type MultipartId = String;
 
-/// Universal API to multiple object store services.
+/// Universal API for object store services.
 ///
 /// See the [module-level documentation](crate) for a high level overview and
 /// examples. See [`ObjectStoreExt`] for additional convenience methods.
@@ -632,16 +632,15 @@ pub type MultipartId = String;
 /// the store _users_ and provides additional methods that may be simpler to use
 /// but overlap in functionality with [`ObjectStore`].
 ///
-/// # No Default Implementations
+/// # Minimal Default Implementations
+/// There are only a few default implementations for methods in this trait by
+/// design. This was different from versions prior to `0.13.0`, which had many
+/// more default implementations. Default implementations are convenient for
+/// users, but error-prone for implementors as they require keeping the
+/// convenience APIs correctly in sync.
 ///
-/// There are no default implementation for any of the methods in this trait by
-/// design. This was different than in versions prior to `0.13.0`, which had
-/// several default implementations. Default implementations were convenient for
-/// users, but was error-prone as it required implementations of ObjectStore
-/// keep the convenience APIs correctly in sync.
-///
-/// As of version 0.13.0, all methods on [`ObjectStore`] must be implemented, and
-/// the convenience methods are provided by the [`ObjectStoreExt`] trait as
+/// As of version 0.13.0, most methods on [`ObjectStore`] must be implemented, and
+/// the convenience methods have been moved to the [`ObjectStoreExt`] trait as
 /// described above. See [#385] for more details.
 ///
 /// [#385]: https://github.com/apache/arrow-rs-object-store/issues/385
