@@ -22,7 +22,7 @@ use std::ops::Range;
 
 use crate::path::Path;
 use crate::{
-    GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
     PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
 };
 
@@ -182,22 +182,16 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
             })
     }
 
-    async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
+    async fn copy_opts(&self, from: &Path, to: &Path, options: CopyOptions) -> Result<()> {
         let full_from = self.full_path(from);
         let full_to = self.full_path(to);
-        self.inner.copy(&full_from, &full_to).await
+        self.inner.copy_opts(&full_from, &full_to, options).await
     }
 
     async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
         let full_from = self.full_path(from);
         let full_to = self.full_path(to);
         self.inner.rename(&full_from, &full_to).await
-    }
-
-    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        let full_from = self.full_path(from);
-        let full_to = self.full_path(to);
-        self.inner.copy_if_not_exists(&full_from, &full_to).await
     }
 
     async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
