@@ -620,16 +620,16 @@ pub type MultipartId = String;
 
 /// Universal API to multiple object store services.
 ///
-/// See the [module-level documentation](crate) for a high leve overview and
+/// See the [module-level documentation](crate) for a high level overview and
 /// examples. See [`ObjectStoreExt`] for additional convenience methods.
 ///
 /// # Contract
-/// This trait is a contract between object store implementations
+/// This trait is a contract between object store _implementations_
 /// (e.g. providers, wrappers) and the `object_store` crate itself. It is
 /// intended to be the minimum API required for an object store.
 ///
 /// The [`ObjectStoreExt`] acts as an API/contract between `object_store` and
-/// the store users and provides additional methods that may be simpler to use
+/// the store _users_ and provides additional methods that may be simpler to use
 /// but overlap in functionality with [`ObjectStore`].
 ///
 /// # No Default Implementations
