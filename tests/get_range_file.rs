@@ -77,11 +77,7 @@ impl ObjectStore for MyStore {
         todo!()
     }
 
-    async fn copy(&self, _: &Path, _: &Path) -> Result<()> {
-        todo!()
-    }
-
-    async fn copy_if_not_exists(&self, _: &Path, _: &Path) -> Result<()> {
+    async fn copy_opts(&self, _: &Path, _: &Path, _: CopyOptions) -> Result<()> {
         todo!()
     }
 }

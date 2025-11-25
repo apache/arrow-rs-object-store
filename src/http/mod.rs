@@ -45,9 +45,9 @@ use crate::client::{HttpConnector, http_connector};
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
-    ClientConfigKey, ClientOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
-    RetryConfig,
+    ClientConfigKey, ClientOptions, CopyMode, CopyOptions, GetOptions, GetResult, ListResult,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload,
+    PutResult, Result, RetryConfig,
 };
 
 mod client;
@@ -210,12 +210,16 @@ impl ObjectStore for HttpStore {
         })
     }
 
-    async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        self.client.copy(from, to, true).await
-    }
+    async fn copy_opts(&self, from: &Path, to: &Path, options: CopyOptions) -> Result<()> {
+        let CopyOptions {
+            mode,
+            extensions: _,
+        } = options;
 
-    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        self.client.copy(from, to, false).await
+        match mode {
+            CopyMode::Overwrite => self.client.copy(from, to, true).await,
+            CopyMode::Create => self.client.copy(from, to, false).await,
+        }
     }
 }
 
