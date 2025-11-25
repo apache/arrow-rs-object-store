@@ -455,4 +455,31 @@ mod test {
             err
         )
     }
+
+    #[tokio::test]
+    async fn gcs_test_external_account_authorized_user_integration() {
+        maybe_skip_integration!();
+
+        // This test verifies that external_account_authorized_user credentials
+        // (used by Workforce Identity Federation) work end-to-end
+        let integration = GoogleCloudStorageBuilder::from_env().build().unwrap();
+
+        // Perform a simple operation to verify credentials work
+        let path = Path::from("test_external_account_auth_user");
+        let data = PutPayload::from("test data for external account authorized user");
+
+        // Put an object
+        integration.put(&path, data.clone()).await.unwrap();
+
+        // Get it back
+        let result = integration.get(&path).await.unwrap();
+        let bytes = result.bytes().await.unwrap();
+        assert_eq!(
+            bytes.as_ref(),
+            b"test data for external account authorized user"
+        );
+
+        // Clean up
+        integration.delete(&path).await.unwrap();
+    }
 }
