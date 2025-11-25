@@ -1885,9 +1885,8 @@ impl From<Error> for std::io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     use chrono::TimeZone;
-    
 
     macro_rules! maybe_skip_integration {
         () => {
@@ -1897,7 +1896,7 @@ mod tests {
             }
         };
     }
-    
+    pub(crate) use maybe_skip_integration;
 
     /// Test that the returned stream does not borrow the lifetime of Path
     fn list_store<'a>(
@@ -1939,6 +1938,9 @@ mod tests {
     {
         use bytes::Buf;
         use serde::Deserialize;
+        use tokio::io::AsyncWriteExt;
+
+        use crate::buffered::BufWriter;
 
         #[derive(Deserialize)]
         struct Tagging {
