@@ -19,12 +19,12 @@ use crate::aws::builder::S3EncryptionHeaders;
 use crate::aws::checksum::Checksum;
 use crate::aws::credential::{AwsCredential, CredentialExt};
 use crate::aws::{
-    AwsAuthorizer, AwsCredentialProvider, S3ConditionalPut, S3CopyIfNotExists, COPY_SOURCE_HEADER,
+    AwsAuthorizer, AwsCredentialProvider, COPY_SOURCE_HEADER, S3ConditionalPut, S3CopyIfNotExists,
     STORE, STRICT_PATH_ENCODE_SET, TAGS_HEADER,
 };
 use crate::client::builder::{HttpRequestBuilder, RequestBuilderError};
 use crate::client::get::GetClient;
-use crate::client::header::{get_etag, HeaderConfig};
+use crate::client::header::{HeaderConfig, get_etag};
 use crate::client::header::{get_put_result, get_version};
 use crate::client::list::ListClient;
 use crate::client::retry::{RetryContext, RetryExt};
@@ -40,8 +40,8 @@ use crate::{
     PutPayload, PutResult, Result, RetryConfig, TagSet,
 };
 use async_trait::async_trait;
-use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
 use bytes::{Buf, Bytes};
 use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH,
@@ -50,7 +50,7 @@ use http::header::{
 use http::{HeaderMap, HeaderName, Method};
 use itertools::Itertools;
 use md5::{Digest, Md5};
-use percent_encoding::{utf8_percent_encode, PercentEncode};
+use percent_encoding::{PercentEncode, utf8_percent_encode};
 use quick_xml::events::{self as xml_events};
 use ring::digest;
 use ring::digest::Context;
@@ -62,6 +62,8 @@ const SHA256_CHECKSUM: &str = "x-amz-checksum-sha256";
 const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-amz-meta-";
 const ALGORITHM: &str = "x-amz-checksum-algorithm";
 const STORAGE_CLASS: &str = "x-amz-storage-class";
+
+const MB: usize = usize::pow(2, 20);
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, thiserror::Error)]
@@ -395,12 +397,19 @@ impl Request<'_> {
         Self { builder, ..self }
     }
 
-    pub(crate) fn with_payload(mut self, payload: PutPayload) -> Self {
+    pub(crate) async fn with_payload(mut self, payload: PutPayload) -> Self {
         if (!self.config.skip_signature && self.config.sign_payload)
             || self.config.checksum.is_some()
         {
             let mut sha256 = Context::new(&digest::SHA256);
-            payload.iter().for_each(|x| sha256.update(x));
+            for part in payload.iter() {
+                for chunk in part.chunks(4 * MB) {
+                    // Write the chunk into SHA256 context
+                    sha256.update(chunk);
+                    // Yield if needed to avoid
+                    tokio::task::consume_budget().await;
+                }
+            }
             let payload_sha256 = sha256.finish();
 
             if let Some(Checksum::SHA256) = self.config.checksum {
@@ -685,7 +694,7 @@ impl S3Client {
             .idempotent(true);
 
         request = match data {
-            PutPartPayload::Part(payload) => request.with_payload(payload),
+            PutPartPayload::Part(payload) => request.with_payload(payload).await,
             PutPartPayload::Copy(path) => request.header(
                 "x-amz-copy-source",
                 &format!("{}/{}", self.config.bucket, encode_path(path)),
@@ -953,10 +962,10 @@ fn encode_path(path: &Path) -> PercentEncode<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::mock_server::MockServer;
     use crate::client::HttpClient;
-    use http::header::CONTENT_LENGTH;
+    use crate::client::mock_server::MockServer;
     use http::Response;
+    use http::header::CONTENT_LENGTH;
 
     #[tokio::test]
     async fn test_create_multipart_has_content_length() {

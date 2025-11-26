@@ -173,6 +173,7 @@ impl ObjectStore for AmazonS3 {
             .client
             .request(Method::PUT, location)
             .with_payload(payload)
+            .await
             .with_attributes(attributes)
             .with_tags(tags)
             .with_extensions(extensions)
