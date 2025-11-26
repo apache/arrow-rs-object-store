@@ -29,7 +29,7 @@ use futures::stream::BoxStream;
 use crate::path::Path;
 use crate::{
     CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOptions, PutOptions, PutResult,
+    ObjectStore, PutMultipartOptions, PutOptions, PutResult, RenameOptions,
 };
 use crate::{PutPayload, Result};
 
@@ -170,12 +170,8 @@ impl ObjectStore for ChunkedStore {
         self.inner.copy_opts(from, to, options).await
     }
 
-    async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
-        self.inner.rename(from, to).await
-    }
-
-    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        self.inner.rename_if_not_exists(from, to).await
+    async fn rename_opts(&self, from: &Path, to: &Path, options: RenameOptions) -> Result<()> {
+        self.inner.rename_opts(from, to, options).await
     }
 }
 
