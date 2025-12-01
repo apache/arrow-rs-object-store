@@ -644,6 +644,56 @@ pub type MultipartId = String;
 /// described above. See [#385] for more details.
 ///
 /// [#385]: https://github.com/apache/arrow-rs-object-store/issues/385
+///
+/// # Wrappers
+/// If you wrap an [`ObjectStore`] -- e.g. to add observability -- you SHOULD
+/// implement all trait methods. This ensures that defaults implementations
+/// that are overwritten by the wrapped store are also used by the wrapper.
+/// For example:
+///
+/// ```ignore
+/// struct MyStore {
+///     ...
+/// }
+///
+/// #[async_trait]
+/// impl ObjectStore for MyStore {
+///     // implement custom ranges handling
+///     async fn get_ranges(
+///         &self,
+///         location: &Path,
+///         ranges: &[Range<u64>],
+///     ) -> Result<Vec<Bytes>> {
+///         ...
+///     }
+///
+///     ...
+/// }
+///
+/// struct Wrapper {
+///     inner: Arc<dyn ObjectStore>,
+/// }
+///
+/// #[async_trait]
+/// #[deny(clippy::missing_trait_methods)]
+/// impl ObjectStore for Wrapper {
+///     // If we would not implement this method,
+///     // we would get the trait default and not
+///     // use the actual implementation of `inner`.
+///     async fn get_ranges(
+///         &self,
+///         location: &Path,
+///         ranges: &[Range<u64>],
+///     ) -> Result<Vec<Bytes>> {
+///         ...
+///     }
+///
+///     ...
+/// }
+/// ```
+///
+/// To automatically detect this issue, use
+/// [`#[deny(clippy::missing_trait_methods)]`](https://rust-lang.github.io/rust-clippy/master/index.html#missing_trait_methods).
 #[async_trait]
 pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Save the provided `payload` to `location` with the given options
