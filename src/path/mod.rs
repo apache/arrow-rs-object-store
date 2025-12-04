@@ -304,8 +304,7 @@ impl Path {
     /// Returns a copy of this [`Path`] with the last path segment removed
     ///
     /// Returns `None` if this path has zero segments.
-    #[doc(alias = "folder")]
-    pub fn prefix(&self) -> Option<Self> {
+    pub fn parent(&self) -> Option<Self> {
         let (prefix, _filename) = self.raw.rsplit_once(DELIMITER)?;
 
         Some(Self {
@@ -543,11 +542,11 @@ mod tests {
 
     #[test]
     fn prefix_matches_raw_content() {
-        assert_eq!(Path::ROOT.prefix(), None, "empty path must have no prefix");
+        assert_eq!(Path::ROOT.parent(), None, "empty path must have no prefix");
 
-        assert_eq!(path("foo").prefix().unwrap(), Path::ROOT);
-        assert_eq!(path("foo/bar").prefix().unwrap(), path("foo"));
-        assert_eq!(path("foo/bar/baz").prefix().unwrap(), path("foo/bar"));
+        assert_eq!(path("foo").parent().unwrap(), Path::ROOT);
+        assert_eq!(path("foo/bar").parent().unwrap(), path("foo"));
+        assert_eq!(path("foo/bar/baz").parent().unwrap(), path("foo/bar"));
     }
 
     #[test]
