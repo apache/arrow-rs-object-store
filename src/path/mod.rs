@@ -297,6 +297,8 @@ impl Path {
     }
 
     /// Returns the [`PathPart`]s of this [`Path`]
+    ///
+    /// Equivalent to calling `.into_iter()` on a `&Path`.
     pub fn parts(&self) -> PathParts<'_> {
         PathParts::new(&self.raw)
     }
@@ -400,6 +402,16 @@ where
         let mut this = Self::ROOT;
         this.extend(iter);
         this
+    }
+}
+
+/// See also [`Path::parts`]
+impl<'a> IntoIterator for &'a Path {
+    type Item = PathPart<'a>;
+    type IntoIter = PathParts<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        PathParts::new(&self.raw)
     }
 }
 
@@ -716,6 +728,20 @@ mod tests {
     #[test]
     fn root_is_root() {
         assert!(Path::ROOT.is_root());
+    }
+
+    #[test]
+    fn impl_extend() {
+        let mut p = Path::ROOT;
+
+        p.extend(&Path::ROOT);
+        assert_eq!(p, Path::ROOT);
+
+        p.extend(&path("foo/bar"));
+        assert_eq!(p, path("foo/bar"));
+
+        p.extend(&path("baz/xyz/abc"));
+        assert_eq!(p, path("foo/bar/baz/xyz/abc"));
     }
 
     /// Construct a [`Path`] from a raw `&str`, or panic trying.
