@@ -728,8 +728,10 @@ mod tests {
     #[test]
     fn root_is_root() {
         assert!(Path::ROOT.is_root());
+        assert!(Path::ROOT.parts().next().is_none());
     }
 
+    /// Main test for `impl Extend for Path`, covers most cases.
     #[test]
     fn impl_extend() {
         let mut p = Path::ROOT;
@@ -737,11 +739,29 @@ mod tests {
         p.extend(&Path::ROOT);
         assert_eq!(p, Path::ROOT);
 
-        p.extend(&path("foo/bar"));
+        p.extend(&path("foo"));
+        assert_eq!(p, path("foo"));
+
+        p.extend(&path("bar/baz"));
+        assert_eq!(p, path("foo/bar/baz"));
+
+        p.extend(&path("a/b/c"));
+        assert_eq!(p, path("foo/bar/baz/a/b/c"));
+    }
+
+    /// Test for `impl Extend for Path`, specifically covers addition of a single segment.
+    #[test]
+    fn impl_extend_for_one_segment() {
+        let mut p = Path::ROOT;
+
+        p.extend(&path("foo"));
+        assert_eq!(p, path("foo"));
+
+        p.extend(&path("bar"));
         assert_eq!(p, path("foo/bar"));
 
-        p.extend(&path("baz/xyz/abc"));
-        assert_eq!(p, path("foo/bar/baz/xyz/abc"));
+        p.extend(&path("baz"));
+        assert_eq!(p, path("foo/bar/baz"));
     }
 
     /// Construct a [`Path`] from a raw `&str`, or panic trying.
