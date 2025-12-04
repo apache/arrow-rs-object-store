@@ -1035,19 +1035,22 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ///
     /// By default, this is implemented as a copy and then delete source. It may not
     /// check when deleting source that it was the same object that was originally copied.
-    ///
-    /// If there exists an object at the destination, it will be overwritten.
-    async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
-        self.copy(from, to).await?;
-        self.delete(from).await
-    }
-
-    /// Move an object from one path to another in the same object store.
-    ///
-    /// Will return an error if the destination already has an object.
-    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        self.copy_if_not_exists(from, to).await?;
-        self.delete(from).await
+    async fn rename_opts(&self, from: &Path, to: &Path, options: RenameOptions) -> Result<()> {
+        let RenameOptions {
+            target_mode,
+            extensions,
+        } = options;
+        let copy_mode = match target_mode {
+            RenameTargetMode::Overwrite => CopyMode::Overwrite,
+            RenameTargetMode::Create => CopyMode::Create,
+        };
+        let copy_options = CopyOptions {
+            mode: copy_mode,
+            extensions,
+        };
+        self.copy_opts(from, to, copy_options).await?;
+        self.delete(from).await?;
+        Ok(())
     }
 }
 
@@ -1116,12 +1119,13 @@ macro_rules! as_ref_impl {
                 self.as_ref().copy_opts(from, to, options).await
             }
 
-            async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
-                self.as_ref().rename(from, to).await
-            }
-
-            async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-                self.as_ref().rename_if_not_exists(from, to).await
+            async fn rename_opts(
+                &self,
+                from: &Path,
+                to: &Path,
+                options: RenameOptions,
+            ) -> Result<()> {
+                self.as_ref().rename_opts(from, to, options).await
             }
         }
     };
@@ -1238,6 +1242,19 @@ pub trait ObjectStoreExt: ObjectStore {
     /// If atomic operations are not supported by the underlying object storage (like S3)
     /// it will return an error.
     fn copy_if_not_exists(&self, from: &Path, to: &Path) -> impl Future<Output = Result<()>>;
+
+    /// Move an object from one path to another in the same object store.
+    ///
+    /// By default, this is implemented as a copy and then delete source. It may not
+    /// check when deleting source that it was the same object that was originally copied.
+    ///
+    /// If there exists an object at the destination, it will be overwritten.
+    fn rename(&self, from: &Path, to: &Path) -> impl Future<Output = Result<()>>;
+
+    /// Move an object from one path to another in the same object store.
+    ///
+    /// Will return an error if the destination already has an object.
+    fn rename_if_not_exists(&self, from: &Path, to: &Path) -> impl Future<Output = Result<()>>;
 }
 
 impl<T> ObjectStoreExt for T
@@ -1276,6 +1293,16 @@ where
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
         let options = CopyOptions::new().with_mode(CopyMode::Create);
         self.copy_opts(from, to, options).await
+    }
+
+    async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
+        let options = RenameOptions::new().with_target_mode(RenameTargetMode::Overwrite);
+        self.rename_opts(from, to, options).await
+    }
+
+    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+        let options = RenameOptions::new().with_target_mode(RenameTargetMode::Create);
+        self.rename_opts(from, to, options).await
     }
 }
 
@@ -1827,6 +1854,76 @@ impl PartialEq<Self> for CopyOptions {
 }
 
 impl Eq for CopyOptions {}
+
+/// Configure preconditions for the target of rename operation.
+///
+/// Note though that the source location may or not be deleted at the same time in an atomic operation. There is
+/// currently NO flag to control the atomicity of "delete source at the same time as creating the target".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RenameTargetMode {
+    /// Perform a write operation on the target, overwriting any object present at the provided path.
+    #[default]
+    Overwrite,
+    /// Perform an atomic write operation of the target, returning [`Error::AlreadyExists`] if an
+    /// object already exists at the provided path.
+    Create,
+}
+
+/// Options for a rename request
+#[derive(Debug, Clone, Default)]
+pub struct RenameOptions {
+    /// Configure the [`RenameTargetMode`] for this operation
+    pub target_mode: RenameTargetMode,
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to pass context-specific information (like tracing spans) via trait methods.
+    ///
+    /// These extensions are ignored entirely by backends offered through this crate.
+    ///
+    /// They are also excluded from [`PartialEq`] and [`Eq`].
+    pub extensions: Extensions,
+}
+
+impl RenameOptions {
+    /// Create a new [`RenameOptions`]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the `target_mode=.
+    ///
+    /// See [`RenameOptions::target_mode`].
+    #[must_use]
+    pub fn with_target_mode(mut self, target_mode: RenameTargetMode) -> Self {
+        self.target_mode = target_mode;
+        self
+    }
+
+    /// Sets the `extensions`.
+    ///
+    /// See [`RenameOptions::extensions`].
+    #[must_use]
+    pub fn with_extensions(mut self, extensions: Extensions) -> Self {
+        self.extensions = extensions;
+        self
+    }
+}
+
+impl PartialEq<Self> for RenameOptions {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            target_mode,
+            extensions: _,
+        } = self;
+        let Self {
+            target_mode: target_mode_other,
+            extensions: _,
+        } = other;
+
+        target_mode == target_mode_other
+    }
+}
+
+impl Eq for RenameOptions {}
 
 /// A specialized `Result` for object store-related errors
 pub type Result<T, E = Error> = std::result::Result<T, E>;

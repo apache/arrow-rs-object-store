@@ -19,8 +19,8 @@
 
 use crate::{
     BoxStream, CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload,
-    ObjectMeta, ObjectStore, Path, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
-    StreamExt, UploadPart,
+    ObjectMeta, ObjectStore, Path, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    RenameOptions, Result, StreamExt, UploadPart,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -156,14 +156,9 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         self.inner.copy_opts(from, to, options).await
     }
 
-    async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
+    async fn rename_opts(&self, from: &Path, to: &Path, options: RenameOptions) -> Result<()> {
         let _permit = self.semaphore.acquire().await.unwrap();
-        self.inner.rename(from, to).await
-    }
-
-    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        let _permit = self.semaphore.acquire().await.unwrap();
-        self.inner.rename_if_not_exists(from, to).await
+        self.inner.rename_opts(from, to, options).await
     }
 }
 

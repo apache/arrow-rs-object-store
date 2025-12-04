@@ -21,7 +21,7 @@ use std::ops::Range;
 use std::{convert::TryInto, sync::Arc};
 
 use crate::multipart::{MultipartStore, PartId};
-use crate::{CopyOptions, GetOptions, UploadPart};
+use crate::{CopyOptions, GetOptions, RenameOptions, UploadPart};
 use crate::{
     GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
     PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, path::Path,
@@ -261,16 +261,10 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         self.inner.copy_opts(from, to, options).await
     }
 
-    async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
+    async fn rename_opts(&self, from: &Path, to: &Path, options: RenameOptions) -> Result<()> {
         sleep(self.config().wait_put_per_call).await;
 
-        self.inner.rename(from, to).await
-    }
-
-    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        sleep(self.config().wait_put_per_call).await;
-
-        self.inner.rename_if_not_exists(from, to).await
+        self.inner.rename_opts(from, to, options).await
     }
 }
 
