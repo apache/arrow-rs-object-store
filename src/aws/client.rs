@@ -138,6 +138,7 @@ impl From<Error> for crate::Error {
 pub(crate) enum PutPartPayload<'a> {
     Part(PutPayload),
     Copy(&'a Path),
+    CopyRange(&'a Path, std::ops::Range<u64>),
 }
 
 impl Default for PutPartPayload<'_> {
@@ -207,6 +208,10 @@ pub(crate) struct S3Config {
     pub conditional_put: S3ConditionalPut,
     pub request_payer: bool,
     pub(super) encryption_headers: S3EncryptionHeaders,
+    /// Threshold in bytes above which copy will use multipart copy
+    pub multipart_copy_threshold: u64,
+    /// Preferred multipart copy part size in bytes (None => auto)
+    pub multipart_copy_part_size: u64,
 }
 
 impl S3Config {
@@ -676,7 +681,10 @@ impl S3Client {
         part_idx: usize,
         data: PutPartPayload<'_>,
     ) -> Result<PartId> {
-        let is_copy = matches!(data, PutPartPayload::Copy(_));
+        let is_copy = matches!(
+            data,
+            PutPartPayload::Copy(_) | PutPartPayload::CopyRange(_, _)
+        );
         let part = (part_idx + 1).to_string();
 
         let mut request = self
@@ -690,6 +698,18 @@ impl S3Client {
                 "x-amz-copy-source",
                 &format!("{}/{}", self.config.bucket, encode_path(path)),
             ),
+            PutPartPayload::CopyRange(path, range) => {
+                // AWS expects inclusive end for copy range header
+                let start = range.start;
+                let end_inclusive = range.end.saturating_sub(1);
+                let range_value = format!("bytes={}-{}", start, end_inclusive);
+                request
+                    .header(
+                        "x-amz-copy-source",
+                        &format!("{}/{}", self.config.bucket, encode_path(path)),
+                    )
+                    .header("x-amz-copy-source-range", &range_value)
+            }
         };
 
         if self
@@ -995,6 +1015,8 @@ mod tests {
             conditional_put: Default::default(),
             encryption_headers: Default::default(),
             request_payer: false,
+            multipart_copy_threshold: 5 * 1024 * 1024 * 1024,
+            multipart_copy_part_size: 5 * 1024 * 1024 * 1024,
         };
 
         let client = S3Client::new(config, HttpClient::new(reqwest::Client::new()));
