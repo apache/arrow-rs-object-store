@@ -103,6 +103,63 @@ impl AmazonS3 {
     fn path_url(&self, path: &Path) -> String {
         self.client.config.path_url(path)
     }
+
+    /// Perform a multipart copy operation.
+    ///
+    /// If the multipart upload fails, make a best effort attempt to clean it up. It's the caller's
+    /// responsibility to add a lifecycle rule if guaranteed cleanup is required, as we cannot
+    /// protect against an ill-timed process crash.
+    async fn copy_multipart(
+        &self,
+        from: &Path,
+        to: &Path,
+        size: u64,
+        mode: CompleteMultipartMode,
+    ) -> Result<()> {
+        let upload_id = self
+            .client
+            .create_multipart(to, PutMultipartOptions::default())
+            .await?;
+
+        // S3 requires minimum 5 MiB per part (except final) and max 10,000 parts
+        let part_size = self.client.config.multipart_copy_part_size;
+
+        let mut parts = Vec::new();
+        let mut offset: u64 = 0;
+        let mut idx: usize = 0;
+        let res = async {
+            while offset < size {
+                let end = if size - offset <= part_size {
+                    size
+                } else {
+                    offset + part_size
+                };
+                let payload = if offset == 0 && end == size {
+                    PutPartPayload::Copy(from)
+                } else {
+                    PutPartPayload::CopyRange(from, offset..end)
+                };
+                let part = self.client.put_part(to, &upload_id, idx, payload).await?;
+                parts.push(part);
+                idx += 1;
+                offset = end;
+            }
+            self.client
+                .complete_multipart(to, &upload_id, parts, mode)
+                .await
+                .map(|_| ())
+        }
+        .await;
+
+        // If the multipart upload failed, make a best effort attempt to
+        // clean it up. It's the caller's responsibility to add a
+        // lifecycle rule if guaranteed cleanup is required, as we
+        // cannot protect against an ill-timed process crash.
+        if res.is_err() {
+            let _ = self.client.abort_multipart(to, &upload_id).await;
+        }
+        res
+    }
 }
 
 #[async_trait]
@@ -316,11 +373,28 @@ impl ObjectStore for AmazonS3 {
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
-        self.client
-            .copy_request(from, to)
-            .idempotent(true)
-            .send()
-            .await?;
+        // Determine source size to decide between single CopyObject and multipart copy
+        let head_meta = self
+            .client
+            .get_opts(
+                from,
+                GetOptions {
+                    head: true,
+                    ..Default::default()
+                },
+            )
+            .await?
+            .meta;
+        if head_meta.size <= self.client.config.multipart_copy_threshold {
+            self.client
+                .copy_request(from, to)
+                .idempotent(true)
+                .send()
+                .await?;
+        } else {
+            self.copy_multipart(from, to, head_meta.size, CompleteMultipartMode::Overwrite)
+                .await?;
+        }
         Ok(())
     }
 
@@ -329,45 +403,27 @@ impl ObjectStore for AmazonS3 {
             Some(S3CopyIfNotExists::Header(k, v)) => (k, v, StatusCode::PRECONDITION_FAILED),
             Some(S3CopyIfNotExists::HeaderWithStatus(k, v, status)) => (k, v, *status),
             Some(S3CopyIfNotExists::Multipart) => {
-                let upload_id = self
+                let head_meta = self
                     .client
-                    .create_multipart(to, PutMultipartOptions::default())
-                    .await?;
-
-                let res = async {
-                    let part_id = self
-                        .client
-                        .put_part(to, &upload_id, 0, PutPartPayload::Copy(from))
-                        .await?;
-                    match self
-                        .client
-                        .complete_multipart(
-                            to,
-                            &upload_id,
-                            vec![part_id],
-                            CompleteMultipartMode::Create,
-                        )
-                        .await
-                    {
-                        Err(e @ Error::Precondition { .. }) => Err(Error::AlreadyExists {
+                    .get_opts(
+                        from,
+                        GetOptions {
+                            head: true,
+                            ..Default::default()
+                        },
+                    )
+                    .await?
+                    .meta;
+                return self
+                    .copy_multipart(from, to, head_meta.size, CompleteMultipartMode::Create)
+                    .await
+                    .map_err(|err| match err {
+                        Error::Precondition { .. } => Error::AlreadyExists {
                             path: to.to_string(),
-                            source: Box::new(e),
-                        }),
-                        Ok(_) => Ok(()),
-                        Err(e) => Err(e),
-                    }
-                }
-                .await;
-
-                // If the multipart upload failed, make a best effort attempt to
-                // clean it up. It's the caller's responsibility to add a
-                // lifecycle rule if guaranteed cleanup is required, as we
-                // cannot protect against an ill-timed process crash.
-                if res.is_err() {
-                    let _ = self.client.abort_multipart(to, &upload_id).await;
-                }
-
-                return res;
+                            source: Box::new(err),
+                        },
+                        other => other,
+                    });
             }
             #[allow(deprecated)]
             Some(S3CopyIfNotExists::Dynamo(lock)) => {
