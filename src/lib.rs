@@ -1055,7 +1055,7 @@ macro_rules! as_ref_impl {
     ($type:ty) => {
         #[async_trait]
         #[deny(clippy::missing_trait_methods)]
-        impl ObjectStore for $type {
+        impl<T: ObjectStore + ?Sized> ObjectStore for $type {
             async fn put_opts(
                 &self,
                 location: &Path,
@@ -1127,8 +1127,8 @@ macro_rules! as_ref_impl {
     };
 }
 
-as_ref_impl!(Arc<dyn ObjectStore>);
-as_ref_impl!(Box<dyn ObjectStore>);
+as_ref_impl!(Arc<T>);
+as_ref_impl!(Box<T>);
 
 /// Extension trait for [`ObjectStore`] with convenience functions.
 ///
@@ -1957,9 +1957,8 @@ impl From<Error> for std::io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::buffered::BufWriter;
+
     use chrono::TimeZone;
-    use tokio::io::AsyncWriteExt;
 
     macro_rules! maybe_skip_integration {
         () => {
@@ -2011,6 +2010,9 @@ mod tests {
     {
         use bytes::Buf;
         use serde::Deserialize;
+        use tokio::io::AsyncWriteExt;
+
+        use crate::buffered::BufWriter;
 
         #[derive(Deserialize)]
         struct Tagging {
@@ -2225,5 +2227,24 @@ mod tests {
         assert_eq!(options.version, Some("version-1".to_string()));
         assert!(options.head);
         assert_eq!(options.extensions.get::<&str>(), extensions.get::<&str>());
+    }
+
+    fn takes_generic_object_store<T: ObjectStore>(store: T) {
+        // This function is just to ensure that the trait bounds are satisfied
+        let _ = store;
+    }
+    #[test]
+    fn test_dyn_impl() {
+        let store: Arc<dyn ObjectStore> = Arc::new(memory::InMemory::new());
+        takes_generic_object_store(store);
+        let store: Box<dyn ObjectStore> = Box::new(memory::InMemory::new());
+        takes_generic_object_store(store);
+    }
+    #[test]
+    fn test_generic_impl() {
+        let store = Arc::new(memory::InMemory::new());
+        takes_generic_object_store(store);
+        let store = Box::new(memory::InMemory::new());
+        takes_generic_object_store(store);
     }
 }
