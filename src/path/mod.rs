@@ -403,15 +403,35 @@ where
     }
 }
 
+/// [`Path`] supports appending [`PathPart`]s of one `Path` to another `Path`.
+///
+/// # Examples
+///
+/// Suppose Alice is copying Bob's file to her own user directory.
+/// We could choose the full path of the new file by taking the original
+/// absolute path, making it relative to Bob's home
+///
+/// ```rust
+/// # use object_store::path::Path;
+/// let alice_home = Path::from("Users/alice");
+/// let bob_home = Path::from("Users/bob");
+/// let bob_file = Path::from("Users/bob/documents/file.txt");
+///
+/// let mut alice_file = alice_home;
+/// alice_file.extend(bob_file.prefix_match(&bob_home).unwrap());
+///
+/// assert_eq!(alice_file, Path::from("Users/alice/documents/file.txt"));
+/// ```
 impl<'a, I: Into<PathPart<'a>>> Extend<I> for Path {
     fn extend<T: IntoIterator<Item = I>>(&mut self, iter: T) {
-        for s in iter.into_iter() {
+        for s in iter {
             let s = s.into();
-            if s.raw.is_empty() {
-                continue;
+            if !s.raw.is_empty() {
+                if !self.raw.is_empty() {
+                    self.raw.push(DELIMITER_CHAR);
+                }
+                self.raw.push_str(&s.raw);
             }
-            self.raw.push(DELIMITER_CHAR);
-            self.raw.push_str(&s.raw);
         }
     }
 }
