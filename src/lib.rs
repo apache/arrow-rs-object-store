@@ -557,6 +557,7 @@ pub mod registry;
 #[cfg(feature = "cloud")]
 pub mod signer;
 pub mod throttle;
+pub mod trace;
 
 #[cfg(feature = "cloud")]
 pub mod client;
