@@ -537,7 +537,8 @@ mod tests {
         assert_eq!(Path::ROOT.parts().count(), Path::ROOT.parts_count());
 
         let path = path("foo/bar/baz");
-        assert_eq!(path.parts().count(), path.parts_count());
+        assert_eq!(path.parts_count(), 3);
+        assert_eq!(path.parts_count(), path.parts().count());
     }
 
     #[test]
