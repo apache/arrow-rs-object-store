@@ -62,6 +62,11 @@
 //! [ACID]: https://en.wikipedia.org/wiki/ACID
 //! [S3]: https://aws.amazon.com/s3/
 //!
+//! # APIs
+//!
+//! * [`ObjectStore`]: Core object store API
+//! * [`ObjectStoreExt`]: (*New in 0.13.0*) Extension trait with additional convenience methods
+//!
 //! # Available [`ObjectStore`] Implementations
 //!
 //! By default, this crate provides the following implementations:
@@ -613,18 +618,32 @@ pub type DynObjectStore = dyn ObjectStore;
 /// Id type for multipart uploads.
 pub type MultipartId = String;
 
-/// Universal API to multiple object store services.
+/// Universal API for object store services.
 ///
-/// For more convenience methods, check [`ObjectStoreExt`].
+/// See the [module-level documentation](crate) for a high level overview and
+/// examples. See [`ObjectStoreExt`] for additional convenience methods.
 ///
 /// # Contract
-/// This trait is meant as a contract between object store implementations
-/// (e.g. providers, wrappers) and the `object_store` crate itself and is
+/// This trait is a contract between object store _implementations_
+/// (e.g. providers, wrappers) and the `object_store` crate itself. It is
 /// intended to be the minimum API required for an object store.
 ///
-/// The [`ObjectStoreExt`] acts as an API/contract between `object_store`
-/// and the store users and provides additional methods that may be simpler to use but overlap
-/// in functionality with [`ObjectStore`].
+/// The [`ObjectStoreExt`] acts as an API/contract between `object_store` and
+/// the store _users_ and provides additional methods that may be simpler to use
+/// but overlap in functionality with [`ObjectStore`].
+///
+/// # Minimal Default Implementations
+/// There are only a few default implementations for methods in this trait by
+/// design. This was different from versions prior to `0.13.0`, which had many
+/// more default implementations. Default implementations are convenient for
+/// users, but error-prone for implementors as they require keeping the
+/// convenience APIs correctly in sync.
+///
+/// As of version 0.13.0, most methods on [`ObjectStore`] must be implemented, and
+/// the convenience methods have been moved to the [`ObjectStoreExt`] trait as
+/// described above. See [#385] for more details.
+///
+/// [#385]: https://github.com/apache/arrow-rs-object-store/issues/385
 ///
 /// # Wrappers
 /// If you wrap an [`ObjectStore`] -- e.g. to add observability -- you SHOULD
@@ -1136,7 +1155,9 @@ as_ref_impl!(Box<T>);
 
 /// Extension trait for [`ObjectStore`] with convenience functions.
 ///
-/// See "contract" section within the [`ObjectStore`] documentation for more reasoning.
+/// See the [module-level documentation](crate) for a high leve overview and
+/// examples. See "contract" section within the [`ObjectStore`] documentation
+/// for more reasoning.
 ///
 /// # Implementation
 /// You MUST NOT implement this trait yourself. It is automatically implemented for all [`ObjectStore`] implementations.
