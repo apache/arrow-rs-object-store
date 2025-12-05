@@ -283,7 +283,7 @@ impl Path {
 
     /// True if this [`Path`] points to the root of the store, equivalent to `Path::from("/")`.
     ///
-    /// See also [`Path::root`].
+    /// See also [`Path::ROOT`].
     ///
     /// # Example
     ///

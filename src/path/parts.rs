@@ -140,7 +140,7 @@ impl AsRef<str> for PathPart<'_> {
 pub struct PathParts<'a>(iter::Map<SplitTerminator<'a, char>, fn(&str) -> PathPart<'_>>);
 
 impl<'a> PathParts<'a> {
-    /// Create an iterator over the parts of the provided raw [`Path`].
+    /// Create an iterator over the parts of the provided raw [`Path`](super::Path).
     pub(super) fn new(raw: &'a str) -> Self {
         Self(
             raw.split_terminator(super::DELIMITER_CHAR)
