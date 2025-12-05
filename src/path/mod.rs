@@ -307,7 +307,13 @@ impl Path {
     ///
     /// Returns `None` if this path has zero segments.
     pub fn parent(&self) -> Option<Self> {
-        let (prefix, _filename) = self.raw.rsplit_once(DELIMITER)?;
+        if self.raw.is_empty() {
+            return None;
+        }
+
+        let Some((prefix, _filename)) = self.raw.rsplit_once(DELIMITER) else {
+            return Some(Self::ROOT);
+        };
 
         Some(Self {
             raw: prefix.to_string(),
@@ -762,6 +768,14 @@ mod tests {
 
         p.extend(&path("baz"));
         assert_eq!(p, path("foo/bar/baz"));
+    }
+
+    #[test]
+    fn parent() {
+        assert_eq!(Path::ROOT.parent(), None);
+        assert_eq!(path("foo").parent(), Some(Path::ROOT));
+        assert_eq!(path("foo/bar").parent(), Some(path("foo")));
+        assert_eq!(path("foo/bar/baz").parent(), Some(path("foo/bar")));
     }
 
     /// Construct a [`Path`] from a raw `&str`, or panic trying.
