@@ -17,7 +17,6 @@
 
 //! Path abstraction for Object Storage
 
-use itertools::Itertools;
 use percent_encoding::percent_decode;
 use std::fmt::Formatter;
 #[cfg(not(target_arch = "wasm32"))]
@@ -29,9 +28,12 @@ pub const DELIMITER: &str = "/";
 /// The path delimiter as a single byte
 pub const DELIMITER_BYTE: u8 = DELIMITER.as_bytes()[0];
 
+/// The path delimiter as a single char
+pub const DELIMITER_CHAR: char = DELIMITER_BYTE as char;
+
 mod parts;
 
-pub use parts::{InvalidPart, PathPart};
+pub use parts::{InvalidPart, PathPart, PathParts};
 
 /// Error returned by [`Path::parse`]
 #[derive(Debug, thiserror::Error)]
@@ -157,6 +159,18 @@ pub struct Path {
 }
 
 impl Path {
+    /// An empty [`Path`] that points to the root of the store, equivalent to `Path::from("/")`.
+    ///
+    /// See also [`Path::is_root`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use object_store::path::Path;
+    /// assert_eq!(Path::ROOT, Path::from("/"));
+    /// ```
+    pub const ROOT: Self = Self { raw: String::new() };
+
     /// Parse a string as a [`Path`], returning a [`Error`] if invalid,
     /// as defined on the docstring for [`Path`]
     ///
@@ -255,14 +269,60 @@ impl Path {
         Self::parse(decoded)
     }
 
-    /// Returns the [`PathPart`] of this [`Path`]
-    pub fn parts(&self) -> impl Iterator<Item = PathPart<'_>> {
-        self.raw
-            .split_terminator(DELIMITER)
-            .map(|s| PathPart { raw: s.into() })
+    /// Returns the number of [`PathPart`]s in this [`Path`]
+    ///
+    /// This is equivalent to calling `.parts().count()` manually.
+    ///
+    /// # Performance
+    ///
+    /// This operation is `O(n)`.
+    #[doc(alias = "len")]
+    pub fn parts_count(&self) -> usize {
+        self.raw.split_terminator(DELIMITER).count()
+    }
+
+    /// True if this [`Path`] points to the root of the store, equivalent to `Path::from("/")`.
+    ///
+    /// See also [`Path::ROOT`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use object_store::path::Path;
+    /// assert!(Path::from("/").is_root());
+    /// assert!(Path::parse("").unwrap().is_root());
+    /// ```
+    pub fn is_root(&self) -> bool {
+        self.raw.is_empty()
+    }
+
+    /// Returns the [`PathPart`]s of this [`Path`]
+    ///
+    /// Equivalent to calling `.into_iter()` on a `&Path`.
+    pub fn parts(&self) -> PathParts<'_> {
+        PathParts::new(&self.raw)
+    }
+
+    /// Returns a copy of this [`Path`] with the last path segment removed
+    ///
+    /// Returns `None` if this path has zero segments.
+    pub fn parent(&self) -> Option<Self> {
+        if self.raw.is_empty() {
+            return None;
+        }
+
+        let Some((prefix, _filename)) = self.raw.rsplit_once(DELIMITER) else {
+            return Some(Self::ROOT);
+        };
+
+        Some(Self {
+            raw: prefix.to_string(),
+        })
     }
 
     /// Returns the last path segment containing the filename stored in this [`Path`]
+    ///
+    /// Returns `None` only if this path is the root path.
     pub fn filename(&self) -> Option<&str> {
         match self.raw.is_empty() {
             true => None,
@@ -285,16 +345,13 @@ impl Path {
 
     /// Returns an iterator of the [`PathPart`] of this [`Path`] after `prefix`
     ///
-    /// Returns `None` if the prefix does not match
+    /// Returns `None` if the prefix does not match.
     pub fn prefix_match(&self, prefix: &Self) -> Option<impl Iterator<Item = PathPart<'_>> + '_> {
         let mut stripped = self.raw.strip_prefix(&prefix.raw)?;
         if !stripped.is_empty() && !prefix.raw.is_empty() {
             stripped = stripped.strip_prefix(DELIMITER)?;
         }
-        let iter = stripped
-            .split_terminator(DELIMITER)
-            .map(|x| PathPart { raw: x.into() });
-        Some(iter)
+        Some(PathParts::new(stripped))
     }
 
     /// Returns true if this [`Path`] starts with `prefix`
@@ -348,13 +405,52 @@ where
     I: Into<PathPart<'a>>,
 {
     fn from_iter<T: IntoIterator<Item = I>>(iter: T) -> Self {
-        let raw = T::into_iter(iter)
-            .map(|s| s.into())
-            .filter(|s| !s.raw.is_empty())
-            .map(|s| s.raw)
-            .join(DELIMITER);
+        let mut this = Self::ROOT;
+        this.extend(iter);
+        this
+    }
+}
 
-        Self { raw }
+/// See also [`Path::parts`]
+impl<'a> IntoIterator for &'a Path {
+    type Item = PathPart<'a>;
+    type IntoIter = PathParts<'a>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        PathParts::new(&self.raw)
+    }
+}
+
+/// [`Path`] supports appending [`PathPart`]s of one `Path` to another `Path`.
+///
+/// # Examples
+///
+/// Suppose Alice is copying Bob's file to her own user directory.
+/// We could choose the full path of the new file by taking the original
+/// absolute path, making it relative to Bob's home
+///
+/// ```rust
+/// # use object_store::path::Path;
+/// let alice_home = Path::from("Users/alice");
+/// let bob_home = Path::from("Users/bob");
+/// let bob_file = Path::from("Users/bob/documents/file.txt");
+///
+/// let mut alice_file = alice_home;
+/// alice_file.extend(bob_file.prefix_match(&bob_home).unwrap());
+///
+/// assert_eq!(alice_file, Path::from("Users/alice/documents/file.txt"));
+/// ```
+impl<'a, I: Into<PathPart<'a>>> Extend<I> for Path {
+    fn extend<T: IntoIterator<Item = I>>(&mut self, iter: T) {
+        for s in iter {
+            let s = s.into();
+            if !s.raw.is_empty() {
+                if !self.raw.is_empty() {
+                    self.raw.push(DELIMITER_CHAR);
+                }
+                self.raw.push_str(&s.raw);
+            }
+        }
     }
 }
 
@@ -369,6 +465,11 @@ pub(crate) fn absolute_path_to_url(path: impl AsRef<std::path::Path>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delimiter_char_is_forward_slash() {
+        assert_eq!(DELIMITER_CHAR, '/');
+    }
 
     #[test]
     fn cloud_prefix_with_trailing_delimiter() {
@@ -467,6 +568,24 @@ mod tests {
 
         assert_eq!(existing.prefix_match(&existing).unwrap().count(), 0);
         assert_eq!(Path::default().parts().count(), 0);
+    }
+
+    #[test]
+    fn parts_count() {
+        assert_eq!(Path::ROOT.parts().count(), Path::ROOT.parts_count());
+
+        let path = path("foo/bar/baz");
+        assert_eq!(path.parts_count(), 3);
+        assert_eq!(path.parts_count(), path.parts().count());
+    }
+
+    #[test]
+    fn prefix_matches_raw_content() {
+        assert_eq!(Path::ROOT.parent(), None, "empty path must have no prefix");
+
+        assert_eq!(path("foo").parent().unwrap(), Path::ROOT);
+        assert_eq!(path("foo/bar").parent().unwrap(), path("foo"));
+        assert_eq!(path("foo/bar/baz").parent().unwrap(), path("foo/bar"));
     }
 
     #[test]
@@ -610,5 +729,58 @@ mod tests {
         assert_eq!(b.extension(), Some("baz"));
         assert_eq!(c.extension(), None);
         assert_eq!(d.extension(), Some("qux"));
+    }
+
+    #[test]
+    fn root_is_root() {
+        assert!(Path::ROOT.is_root());
+        assert!(Path::ROOT.parts().next().is_none());
+    }
+
+    /// Main test for `impl Extend for Path`, covers most cases.
+    #[test]
+    fn impl_extend() {
+        let mut p = Path::ROOT;
+
+        p.extend(&Path::ROOT);
+        assert_eq!(p, Path::ROOT);
+
+        p.extend(&path("foo"));
+        assert_eq!(p, path("foo"));
+
+        p.extend(&path("bar/baz"));
+        assert_eq!(p, path("foo/bar/baz"));
+
+        p.extend(&path("a/b/c"));
+        assert_eq!(p, path("foo/bar/baz/a/b/c"));
+    }
+
+    /// Test for `impl Extend for Path`, specifically covers addition of a single segment.
+    #[test]
+    fn impl_extend_for_one_segment() {
+        let mut p = Path::ROOT;
+
+        p.extend(&path("foo"));
+        assert_eq!(p, path("foo"));
+
+        p.extend(&path("bar"));
+        assert_eq!(p, path("foo/bar"));
+
+        p.extend(&path("baz"));
+        assert_eq!(p, path("foo/bar/baz"));
+    }
+
+    #[test]
+    fn parent() {
+        assert_eq!(Path::ROOT.parent(), None);
+        assert_eq!(path("foo").parent(), Some(Path::ROOT));
+        assert_eq!(path("foo/bar").parent(), Some(path("foo")));
+        assert_eq!(path("foo/bar/baz").parent(), Some(path("foo/bar")));
+    }
+
+    /// Construct a [`Path`] from a raw `&str`, or panic trying.
+    #[track_caller]
+    fn path(raw: &str) -> Path {
+        Path::parse(raw).unwrap()
     }
 }
