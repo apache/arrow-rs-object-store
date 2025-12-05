@@ -127,19 +127,14 @@ pub struct ServiceAccountKey(RsaKeyPair);
 impl ServiceAccountKey {
     /// Parses a pem-encoded RSA key
     pub fn from_pem(encoded: &[u8]) -> Result<Self> {
-        use rustls_pemfile::Item;
-        use std::io::Cursor;
+        use rustls_pki_types::pem::PemObject;
+        use rustls_pki_types::PrivateKeyDer;
 
-        let mut cursor = Cursor::new(encoded);
-        let mut reader = BufReader::new(&mut cursor);
-
-        match rustls_pemfile::read_one(&mut reader) {
-            Ok(item) => match item {
-                Some(Item::Pkcs8Key(key)) => Self::from_pkcs8(key.secret_pkcs8_der()),
-                Some(Item::Pkcs1Key(key)) => Self::from_der(key.secret_pkcs1_der()),
-                _ => Err(Error::MissingKey),
-            },
-            Err(e) => Err(Error::ReadPem { source: e }),
+        match PrivateKeyDer::from_pem_slice(encoded) {
+            Ok(PrivateKeyDer::Pkcs8(key)) => Self::from_pkcs8(key.secret_pkcs8_der()),
+            Ok(PrivateKeyDer::Pkcs1(key)) => Self::from_der(key.secret_pkcs1_der()),
+            Ok(_) => Err(Error::MissingKey),
+            Err(source) => Err(Error::ReadPem { source }),
         }
     }
 
