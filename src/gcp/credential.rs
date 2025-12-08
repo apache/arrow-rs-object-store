@@ -91,7 +91,9 @@ pub enum Error {
     TokenResponseBody { source: HttpError },
 
     #[error("Error reading pem file: {}", source)]
-    ReadPem { source: std::io::Error },
+    ReadPem {
+        source: rustls_pki_types::pem::Error,
+    },
 }
 
 impl From<Error> for crate::Error {
@@ -127,8 +129,8 @@ pub struct ServiceAccountKey(RsaKeyPair);
 impl ServiceAccountKey {
     /// Parses a pem-encoded RSA key
     pub fn from_pem(encoded: &[u8]) -> Result<Self> {
-        use rustls_pki_types::pem::PemObject;
         use rustls_pki_types::PrivateKeyDer;
+        use rustls_pki_types::pem::PemObject;
 
         match PrivateKeyDer::from_pem_slice(encoded) {
             Ok(PrivateKeyDer::Pkcs8(key)) => Self::from_pkcs8(key.secret_pkcs8_der()),
