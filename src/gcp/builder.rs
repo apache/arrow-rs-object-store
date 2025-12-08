@@ -98,6 +98,8 @@ pub struct GoogleCloudStorageBuilder {
     bucket_name: Option<String>,
     /// Url
     url: Option<String>,
+    /// Base URL
+    base_url: Option<String>,
     /// Path to the service account file
     service_account_path: Option<String>,
     /// The serialized service account key
@@ -225,6 +227,7 @@ impl Default for GoogleCloudStorageBuilder {
             retry_config: Default::default(),
             client_options: ClientOptions::new().with_allow_http(true),
             url: None,
+            base_url: None,
             credentials: None,
             skip_signature: Default::default(),
             signing_credentials: None,
@@ -367,6 +370,25 @@ impl GoogleCloudStorageBuilder {
         self
     }
 
+    /// Sets the base URL for communicating with GCS.
+    /// 
+    /// If not explicitly set, it will be:
+    /// 1. Derived from the service account credentials, if provided
+    /// 2. Otherwise, defaulted to [`DEFAULT_GCS_BASE_URL`]
+    ///
+    /// # Example
+    /// ```
+    /// use object_store::gcp::GoogleCloudStorageBuilder;
+    ///
+    /// let gcs = GoogleCloudStorageBuilder::from_env()
+    ///     .with_base_url("https://localhost:4443")
+    ///     .build();
+    /// ```
+    pub fn with_base_url(mut self, base_url: &str) -> Self {
+        self.base_url = Some(base_url.into());
+        self
+    }
+
     /// Set the path to the service account file.
     ///
     /// This or [`GoogleCloudStorageBuilder::with_service_account_key`] must be
@@ -506,9 +528,13 @@ impl GoogleCloudStorageBuilder {
             .map(|c| c.disable_oauth)
             .unwrap_or(false);
 
-        let gcs_base_url: String = service_account_credentials
-            .as_ref()
-            .and_then(|c| c.gcs_base_url.clone())
+        let gcs_base_url: String = self
+            .base_url
+            .or_else(|| {
+                service_account_credentials
+                    .as_ref()
+                    .and_then(|c| c.gcs_base_url.clone())
+            })
             .unwrap_or_else(|| DEFAULT_GCS_BASE_URL.to_string());
 
         let credentials = if let Some(credentials) = self.credentials {
@@ -607,6 +633,7 @@ mod tests {
     use tempfile::NamedTempFile;
 
     const FAKE_KEY: &str = r#"{"private_key": "private_key", "private_key_id": "private_key_id", "client_email":"client_email", "disable_oauth":true}"#;
+    const FAKE_KEY_WITH_BASE_URL: &str = r#"{"private_key": "private_key", "private_key_id": "private_key_id", "client_email":"client_email", "disable_oauth":true, "gcs_base_url": "https://base-url-from-credentials:4443"}"#;
 
     #[test]
     fn gcs_test_service_account_key_and_path() {
@@ -719,6 +746,37 @@ mod tests {
             .with_bucket_name("foo")
             .build()
             .unwrap();
+    }
+
+    #[test]
+    fn gcs_test_with_base_url() {
+        let no_base_url = GoogleCloudStorageBuilder::new()
+            .with_bucket_name("foo")
+            .build()
+            .unwrap();
+        assert_eq!(no_base_url.client.config().base_url, DEFAULT_GCS_BASE_URL);
+
+        let explicit_override = GoogleCloudStorageBuilder::new()
+            .with_bucket_name("foo")
+            .with_base_url("https://explicitly-overriden:4443")
+            .build()
+            .unwrap();
+        assert_eq!(explicit_override.client.config().base_url, "https://explicitly-overriden:4443");
+
+        let url_in_credentials = GoogleCloudStorageBuilder::new()
+            .with_bucket_name("foo")
+            .with_service_account_key(FAKE_KEY_WITH_BASE_URL)
+            .build()
+            .unwrap();
+        assert_eq!(url_in_credentials.client.config().base_url, "https://base-url-from-credentials:4443");
+
+        let explicit_override_and_credentials = GoogleCloudStorageBuilder::new()
+            .with_bucket_name("foo")
+            .with_base_url("https://explicitly-overriden:4443") // this should take precedence
+            .with_service_account_key(FAKE_KEY_WITH_BASE_URL)
+            .build()
+            .unwrap();
+        assert_eq!(explicit_override_and_credentials.client.config().base_url, "https://explicitly-overriden:4443");
     }
 
     #[test]
