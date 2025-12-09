@@ -98,6 +98,8 @@ pub(crate) struct InitiateMultipartUploadResult {
 pub(crate) struct CopyPartResult {
     #[serde(rename = "ETag")]
     pub e_tag: String,
+    #[serde(default, rename = "ChecksumSHA256")]
+    pub checksum_sha256: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
