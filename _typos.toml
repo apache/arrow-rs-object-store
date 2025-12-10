@@ -1,0 +1,14 @@
+[default]
+extend-ignore-identifiers-re = [
+    # GitHub username
+    "ethe",
+    # Identifier containing "Swith" as part of compound name
+    "SASwithSkipSignature",
+]
+
+extend-ignore-re = [
+    # Test string literals containing "fo" in specific test files
+    'delimiter\.push\("fo',
+    'Bytes::from\("fo',
+    'let prefix = Some\("fo"\);',
+]
