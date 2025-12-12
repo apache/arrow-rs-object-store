@@ -160,7 +160,7 @@ pub enum GoogleConfigKey {
     /// - `bucket`
     /// - `bucket_name`
     Bucket,
-    
+
     /// Base URL
     ///
     /// See [`GoogleCloudStorageBuilder::with_base_url`] for details.
@@ -384,7 +384,7 @@ impl GoogleCloudStorageBuilder {
     }
 
     /// Sets the base URL for communicating with GCS.
-    /// 
+    ///
     /// If not explicitly set, it will be:
     /// 1. Derived from the service account credentials, if provided
     /// 2. Otherwise, uses the default GCS endpoint
@@ -774,14 +774,20 @@ mod tests {
             .with_base_url("https://explicitly-overriden:4443")
             .build()
             .unwrap();
-        assert_eq!(explicit_override.client.config().base_url, "https://explicitly-overriden:4443");
+        assert_eq!(
+            explicit_override.client.config().base_url,
+            "https://explicitly-overriden:4443"
+        );
 
         let url_in_credentials = GoogleCloudStorageBuilder::new()
             .with_bucket_name("foo")
             .with_service_account_key(FAKE_KEY_WITH_BASE_URL)
             .build()
             .unwrap();
-        assert_eq!(url_in_credentials.client.config().base_url, "https://base-url-from-credentials:4443");
+        assert_eq!(
+            url_in_credentials.client.config().base_url,
+            "https://base-url-from-credentials:4443"
+        );
 
         let explicit_override_and_credentials = GoogleCloudStorageBuilder::new()
             .with_bucket_name("foo")
@@ -789,7 +795,10 @@ mod tests {
             .with_service_account_key(FAKE_KEY_WITH_BASE_URL)
             .build()
             .unwrap();
-        assert_eq!(explicit_override_and_credentials.client.config().base_url, "https://explicitly-overriden:4443");
+        assert_eq!(
+            explicit_override_and_credentials.client.config().base_url,
+            "https://explicitly-overriden:4443"
+        );
     }
 
     #[test]
