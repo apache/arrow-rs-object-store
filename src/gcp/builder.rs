@@ -387,7 +387,7 @@ impl GoogleCloudStorageBuilder {
     /// 
     /// If not explicitly set, it will be:
     /// 1. Derived from the service account credentials, if provided
-    /// 2. Otherwise, defaulted to [`DEFAULT_GCS_BASE_URL`]
+    /// 2. Otherwise, uses the default GCS endpoint
     ///
     /// # Example
     /// ```
