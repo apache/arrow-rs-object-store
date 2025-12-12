@@ -554,6 +554,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn copy_multipart_file_with_signature() {
+        maybe_skip_integration!();
+
+        let bucket = "test-bucket-for-copy-if-not-exists";
+        let store = AmazonS3Builder::from_env()
+            .with_bucket_name(bucket)
+            .with_checksum_algorithm(Checksum::SHA256)
+            .with_copy_if_not_exists(S3CopyIfNotExists::Multipart)
+            .build()
+            .unwrap();
+
+        let src = Path::parse("src.bin").unwrap();
+        let dst = Path::parse("dst.bin").unwrap();
+        store
+            .put(&src, PutPayload::from(vec![0u8; 100_000]))
+            .await
+            .unwrap();
+        if store.head(&dst).await.is_ok() {
+            store.delete(&dst).await.unwrap();
+        }
+        store.copy_if_not_exists(&src, &dst).await.unwrap();
+        store.delete(&src).await.unwrap();
+        store.delete(&dst).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn write_multipart_file_with_signature_object_lock() {
         maybe_skip_integration!();
 
