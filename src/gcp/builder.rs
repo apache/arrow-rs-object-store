@@ -160,6 +160,15 @@ pub enum GoogleConfigKey {
     /// - `bucket`
     /// - `bucket_name`
     Bucket,
+    
+    /// Base URL
+    ///
+    /// See [`GoogleCloudStorageBuilder::with_base_url`] for details.
+    ///
+    /// Supported keys:
+    /// - `google_base_url`
+    /// - `base_url`
+    BaseUrl,
 
     /// Application credentials path
     ///
@@ -187,6 +196,7 @@ impl AsRef<str> for GoogleConfigKey {
             Self::ServiceAccount => "google_service_account",
             Self::ServiceAccountKey => "google_service_account_key",
             Self::Bucket => "google_bucket",
+            Self::BaseUrl => "google_base_url",
             Self::ApplicationCredentials => "google_application_credentials",
             Self::SkipSignature => "google_skip_signature",
             Self::Client(key) => key.as_ref(),
@@ -205,6 +215,7 @@ impl FromStr for GoogleConfigKey {
             | "service_account_path" => Ok(Self::ServiceAccount),
             "google_service_account_key" | "service_account_key" => Ok(Self::ServiceAccountKey),
             "google_bucket" | "google_bucket_name" | "bucket" | "bucket_name" => Ok(Self::Bucket),
+            "google_base_url" | "base_url" => Ok(Self::BaseUrl),
             "google_application_credentials" | "application_credentials" => {
                 Ok(Self::ApplicationCredentials)
             }
@@ -307,6 +318,7 @@ impl GoogleCloudStorageBuilder {
             GoogleConfigKey::ServiceAccount => self.service_account_path = Some(value.into()),
             GoogleConfigKey::ServiceAccountKey => self.service_account_key = Some(value.into()),
             GoogleConfigKey::Bucket => self.bucket_name = Some(value.into()),
+            GoogleConfigKey::BaseUrl => self.base_url = Some(value.into()),
             GoogleConfigKey::ApplicationCredentials => {
                 self.application_credentials_path = Some(value.into())
             }
@@ -334,6 +346,7 @@ impl GoogleCloudStorageBuilder {
             GoogleConfigKey::ServiceAccount => self.service_account_path.clone(),
             GoogleConfigKey::ServiceAccountKey => self.service_account_key.clone(),
             GoogleConfigKey::Bucket => self.bucket_name.clone(),
+            GoogleConfigKey::BaseUrl => self.base_url.clone(),
             GoogleConfigKey::ApplicationCredentials => self.application_credentials_path.clone(),
             GoogleConfigKey::SkipSignature => Some(self.skip_signature.to_string()),
             GoogleConfigKey::Client(key) => self.client_options.get_config_value(key),
