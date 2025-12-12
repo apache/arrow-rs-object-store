@@ -1304,12 +1304,12 @@ where
             self.delete_stream(futures::stream::once(async move { Ok(location) }).boxed());
         let _path = stream.try_next().await?.ok_or_else(|| Error::Generic {
             store: "ext",
-            source: "`delete_stream` was supposed to yield once but didn't".into(),
+            source: "`delete_stream` with one location should yield once but didn't".into(),
         })?;
         if stream.next().await.is_some() {
             Err(Error::Generic {
                 store: "ext",
-                source: "`delete_stream` yielded more than once".into(),
+                source: "`delete_stream` with one location expected to yield exactly once, but yielded more than once".into(),
             })
         } else {
             Ok(())
