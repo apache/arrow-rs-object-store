@@ -69,6 +69,7 @@ pub(crate) enum Error {
     #[error("Error performing DeleteObjects request: {}", source)]
     DeleteObjectsRequest {
         source: crate::client::retry::RetryError,
+        paths: Vec<String>,
     },
 
     #[error(
@@ -127,6 +128,7 @@ impl From<Error> for crate::Error {
     fn from(err: Error) -> Self {
         match err {
             Error::CompleteMultipartRequest { source, path } => source.error(STORE, path),
+            Error::DeleteObjectsRequest { source, paths } => source.error(STORE, paths.join(",")),
             _ => Self::Generic {
                 store: STORE,
                 source: Box::new(err),
@@ -551,7 +553,10 @@ impl S3Client {
             .with_aws_sigv4(credential.authorizer(), Some(digest.as_ref()))
             .send_retry(&self.config.retry_config)
             .await
-            .map_err(|source| Error::DeleteObjectsRequest { source })?
+            .map_err(|source| Error::DeleteObjectsRequest {
+                source,
+                paths: paths.iter().map(|p| p.to_string()).collect(),
+            })?
             .into_body()
             .bytes()
             .await

@@ -74,12 +74,6 @@ pub(crate) enum Error {
         path: String,
     },
 
-    #[error("Error performing delete request {}: {}", path, source)]
-    DeleteRequest {
-        source: crate::client::retry::RetryError,
-        path: String,
-    },
-
     #[error("Error performing bulk delete request: {}", source)]
     BulkDeleteRequest {
         source: crate::client::retry::RetryError,
@@ -150,9 +144,9 @@ pub(crate) enum Error {
 impl From<Error> for crate::Error {
     fn from(err: Error) -> Self {
         match err {
-            Error::GetRequest { source, path }
-            | Error::DeleteRequest { source, path }
-            | Error::PutRequest { source, path } => source.error(STORE, path),
+            Error::GetRequest { source, path } | Error::PutRequest { source, path } => {
+                source.error(STORE, path)
+            }
             _ => Self::Generic {
                 store: STORE,
                 source: Box::new(err),
@@ -625,36 +619,6 @@ impl AzureClient {
 
         Ok(get_put_result(response.headers(), VERSION_HEADER)
             .map_err(|source| Error::Metadata { source })?)
-    }
-
-    /// Make an Azure Delete request <https://docs.microsoft.com/en-us/rest/api/storageservices/delete-blob>
-    pub(crate) async fn delete_request<T: Serialize + ?Sized + Sync>(
-        &self,
-        path: &Path,
-        query: &T,
-    ) -> Result<()> {
-        let credential = self.get_credential().await?;
-        let url = self.config.path_url(path);
-
-        let sensitive = credential
-            .as_deref()
-            .map(|c| c.sensitive_request())
-            .unwrap_or_default();
-        self.client
-            .delete(url.as_str())
-            .query(query)
-            .header(&DELETE_SNAPSHOTS, "include")
-            .with_azure_authorization(&credential, &self.config.account)
-            .retryable(&self.config.retry_config)
-            .sensitive(sensitive)
-            .send()
-            .await
-            .map_err(|source| {
-                let path = path.as_ref().into();
-                Error::DeleteRequest { source, path }
-            })?;
-
-        Ok(())
     }
 
     fn build_bulk_delete_body(

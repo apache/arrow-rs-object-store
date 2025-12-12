@@ -40,7 +40,7 @@ use crate::{
     path::{Path, absolute_path_to_url},
     util::InvalidGetRange,
 };
-use crate::{CopyMode, CopyOptions, RenameOptions, RenameTargetMode};
+use crate::{CopyMode, CopyOptions, ObjectStoreExt, RenameOptions, RenameTargetMode};
 
 /// A specialized `Error` for filesystem object store-related errors
 #[derive(Debug, thiserror::Error)]
@@ -442,14 +442,6 @@ impl ObjectStore for LocalFileSystem {
                 .collect()
         })
         .await
-    }
-
-    async fn delete(&self, location: &Path) -> Result<()> {
-        let config = Arc::clone(&self.config);
-        let automatic_cleanup = self.automatic_cleanup;
-        let location = location.clone();
-        maybe_spawn_blocking(move || Self::delete_location(config, automatic_cleanup, &location))
-            .await
     }
 
     fn delete_stream(

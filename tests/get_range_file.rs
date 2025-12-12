@@ -58,10 +58,6 @@ impl ObjectStore for MyStore {
         self.0.get_opts(location, options).await
     }
 
-    async fn delete(&self, _: &Path) -> Result<()> {
-        todo!()
-    }
-
     fn delete_stream(
         &self,
         _: BoxStream<'static, Result<Path>>,
