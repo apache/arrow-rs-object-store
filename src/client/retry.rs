@@ -277,7 +277,7 @@ impl RetryableRequestBuilder {
     }
 
     /// Set whether this request should be retried on a 409 Conflict response.
-    #[cfg(feature = "aws")]
+    #[cfg(any(feature = "aws", feature = "aws-aws-lc"))]
     pub(crate) fn retry_on_conflict(mut self, retry_on_conflict: bool) -> Self {
         self.request.retry_on_conflict = retry_on_conflict;
         self

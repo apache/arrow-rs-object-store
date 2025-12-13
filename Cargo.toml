@@ -46,6 +46,7 @@ url = "2.2"
 walkdir = { version = "2", optional = true }
 
 # Cloud storage support
+aws-lc-rs = { version = "1.15", default-features = false, features = ["non-fips", "ring-io"], optional = true }
 base64 = { version = "0.22", default-features = false, features = ["std"], optional = true }
 form_urlencoded = { version = "1.2", optional = true }
 http-body-util = { version = "0.1.2", optional = true }
@@ -54,7 +55,7 @@ hyper = { version = "1.2", default-features = false, optional = true }
 md-5 = { version = "0.10.6", default-features = false, optional = true }
 quick-xml = { version = "0.38.0", features = ["serialize", "overlapped-lists"], optional = true }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"], optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "http2"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["http2", "rustls-tls-webpki-roots-no-provider"], optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 rustls-pki-types = { version = "1.9", default-features = false, features = ["std"], optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
@@ -71,14 +72,20 @@ wasm-bindgen-futures = "0.4.18"
 
 [features]
 default = ["fs"]
-cloud = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/stream", "chrono/serde", "base64", "rand", "ring", "http-body-util", "form_urlencoded", "serde_urlencoded"]
-azure = ["cloud", "httparse"]
 fs = ["walkdir"]
-gcp = ["cloud", "rustls-pki-types"]
-aws = ["cloud", "md-5"]
-http = ["cloud"]
+cloud = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/stream", "chrono/serde", "base64", "rand", "http-body-util", "form_urlencoded", "serde_urlencoded"]
+azure = ["cloud", "httparse", "ring"]
+gcp = ["cloud", "rustls-pki-types", "ring"]
+aws = ["cloud", "md-5", "ring"]
+http = ["cloud", "ring"]
+azure-aws-lc = ["cloud", "httparse", "aws-lc"]
+gcp-aws-lc = ["cloud", "rustls-pki-types", "aws-lc"]
+aws-aws-lc = ["cloud", "md-5", "aws-lc"]
+http-aws-lc = ["cloud", "aws-lc"]
 tls-webpki-roots = ["reqwest?/rustls-tls-webpki-roots"]
 integration = ["rand"]
+ring = ["dep:ring"]
+aws-lc = ["dep:aws-lc-rs"]
 
 [dev-dependencies] # In alphabetical order
 hyper = { version = "1.2", features = ["server"] }

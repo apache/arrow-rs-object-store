@@ -63,7 +63,12 @@ impl HttpRequestBuilder {
         }
     }
 
-    #[cfg(any(feature = "aws", feature = "azure"))]
+    #[cfg(any(
+        feature = "aws",
+        feature = "azure",
+        feature = "aws-aws-lc",
+        feature = "azure-aws-lc"
+    ))]
     pub(crate) fn from_parts(client: HttpClient, request: HttpRequest) -> Self {
         Self {
             client,
@@ -116,7 +121,7 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(feature = "aws")]
+    #[cfg(any(feature = "aws", feature = "aws-aws-lc"))]
     pub(crate) fn headers(mut self, headers: http::HeaderMap) -> Self {
         use http::header::{Entry, OccupiedEntry};
 
@@ -151,7 +156,7 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(feature = "gcp")]
+    #[cfg(any(feature = "gcp", feature = "gcp-aws-lc"))]
     pub(crate) fn bearer_auth(mut self, token: &str) -> Self {
         let value = HeaderValue::try_from(format!("Bearer {token}"));
         match (value, &mut self.request) {
@@ -165,7 +170,7 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(feature = "gcp")]
+    #[cfg(any(feature = "gcp", feature = "gcp-aws-lc"))]
     pub(crate) fn json<S: serde::Serialize>(mut self, s: S) -> Self {
         match (serde_json::to_vec(&s), &mut self.request) {
             (Ok(json), Ok(request)) => {
@@ -177,7 +182,15 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(any(test, feature = "aws", feature = "gcp", feature = "azure"))]
+    #[cfg(any(
+        test,
+        feature = "aws",
+        feature = "gcp",
+        feature = "azure",
+        feature = "aws-aws-lc",
+        feature = "gcp-aws-lc",
+        feature = "azure-aws-lc"
+    ))]
     pub(crate) fn query<T: serde::Serialize + ?Sized>(mut self, query: &T) -> Self {
         let mut error = None;
         if let Ok(ref mut req) = self.request {
@@ -205,7 +218,12 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(any(feature = "gcp", feature = "azure"))]
+    #[cfg(any(
+        feature = "gcp",
+        feature = "azure",
+        feature = "gcp-aws-lc",
+        feature = "azure-aws-lc"
+    ))]
     pub(crate) fn form<T: serde::Serialize>(mut self, form: T) -> Self {
         let mut error = None;
         if let Ok(ref mut req) = self.request {
@@ -226,7 +244,14 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+    #[cfg(any(
+        feature = "aws",
+        feature = "gcp",
+        feature = "azure",
+        feature = "aws-aws-lc",
+        feature = "gcp-aws-lc",
+        feature = "azure-aws-lc"
+    ))]
     pub(crate) fn body(mut self, b: impl Into<HttpRequestBody>) -> Self {
         if let Ok(r) = &mut self.request {
             *r.body_mut() = b.into();
@@ -239,7 +264,7 @@ impl HttpRequestBuilder {
     }
 }
 
-#[cfg(any(test, feature = "azure"))]
+#[cfg(any(test, feature = "azure", feature = "azure-aws-lc"))]
 pub(crate) fn add_query_pairs<I, K, V>(uri: &mut Uri, query_pairs: I)
 where
     I: IntoIterator,

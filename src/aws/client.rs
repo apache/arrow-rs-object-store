@@ -33,6 +33,7 @@ use crate::client::s3::{
     InitiateMultipartUploadResult, ListResponse, PartMetadata,
 };
 use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpResponse};
+use crate::crypto;
 use crate::list::{PaginatedListOptions, PaginatedListResult};
 use crate::multipart::PartId;
 use crate::{
@@ -43,6 +44,8 @@ use async_trait::async_trait;
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use bytes::{Buf, Bytes};
+use crypto::digest;
+use crypto::digest::Context;
 use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH,
     CONTENT_TYPE,
@@ -52,8 +55,6 @@ use itertools::Itertools;
 use md5::{Digest, Md5};
 use percent_encoding::{PercentEncode, utf8_percent_encode};
 use quick_xml::events::{self as xml_events};
-use ring::digest;
-use ring::digest::Context;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 

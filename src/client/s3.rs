@@ -92,7 +92,7 @@ pub(crate) struct InitiateMultipartUploadResult {
     pub upload_id: String,
 }
 
-#[cfg(feature = "aws")]
+#[cfg(any(feature = "aws", feature = "aws-aws-lc"))]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub(crate) struct CopyPartResult {
