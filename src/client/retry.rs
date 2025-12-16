@@ -740,8 +740,9 @@ mod tests {
         while let Some(source) = err.source() {
             err = source;
             if let Some(http_err) = err.downcast_ref::<HttpError>() {
-                found = true;
                 assert_eq!(http_err.kind(), HttpErrorKind::Request);
+                found = true;
+                break;
             }
         }
         assert!(found, "HttpError not found in source chain");
