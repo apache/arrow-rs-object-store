@@ -294,11 +294,6 @@ impl ObjectStore for InMemory {
             .collect()
     }
 
-    async fn delete(&self, location: &Path) -> Result<()> {
-        self.storage.write().map.remove(location);
-        Ok(())
-    }
-
     fn delete_stream(
         &self,
         locations: BoxStream<'static, Result<Path>>,

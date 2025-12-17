@@ -21,7 +21,7 @@ use std::ops::Range;
 use std::{convert::TryInto, sync::Arc};
 
 use crate::multipart::{MultipartStore, PartId};
-use crate::{CopyOptions, GetOptions, UploadPart};
+use crate::{CopyOptions, GetOptions, RenameOptions, UploadPart};
 use crate::{
     GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
     PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, path::Path,
@@ -34,10 +34,13 @@ use std::time::Duration;
 /// Configuration settings for throttled store
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ThrottleConfig {
-    /// Sleep duration for every call to [`delete`](ThrottledStore::delete).
+    /// Sleep duration for every call to [`delete`], or every element in [`delete_stream`].
     ///
     /// Sleeping is done before the underlying store is called and independently of the success of
     /// the operation.
+    ///
+    /// [`delete`]: crate::ObjectStoreExt::delete
+    /// [`delete_stream`]: ThrottledStore::delete_stream
     pub wait_delete_per_call: Duration,
 
     /// Sleep duration for every byte received during [`get_opts`](ThrottledStore::get_opts).
@@ -193,12 +196,6 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         self.inner.get_ranges(location, ranges).await
     }
 
-    async fn delete(&self, location: &Path) -> Result<()> {
-        sleep(self.config().wait_delete_per_call).await;
-
-        self.inner.delete(location).await
-    }
-
     fn delete_stream(
         &self,
         locations: BoxStream<'static, Result<Path>>,
@@ -261,16 +258,10 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         self.inner.copy_opts(from, to, options).await
     }
 
-    async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
+    async fn rename_opts(&self, from: &Path, to: &Path, options: RenameOptions) -> Result<()> {
         sleep(self.config().wait_put_per_call).await;
 
-        self.inner.rename(from, to).await
-    }
-
-    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        sleep(self.config().wait_put_per_call).await;
-
-        self.inner.rename_if_not_exists(from, to).await
+        self.inner.rename_opts(from, to, options).await
     }
 }
 

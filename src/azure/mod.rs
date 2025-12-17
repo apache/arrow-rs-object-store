@@ -117,13 +117,10 @@ impl ObjectStore for MicrosoftAzure {
         self.client.get_opts(location, options).await
     }
 
-    async fn delete(&self, location: &Path) -> Result<()> {
-        self.client.delete_request(location, &()).await
-    }
-
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         self.client.list(prefix)
     }
+
     fn delete_stream(
         &self,
         locations: BoxStream<'static, Result<Path>>,

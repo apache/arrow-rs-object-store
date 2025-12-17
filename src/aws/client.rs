@@ -69,6 +69,7 @@ pub(crate) enum Error {
     #[error("Error performing DeleteObjects request: {}", source)]
     DeleteObjectsRequest {
         source: crate::client::retry::RetryError,
+        paths: Vec<String>,
     },
 
     #[error(
@@ -127,6 +128,7 @@ impl From<Error> for crate::Error {
     fn from(err: Error) -> Self {
         match err {
             Error::CompleteMultipartRequest { source, path } => source.error(STORE, path),
+            Error::DeleteObjectsRequest { source, paths } => source.error(STORE, paths.join(",")),
             _ => Self::Generic {
                 store: STORE,
                 source: Box::new(err),
@@ -556,7 +558,10 @@ impl S3Client {
             .with_aws_sigv4(credential.authorizer(), Some(digest.as_ref()))
             .send_retry(&self.config.retry_config)
             .await
-            .map_err(|source| Error::DeleteObjectsRequest { source })?
+            .map_err(|source| Error::DeleteObjectsRequest {
+                source,
+                paths: paths.iter().map(|p| p.to_string()).collect(),
+            })?
             .into_body()
             .bytes()
             .await
@@ -721,24 +726,24 @@ impl S3Client {
             // If SSE-C is used, we must include the encryption headers in every upload request.
             request = request.with_encryption_headers();
         }
-        let (parts, body) = request.send().await?.into_parts();
-        let checksum_sha256 = parts
-            .headers
-            .get(SHA256_CHECKSUM)
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v.to_string());
 
-        let e_tag = match is_copy {
-            false => get_etag(&parts.headers).map_err(|source| Error::Metadata { source })?,
-            true => {
-                let response = body
-                    .bytes()
-                    .await
-                    .map_err(|source| Error::CreateMultipartResponseBody { source })?;
-                let response: CopyPartResult = quick_xml::de::from_reader(response.reader())
-                    .map_err(|source| Error::InvalidMultipartResponse { source })?;
-                response.e_tag
-            }
+        let (parts, body) = request.send().await?.into_parts();
+        let (e_tag, checksum_sha256) = if is_copy {
+            let response = body
+                .bytes()
+                .await
+                .map_err(|source| Error::CreateMultipartResponseBody { source })?;
+            let response: CopyPartResult = quick_xml::de::from_reader(response.reader())
+                .map_err(|source| Error::InvalidMultipartResponse { source })?;
+            (response.e_tag, response.checksum_sha256)
+        } else {
+            let e_tag = get_etag(&parts.headers).map_err(|source| Error::Metadata { source })?;
+            let checksum_sha256 = parts
+                .headers
+                .get(SHA256_CHECKSUM)
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.to_string());
+            (e_tag, checksum_sha256)
         };
 
         let content_id = if self.config.checksum == Some(Checksum::SHA256) {

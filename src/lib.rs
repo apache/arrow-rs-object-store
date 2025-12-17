@@ -62,6 +62,11 @@
 //! [ACID]: https://en.wikipedia.org/wiki/ACID
 //! [S3]: https://aws.amazon.com/s3/
 //!
+//! # APIs
+//!
+//! * [`ObjectStore`]: Core object store API
+//! * [`ObjectStoreExt`]: (*New in 0.13.0*) Extension trait with additional convenience methods
+//!
 //! # Available [`ObjectStore`] Implementations
 //!
 //! By default, this crate provides the following implementations:
@@ -613,18 +618,32 @@ pub type DynObjectStore = dyn ObjectStore;
 /// Id type for multipart uploads.
 pub type MultipartId = String;
 
-/// Universal API to multiple object store services.
+/// Universal API for object store services.
 ///
-/// For more convenience methods, check [`ObjectStoreExt`].
+/// See the [module-level documentation](crate) for a high level overview and
+/// examples. See [`ObjectStoreExt`] for additional convenience methods.
 ///
 /// # Contract
-/// This trait is meant as a contract between object store implementations
-/// (e.g. providers, wrappers) and the `object_store` crate itself and is
+/// This trait is a contract between object store _implementations_
+/// (e.g. providers, wrappers) and the `object_store` crate itself. It is
 /// intended to be the minimum API required for an object store.
 ///
-/// The [`ObjectStoreExt`] acts as an API/contract between `object_store`
-/// and the store users and provides additional methods that may be simpler to use but overlap
-/// in functionality with [`ObjectStore`].
+/// The [`ObjectStoreExt`] acts as an API/contract between `object_store` and
+/// the store _users_ and provides additional methods that may be simpler to use
+/// but overlap in functionality with [`ObjectStore`].
+///
+/// # Minimal Default Implementations
+/// There are only a few default implementations for methods in this trait by
+/// design. This was different from versions prior to `0.13.0`, which had many
+/// more default implementations. Default implementations are convenient for
+/// users, but error-prone for implementors as they require keeping the
+/// convenience APIs correctly in sync.
+///
+/// As of version 0.13.0, most methods on [`ObjectStore`] must be implemented, and
+/// the convenience methods have been moved to the [`ObjectStoreExt`] trait as
+/// described above. See [#385] for more details.
+///
+/// [#385]: https://github.com/apache/arrow-rs-object-store/issues/385
 ///
 /// # Wrappers
 /// If you wrap an [`ObjectStore`] -- e.g. to add observability -- you SHOULD
@@ -834,9 +853,6 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
         .await
     }
 
-    /// Delete the object at the specified location.
-    async fn delete(&self, location: &Path) -> Result<()>;
-
     /// Delete all the objects at the specified locations
     ///
     /// When supported, this method will use bulk operations that delete more
@@ -939,10 +955,6 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// #         todo!()
     /// #     }
     /// #
-    /// #     async fn delete(&self, _: &Path) -> Result<()> {
-    /// #         todo!()
-    /// #     }
-    /// #
     /// fn delete_stream(
     ///     &self,
     ///     locations: BoxStream<'static, Result<Path>>,
@@ -1035,19 +1047,22 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ///
     /// By default, this is implemented as a copy and then delete source. It may not
     /// check when deleting source that it was the same object that was originally copied.
-    ///
-    /// If there exists an object at the destination, it will be overwritten.
-    async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
-        self.copy(from, to).await?;
-        self.delete(from).await
-    }
-
-    /// Move an object from one path to another in the same object store.
-    ///
-    /// Will return an error if the destination already has an object.
-    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        self.copy_if_not_exists(from, to).await?;
-        self.delete(from).await
+    async fn rename_opts(&self, from: &Path, to: &Path, options: RenameOptions) -> Result<()> {
+        let RenameOptions {
+            target_mode,
+            extensions,
+        } = options;
+        let copy_mode = match target_mode {
+            RenameTargetMode::Overwrite => CopyMode::Overwrite,
+            RenameTargetMode::Create => CopyMode::Create,
+        };
+        let copy_options = CopyOptions {
+            mode: copy_mode,
+            extensions,
+        };
+        self.copy_opts(from, to, copy_options).await?;
+        self.delete(from).await?;
+        Ok(())
     }
 }
 
@@ -1055,7 +1070,7 @@ macro_rules! as_ref_impl {
     ($type:ty) => {
         #[async_trait]
         #[deny(clippy::missing_trait_methods)]
-        impl ObjectStore for $type {
+        impl<T: ObjectStore + ?Sized> ObjectStore for $type {
             async fn put_opts(
                 &self,
                 location: &Path,
@@ -1085,10 +1100,6 @@ macro_rules! as_ref_impl {
                 self.as_ref().get_ranges(location, ranges).await
             }
 
-            async fn delete(&self, location: &Path) -> Result<()> {
-                self.as_ref().delete(location).await
-            }
-
             fn delete_stream(
                 &self,
                 locations: BoxStream<'static, Result<Path>>,
@@ -1116,23 +1127,26 @@ macro_rules! as_ref_impl {
                 self.as_ref().copy_opts(from, to, options).await
             }
 
-            async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
-                self.as_ref().rename(from, to).await
-            }
-
-            async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-                self.as_ref().rename_if_not_exists(from, to).await
+            async fn rename_opts(
+                &self,
+                from: &Path,
+                to: &Path,
+                options: RenameOptions,
+            ) -> Result<()> {
+                self.as_ref().rename_opts(from, to, options).await
             }
         }
     };
 }
 
-as_ref_impl!(Arc<dyn ObjectStore>);
-as_ref_impl!(Box<dyn ObjectStore>);
+as_ref_impl!(Arc<T>);
+as_ref_impl!(Box<T>);
 
 /// Extension trait for [`ObjectStore`] with convenience functions.
 ///
-/// See "contract" section within the [`ObjectStore`] documentation for more reasoning.
+/// See the [module-level documentation](crate) for a high leve overview and
+/// examples. See "contract" section within the [`ObjectStore`] documentation
+/// for more reasoning.
 ///
 /// # Implementation
 /// You MUST NOT implement this trait yourself. It is automatically implemented for all [`ObjectStore`] implementations.
@@ -1225,6 +1239,9 @@ pub trait ObjectStoreExt: ObjectStore {
     /// Return the metadata for the specified location
     fn head(&self, location: &Path) -> impl Future<Output = Result<ObjectMeta>>;
 
+    /// Delete the object at the specified location.
+    fn delete(&self, location: &Path) -> impl Future<Output = Result<()>>;
+
     /// Copy an object from one path to another in the same object store.
     ///
     /// If there exists an object at the destination, it will be overwritten.
@@ -1238,6 +1255,19 @@ pub trait ObjectStoreExt: ObjectStore {
     /// If atomic operations are not supported by the underlying object storage (like S3)
     /// it will return an error.
     fn copy_if_not_exists(&self, from: &Path, to: &Path) -> impl Future<Output = Result<()>>;
+
+    /// Move an object from one path to another in the same object store.
+    ///
+    /// By default, this is implemented as a copy and then delete source. It may not
+    /// check when deleting source that it was the same object that was originally copied.
+    ///
+    /// If there exists an object at the destination, it will be overwritten.
+    fn rename(&self, from: &Path, to: &Path) -> impl Future<Output = Result<()>>;
+
+    /// Move an object from one path to another in the same object store.
+    ///
+    /// Will return an error if the destination already has an object.
+    fn rename_if_not_exists(&self, from: &Path, to: &Path) -> impl Future<Output = Result<()>>;
 }
 
 impl<T> ObjectStoreExt for T
@@ -1268,6 +1298,24 @@ where
         Ok(self.get_opts(location, options).await?.meta)
     }
 
+    async fn delete(&self, location: &Path) -> Result<()> {
+        let location = location.clone();
+        let mut stream =
+            self.delete_stream(futures::stream::once(async move { Ok(location) }).boxed());
+        let _path = stream.try_next().await?.ok_or_else(|| Error::Generic {
+            store: "ext",
+            source: "`delete_stream` with one location should yield once but didn't".into(),
+        })?;
+        if stream.next().await.is_some() {
+            Err(Error::Generic {
+                store: "ext",
+                source: "`delete_stream` with one location expected to yield exactly once, but yielded more than once".into(),
+            })
+        } else {
+            Ok(())
+        }
+    }
+
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
         let options = CopyOptions::new().with_mode(CopyMode::Overwrite);
         self.copy_opts(from, to, options).await
@@ -1276,6 +1324,16 @@ where
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
         let options = CopyOptions::new().with_mode(CopyMode::Create);
         self.copy_opts(from, to, options).await
+    }
+
+    async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
+        let options = RenameOptions::new().with_target_mode(RenameTargetMode::Overwrite);
+        self.rename_opts(from, to, options).await
+    }
+
+    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
+        let options = RenameOptions::new().with_target_mode(RenameTargetMode::Create);
+        self.rename_opts(from, to, options).await
     }
 }
 
@@ -1828,6 +1886,76 @@ impl PartialEq<Self> for CopyOptions {
 
 impl Eq for CopyOptions {}
 
+/// Configure preconditions for the target of rename operation.
+///
+/// Note though that the source location may or not be deleted at the same time in an atomic operation. There is
+/// currently NO flag to control the atomicity of "delete source at the same time as creating the target".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RenameTargetMode {
+    /// Perform a write operation on the target, overwriting any object present at the provided path.
+    #[default]
+    Overwrite,
+    /// Perform an atomic write operation of the target, returning [`Error::AlreadyExists`] if an
+    /// object already exists at the provided path.
+    Create,
+}
+
+/// Options for a rename request
+#[derive(Debug, Clone, Default)]
+pub struct RenameOptions {
+    /// Configure the [`RenameTargetMode`] for this operation
+    pub target_mode: RenameTargetMode,
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to pass context-specific information (like tracing spans) via trait methods.
+    ///
+    /// These extensions are ignored entirely by backends offered through this crate.
+    ///
+    /// They are also excluded from [`PartialEq`] and [`Eq`].
+    pub extensions: Extensions,
+}
+
+impl RenameOptions {
+    /// Create a new [`RenameOptions`]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the `target_mode=.
+    ///
+    /// See [`RenameOptions::target_mode`].
+    #[must_use]
+    pub fn with_target_mode(mut self, target_mode: RenameTargetMode) -> Self {
+        self.target_mode = target_mode;
+        self
+    }
+
+    /// Sets the `extensions`.
+    ///
+    /// See [`RenameOptions::extensions`].
+    #[must_use]
+    pub fn with_extensions(mut self, extensions: Extensions) -> Self {
+        self.extensions = extensions;
+        self
+    }
+}
+
+impl PartialEq<Self> for RenameOptions {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            target_mode,
+            extensions: _,
+        } = self;
+        let Self {
+            target_mode: target_mode_other,
+            extensions: _,
+        } = other;
+
+        target_mode == target_mode_other
+    }
+}
+
+impl Eq for RenameOptions {}
+
 /// A specialized `Result` for object store-related errors
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
@@ -1957,9 +2085,8 @@ impl From<Error> for std::io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::buffered::BufWriter;
+
     use chrono::TimeZone;
-    use tokio::io::AsyncWriteExt;
 
     macro_rules! maybe_skip_integration {
         () => {
@@ -2011,6 +2138,9 @@ mod tests {
     {
         use bytes::Buf;
         use serde::Deserialize;
+        use tokio::io::AsyncWriteExt;
+
+        use crate::buffered::BufWriter;
 
         #[derive(Deserialize)]
         struct Tagging {
@@ -2225,5 +2355,24 @@ mod tests {
         assert_eq!(options.version, Some("version-1".to_string()));
         assert!(options.head);
         assert_eq!(options.extensions.get::<&str>(), extensions.get::<&str>());
+    }
+
+    fn takes_generic_object_store<T: ObjectStore>(store: T) {
+        // This function is just to ensure that the trait bounds are satisfied
+        let _ = store;
+    }
+    #[test]
+    fn test_dyn_impl() {
+        let store: Arc<dyn ObjectStore> = Arc::new(memory::InMemory::new());
+        takes_generic_object_store(store);
+        let store: Box<dyn ObjectStore> = Box::new(memory::InMemory::new());
+        takes_generic_object_store(store);
+    }
+    #[test]
+    fn test_generic_impl() {
+        let store = Arc::new(memory::InMemory::new());
+        takes_generic_object_store(store);
+        let store = Box::new(memory::InMemory::new());
+        takes_generic_object_store(store);
     }
 }

@@ -304,11 +304,6 @@ impl ObjectStore for AmazonS3 {
         self.client.get_opts(location, options).await
     }
 
-    async fn delete(&self, location: &Path) -> Result<()> {
-        self.client.request(Method::DELETE, location).send().await?;
-        Ok(())
-    }
-
     fn delete_stream(
         &self,
         locations: BoxStream<'static, Result<Path>>,
@@ -593,6 +588,32 @@ mod tests {
         assert!(res.e_tag.is_some(), "Should have valid etag");
 
         store.delete(&path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn copy_multipart_file_with_signature() {
+        maybe_skip_integration!();
+
+        let bucket = "test-bucket-for-copy-if-not-exists";
+        let store = AmazonS3Builder::from_env()
+            .with_bucket_name(bucket)
+            .with_checksum_algorithm(Checksum::SHA256)
+            .with_copy_if_not_exists(S3CopyIfNotExists::Multipart)
+            .build()
+            .unwrap();
+
+        let src = Path::parse("src.bin").unwrap();
+        let dst = Path::parse("dst.bin").unwrap();
+        store
+            .put(&src, PutPayload::from(vec![0u8; 100_000]))
+            .await
+            .unwrap();
+        if store.head(&dst).await.is_ok() {
+            store.delete(&dst).await.unwrap();
+        }
+        store.copy_if_not_exists(&src, &dst).await.unwrap();
+        store.delete(&src).await.unwrap();
+        store.delete(&dst).await.unwrap();
     }
 
     #[tokio::test]

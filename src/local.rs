@@ -40,7 +40,7 @@ use crate::{
     path::{Path, absolute_path_to_url},
     util::InvalidGetRange,
 };
-use crate::{CopyMode, CopyOptions};
+use crate::{CopyMode, CopyOptions, ObjectStoreExt, RenameOptions, RenameTargetMode};
 
 /// A specialized `Error` for filesystem object store-related errors
 #[derive(Debug, thiserror::Error)]
@@ -444,14 +444,6 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    async fn delete(&self, location: &Path) -> Result<()> {
-        let config = Arc::clone(&self.config);
-        let automatic_cleanup = self.automatic_cleanup;
-        let location = location.clone();
-        maybe_spawn_blocking(move || Self::delete_location(config, automatic_cleanup, &location))
-            .await
-    }
-
     fn delete_stream(
         &self,
         locations: BoxStream<'static, Result<Path>>,
@@ -610,24 +602,52 @@ impl ObjectStore for LocalFileSystem {
         }
     }
 
-    async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
-        let from = self.path_to_filesystem(from)?;
-        let to = self.path_to_filesystem(to)?;
-        maybe_spawn_blocking(move || {
-            loop {
-                match std::fs::rename(&from, &to) {
-                    Ok(_) => return Ok(()),
-                    Err(source) => match source.kind() {
-                        ErrorKind::NotFound => match from.exists() {
-                            true => create_parent_dirs(&to, source)?,
-                            false => return Err(Error::NotFound { path: from, source }.into()),
-                        },
-                        _ => return Err(Error::UnableToCopyFile { from, to, source }.into()),
-                    },
-                }
+    async fn rename_opts(&self, from: &Path, to: &Path, options: RenameOptions) -> Result<()> {
+        let RenameOptions {
+            target_mode,
+            extensions,
+        } = options;
+
+        match target_mode {
+            // optimized implementation
+            RenameTargetMode::Overwrite => {
+                let from = self.path_to_filesystem(from)?;
+                let to = self.path_to_filesystem(to)?;
+                maybe_spawn_blocking(move || {
+                    loop {
+                        match std::fs::rename(&from, &to) {
+                            Ok(_) => return Ok(()),
+                            Err(source) => match source.kind() {
+                                ErrorKind::NotFound => match from.exists() {
+                                    true => create_parent_dirs(&to, source)?,
+                                    false => {
+                                        return Err(Error::NotFound { path: from, source }.into());
+                                    }
+                                },
+                                _ => {
+                                    return Err(Error::UnableToCopyFile { from, to, source }.into());
+                                }
+                            },
+                        }
+                    }
+                })
+                .await
             }
-        })
-        .await
+            // fall-back to copy & delete
+            RenameTargetMode::Create => {
+                self.copy_opts(
+                    from,
+                    to,
+                    CopyOptions {
+                        mode: CopyMode::Create,
+                        extensions,
+                    },
+                )
+                .await?;
+                self.delete(from).await?;
+                Ok(())
+            }
+        }
     }
 }
 

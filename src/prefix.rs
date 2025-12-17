@@ -23,7 +23,7 @@ use std::ops::Range;
 use crate::path::Path;
 use crate::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result,
 };
 
 /// Store wrapper that applies a constant prefix to all paths handled by the store.
@@ -124,11 +124,6 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner.get_ranges(&full_path, ranges).await
     }
 
-    async fn delete(&self, location: &Path) -> Result<()> {
-        let full_path = self.full_path(location);
-        self.inner.delete(&full_path).await
-    }
-
     fn delete_stream(
         &self,
         locations: BoxStream<'static, Result<Path>>,
@@ -188,16 +183,10 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner.copy_opts(&full_from, &full_to, options).await
     }
 
-    async fn rename(&self, from: &Path, to: &Path) -> Result<()> {
+    async fn rename_opts(&self, from: &Path, to: &Path, options: RenameOptions) -> Result<()> {
         let full_from = self.full_path(from);
         let full_to = self.full_path(to);
-        self.inner.rename(&full_from, &full_to).await
-    }
-
-    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> Result<()> {
-        let full_from = self.full_path(from);
-        let full_to = self.full_path(to);
-        self.inner.rename_if_not_exists(&full_from, &full_to).await
+        self.inner.rename_opts(&full_from, &full_to, options).await
     }
 }
 
