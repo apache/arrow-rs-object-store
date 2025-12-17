@@ -42,8 +42,9 @@ use url::Url;
 /// Default metadata endpoint
 static DEFAULT_METADATA_ENDPOINT: &str = "http://169.254.169.254";
 
-/// AWS S3 does not support copy operations larger than 5 GiB in a single request.
-/// https://docs.aws.amazon.com/AmazonS3/latest/userguide/copy-object.html
+/// AWS S3 does not support copy operations larger than 5 GiB in a single request. See
+/// [CopyObject](https://docs.aws.amazon.com/AmazonS3/latest/userguide/copy-object.html) for more
+/// details.
 const MAX_SINGLE_REQUEST_COPY_SIZE: u64 = 5 * 1024 * 1024 * 1024;
 
 /// A specialized `Error` for object store-related errors

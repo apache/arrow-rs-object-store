@@ -103,6 +103,10 @@ impl AmazonS3 {
     }
 
     /// Perform a multipart copy operation
+    ///
+    /// If the multipart upload fails, this function makes a best effort attempt to clean it up.
+    /// It's the caller's responsibility to add a lifecycle rule if guaranteed cleanup is required,
+    /// as we cannot protect against an ill-timed process crash.
     async fn copy_multipart(
         &self,
         from: &Path,
@@ -142,10 +146,6 @@ impl AmazonS3 {
         }
         .await;
 
-        // If the multipart upload failed, make a best effort attempt to
-        // clean it up. It's the caller's responsibility to add a
-        // lifecycle rule if guaranteed cleanup is required, as we
-        // cannot protect against an ill-timed process crash.
         if res.is_err() {
             let _ = self.client.abort_multipart(to, &upload_id).await;
         }
