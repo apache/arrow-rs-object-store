@@ -128,7 +128,11 @@ impl AmazonS3 {
         let mut idx: usize = 0;
         let res = async {
             while offset < size {
-                let end = std::cmp::min(offset + part_size, size);
+                let end = if size - offset <= part_size {
+                    size
+                } else {
+                    offset + part_size
+                };
                 let payload = if offset == 0 && end == size {
                     PutPartPayload::Copy(from)
                 } else {
