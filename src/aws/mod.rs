@@ -126,29 +126,33 @@ impl AmazonS3 {
         let mut parts = Vec::new();
         let mut offset: u64 = 0;
         let mut idx: usize = 0;
-        let res = async {
-            while offset < size {
-                let end = if size - offset <= part_size {
-                    size
-                } else {
-                    offset + part_size
-                };
-                let payload = if offset == 0 && end == size {
-                    PutPartPayload::Copy(from)
-                } else {
-                    PutPartPayload::CopyRange(from, offset..end)
-                };
-                let part = self.client.put_part(to, &upload_id, idx, payload).await?;
-                parts.push(part);
-                idx += 1;
-                offset = end;
-            }
-            self.client
-                .complete_multipart(to, &upload_id, parts, mode)
-                .await
-                .map(|_| ())
+        while offset < size {
+            let end = if size - offset <= part_size {
+                size
+            } else {
+                offset + part_size
+            };
+            let payload = if offset == 0 && end == size {
+                PutPartPayload::Copy(from)
+            } else {
+                PutPartPayload::CopyRange(from, offset..end)
+            };
+            let part = match self.client.put_part(to, &upload_id, idx, payload).await {
+                Ok(part) => part,
+                Err(e) => {
+                    let _ = self.client.abort_multipart(to, &upload_id).await;
+                    return Err(e);
+                }
+            };
+            parts.push(part);
+            idx += 1;
+            offset = end;
         }
-        .await;
+        let res = self
+            .client
+            .complete_multipart(to, &upload_id, parts, mode)
+            .await
+            .map(|_| ());
 
         if res.is_err() {
             let _ = self.client.abort_multipart(to, &upload_id).await;
