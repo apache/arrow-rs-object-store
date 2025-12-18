@@ -76,6 +76,7 @@
 - Add documentation for what backends support bulk delete \(`ObjectStore::delete_stream`\) [\#527](https://github.com/apache/arrow-rs-object-store/issues/527)
 - Use `'static` lifetime for `delete_stream` [\#518](https://github.com/apache/arrow-rs-object-store/issues/518)
 - Release object store  `0.12.4` \(non breaking API\) Release September 2025 [\#489](https://github.com/apache/arrow-rs-object-store/issues/489)
+- Cleanup `ObjectStore` trait: Split out convenience methods [\#385](https://github.com/apache/arrow-rs-object-store/issues/385)
 
 **Merged pull requests:**
 
