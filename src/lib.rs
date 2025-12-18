@@ -694,6 +694,33 @@ pub type MultipartId = String;
 ///
 /// To automatically detect this issue, use
 /// [`#[deny(clippy::missing_trait_methods)]`](https://rust-lang.github.io/rust-clippy/master/index.html#missing_trait_methods).
+///
+/// # Upgrade Guide for 0.13.0
+///
+/// Upgrading to object_store 0.13.0 from an earlier version typically involves:
+///
+/// 1. Add a `use` for [`ObjectStoreExt`] to solve the error
+///
+/// ```text
+/// error[E0599]: no method named `put` found for reference `&dyn object_store::ObjectStore` in the current scope
+///    --> datafusion/datasource/src/url.rs:993:14
+/// ```
+///
+/// 2. Remove any (now) redundant implementations (such as `ObjectStore::put`)  from any
+///   `ObjectStore` implementations to resolve the error
+///
+/// ```text
+/// error[E0407]: method `put` is not a member of trait `ObjectStore`
+///     --> datafusion/datasource/src/url.rs:1103:9
+///      |
+/// ```
+///
+/// 3. Convert `ObjectStore::delete` to [`ObjectStore::delete_stream`] (see documentation
+///    on that method for details and examples)
+///
+/// 4. Combine `ObjectStore::copy` and `ObjectStore::copy_if_not_exists` implementations into
+///    [`ObjectStore::copy_opts`] (see documentation on that method for details and examples)
+///
 #[async_trait]
 pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Save the provided `payload` to `location` with the given options
