@@ -721,6 +721,21 @@ pub type MultipartId = String;
 /// 4. Combine `ObjectStore::copy` and `ObjectStore::copy_if_not_exists` implementations into
 ///    [`ObjectStore::copy_opts`] (see documentation on that method for details and examples)
 ///
+/// 5. Update `object_store::Error::NotImplemented` to include the name of the missing method
+///
+/// For example, change instances of
+/// ```text
+/// object_store::Error::NotImplemented
+/// ```
+/// to
+/// ```
+///  object_store::Error::NotImplemented {
+///    operation: "put".to_string(),
+///    implementer: "RequestCountingObjectStore".to_string(),
+///  };
+/// ```
+///
+///
 #[async_trait]
 pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Save the provided `payload` to `location` with the given options
