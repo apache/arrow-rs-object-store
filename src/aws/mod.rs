@@ -180,7 +180,11 @@ impl ObjectStore for AmazonS3 {
 
         match (mode, &self.client.config.conditional_put) {
             (PutMode::Overwrite, _) => request.idempotent(true).do_put().await,
-            (PutMode::Create, S3ConditionalPut::Disabled) => Err(Error::NotImplemented),
+            (PutMode::Create, S3ConditionalPut::Disabled) => Err(Error::NotImplemented {
+                operation:
+                    "`put_opts` with mode `PutMode::Create` when conditional put is disabled".into(),
+                implementer: self.to_string(),
+            }),
             (PutMode::Create, S3ConditionalPut::ETagMatch) => {
                 match request.header(&IF_NONE_MATCH, "*").do_put().await {
                     // Technically If-None-Match should return NotModified but some stores,
@@ -222,7 +226,12 @@ impl ObjectStore for AmazonS3 {
                             r => r,
                         }
                     }
-                    S3ConditionalPut::Disabled => Err(Error::NotImplemented),
+                    S3ConditionalPut::Disabled => Err(Error::NotImplemented {
+                        operation:
+                            "`put_opts` with mode `PutMode::Update` when conditional put is disabled"
+                                .into(),
+                        implementer: self.to_string(),
+                    }),
                 }
             }
         }

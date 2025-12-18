@@ -2049,8 +2049,17 @@ pub enum Error {
     },
 
     /// Error when an operation is not implemented
-    #[error("Operation not yet implemented.")]
-    NotImplemented,
+    #[error("Operation {operation} not yet implemented by {implementer}.")]
+    NotImplemented {
+        /// What isn't implemented. Should include at least the method
+        /// name that was called; could also include other relevant
+        /// subcontexts.
+        operation: String,
+
+        /// Which driver this is that hasn't implemented this operation,
+        /// to aid debugging in contexts that may be using multiple implementations.
+        implementer: String,
+    },
 
     /// Error when the used credentials don't have enough permission
     /// to perform the requested operation

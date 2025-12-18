@@ -104,7 +104,10 @@ impl ObjectStore for HttpStore {
     ) -> Result<PutResult> {
         if opts.mode != PutMode::Overwrite {
             // TODO: Add support for If header - https://datatracker.ietf.org/doc/html/rfc2518#section-9.4
-            return Err(crate::Error::NotImplemented);
+            return Err(crate::Error::NotImplemented {
+                operation: "`put_opts` with a mode other than `PutMode::Overwrite`".into(),
+                implementer: self.to_string(),
+            });
         }
 
         let response = self.client.put(location, payload, opts.attributes).await?;
@@ -125,7 +128,10 @@ impl ObjectStore for HttpStore {
         _location: &Path,
         _opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
-        Err(crate::Error::NotImplemented)
+        Err(crate::Error::NotImplemented {
+            operation: "`put_multipart_opts`".into(),
+            implementer: self.to_string(),
+        })
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {

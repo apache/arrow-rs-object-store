@@ -478,7 +478,7 @@ pub async fn put_get_attributes(integration: &dyn ObjectStore) {
             let r = integration.get(&path).await.unwrap();
             assert_eq!(r.attributes, attributes);
         }
-        Err(Error::NotImplemented) => {}
+        Err(Error::NotImplemented { .. }) => {}
         Err(e) => panic!("{e}"),
     }
 
@@ -491,7 +491,7 @@ pub async fn put_get_attributes(integration: &dyn ObjectStore) {
             let r = integration.get(&path).await.unwrap();
             assert_eq!(r.attributes, attributes);
         }
-        Err(Error::NotImplemented) => {}
+        Err(Error::NotImplemented { .. }) => {}
         Err(e) => panic!("{e}"),
     }
 }
@@ -606,7 +606,7 @@ pub async fn put_opts(storage: &dyn ObjectStore, supports_update: bool) {
             .put_opts(&path, "c".into(), PutMode::Update(v1.clone().into()).into())
             .await
             .unwrap_err();
-        assert!(matches!(err, Error::NotImplemented), "{err}");
+        assert!(matches!(err, Error::NotImplemented { .. }), "{err}");
 
         return;
     }
