@@ -859,6 +859,23 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// than one object per a request. Otherwise, the implementation may call
     /// the single object delete method for each location.
     ///
+    /// # Bulk Delete Support
+    ///
+    /// The following backends support native bulk delete operations:
+    ///
+    /// - **AWS (S3)**: Uses the native [DeleteObjects] API with batches of up to 1000 objects
+    /// - **Azure**: Uses the native [Blob Batch] API with batches of up to 256 objects
+    ///
+    /// The following backends use concurrent individual delete operations:
+    ///
+    /// - **GCP**: Performs individual delete requests with up to 10 concurrent operations
+    /// - **HTTP**: Performs individual delete requests with up to 10 concurrent operations
+    /// - **Local**: Performs individual file deletions with up to 10 concurrent operations
+    /// - **Memory**: Performs individual in-memory deletions sequentially
+    ///
+    /// [DeleteObjects]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
+    /// [Blob Batch]: https://learn.microsoft.com/en-us/rest/api/storageservices/blob-batch
+    ///
     /// The returned stream yields the results of the delete operations in the
     /// same order as the input locations. However, some errors will be from
     /// an overall call to a bulk delete operation, and not from a specific
