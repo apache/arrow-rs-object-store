@@ -122,7 +122,10 @@ pub enum RequestError {
     #[error("Server returned error response: {body}")]
     Response { status: StatusCode, body: String },
 
-    #[error(transparent)]
+    // We need to use `{0}` here rather than `error(transparent)` to ensure that
+    // `Error::source` returns `HttpError` rather than the underlying
+    // `reqwest::Error` which would happen with `error(transparent)`.
+    #[error("{0}")]
     Http(#[from] HttpError),
 }
 
@@ -511,7 +514,7 @@ mod tests {
     use crate::RetryConfig;
     use crate::client::mock_server::MockServer;
     use crate::client::retry::{RequestError, RetryContext, RetryExt, body_contains_error};
-    use crate::client::{HttpClient, HttpResponse};
+    use crate::client::{HttpClient, HttpError, HttpErrorKind, HttpResponse};
     use http::StatusCode;
     use hyper::Response;
     use hyper::header::LOCATION;
@@ -731,6 +734,18 @@ mod tests {
             e.source().unwrap().to_string(),
             "HTTP error: error sending request",
         );
+        // the HttpError type needs to be directly accessible in the source chain
+        let mut err: &dyn Error = &e;
+        let mut found = false;
+        while let Some(source) = err.source() {
+            err = source;
+            if let Some(http_err) = err.downcast_ref::<HttpError>() {
+                assert_eq!(http_err.kind(), HttpErrorKind::Request);
+                found = true;
+                break;
+            }
+        }
+        assert!(found, "HttpError not found in source chain");
 
         // Retries on client timeout
         mock.push_async_fn(|_| async move {
