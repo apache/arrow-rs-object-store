@@ -102,6 +102,26 @@ impl AmazonS3 {
         self.client.config.path_url(path)
     }
 
+    /// Construct the payloads for a multipart copy operation.
+    fn multipart_copy_payloads<'a>(&self, from: &'a Path, size: u64) -> Vec<PutPartPayload<'a>> {
+        let part_size = self.client.config.multipart_copy_part_size;
+        if size <= part_size {
+            return vec![PutPartPayload::Copy(from)];
+        }
+        let mut payloads = Vec::new();
+        let mut offset = 0;
+        while offset < size {
+            let end = if size - offset <= part_size {
+                size
+            } else {
+                offset + part_size
+            };
+            payloads.push(PutPartPayload::CopyRange(from, offset..end));
+            offset = end;
+        }
+        payloads
+    }
+
     /// Perform a multipart copy operation
     ///
     /// If the multipart upload fails, this function makes a best effort attempt to clean it up.
@@ -120,44 +140,29 @@ impl AmazonS3 {
             .create_multipart(to, PutMultipartOptions::default())
             .await?;
 
-        // S3 requires minimum 5 MiB per part (except final) and max 10,000 parts
-        let part_size = self.client.config.multipart_copy_part_size;
-
         let mut parts = Vec::new();
-        let mut offset: u64 = 0;
-        let mut idx: usize = 0;
-        while offset < size {
-            let end = if size - offset <= part_size {
-                size
-            } else {
-                offset + part_size
-            };
-            let payload = if offset == 0 && end == size {
-                PutPartPayload::Copy(from)
-            } else {
-                PutPartPayload::CopyRange(from, offset..end)
-            };
-            let part = match self.client.put_part(to, &upload_id, idx, payload).await {
-                Ok(part) => part,
+        for (idx, payload) in self
+            .multipart_copy_payloads(from, size)
+            .into_iter()
+            .enumerate()
+        {
+            match self.client.put_part(to, &upload_id, idx, payload).await {
+                Ok(part) => parts.push(part),
                 Err(e) => {
                     let _ = self.client.abort_multipart(to, &upload_id).await;
                     return Err(e);
                 }
             };
-            parts.push(part);
-            idx += 1;
-            offset = end;
         }
-        let res = self
+        if let Err(err) = self
             .client
             .complete_multipart(to, &upload_id, parts, mode)
             .await
-            .map(|_| ());
-
-        if res.is_err() {
+        {
             let _ = self.client.abort_multipart(to, &upload_id).await;
+            return Err(err);
         }
-        res
+        Ok(())
     }
 }
 
@@ -559,6 +564,7 @@ mod tests {
     use crate::tests::*;
     use base64::Engine;
     use base64::prelude::BASE64_STANDARD;
+    use bytes::BytesMut;
     use http::HeaderMap;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
@@ -616,6 +622,63 @@ mod tests {
             store.delete(&dst).await.unwrap();
         }
         store.copy_if_not_exists(&src, &dst).await.unwrap();
+        store.delete(&src).await.unwrap();
+        store.delete(&dst).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn large_file_copy_multipart() {
+        maybe_skip_integration!();
+
+        let bucket = "test-bucket-for-multipart-copy-large";
+        let store = AmazonS3Builder::from_env()
+            .with_bucket_name(bucket)
+            .with_multipart_copy_threshold(5 * 1024 * 1024)
+            .with_multipart_copy_part_size(5 * 1024 * 1024)
+            .build()
+            .unwrap();
+
+        let mut payload = BytesMut::zeroed(10 * 1024 * 1024);
+        rand::fill(&mut payload[..]);
+
+        let src = Path::parse("src.bin").unwrap();
+        let dst = Path::parse("dst.bin").unwrap();
+        store
+            .put(&src, PutPayload::from(payload.clone().freeze()))
+            .await
+            .unwrap();
+        store.copy(&src, &dst).await.unwrap();
+        let copied = store.get(&dst).await.unwrap();
+        let content = copied.bytes().await.unwrap();
+        assert_eq!(content, payload);
+        store.delete(&src).await.unwrap();
+        store.delete(&dst).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn small_file_copy_single_part() {
+        maybe_skip_integration!();
+
+        let bucket = "test-bucket-for-multipart-copy-small";
+        let store = AmazonS3Builder::from_env()
+            .with_bucket_name(bucket)
+            .with_multipart_copy_threshold(5 * 1024 * 1024) // trigger multipart copy
+            .with_multipart_copy_part_size(50 * 1024 * 1024) // but only use one part
+            .build()
+            .unwrap();
+
+        let src = Path::parse("src.bin").unwrap();
+        let dst = Path::parse("dst.bin").unwrap();
+        let mut payload = BytesMut::zeroed(10 * 1024 * 1024);
+        rand::fill(&mut payload[..]);
+        store
+            .put(&src, PutPayload::from(payload.clone().freeze()))
+            .await
+            .unwrap();
+        store.copy(&src, &dst).await.unwrap();
+        let copied = store.get(&dst).await.unwrap();
+        let content = copied.bytes().await.unwrap();
+        assert_eq!(content, payload);
         store.delete(&src).await.unwrap();
         store.delete(&dst).await.unwrap();
     }
@@ -959,5 +1022,44 @@ mod tests {
         // shutdown the io runtime and thread
         shutdown_tx.send(()).ok();
         thread_handle.join().expect("runtime thread panicked");
+    }
+
+    #[test]
+    fn test_multipart_copy_payloads_single() {
+        let store = AmazonS3Builder::default()
+            .with_bucket_name(NON_EXISTENT_NAME)
+            .with_multipart_copy_part_size(1024)
+            .build()
+            .unwrap();
+        let path = Path::from("test.txt");
+        let payloads = store.multipart_copy_payloads(&path, 1024);
+        assert_eq!(payloads.len(), 1);
+        let PutPartPayload::Copy(payload_path) = payloads[0] else {
+            panic!("expected Copy payload");
+        };
+        assert_eq!(payload_path, &path);
+    }
+    #[test]
+    fn test_multipart_copy_payloads_multiple() {
+        let store = AmazonS3Builder::default()
+            .with_bucket_name(NON_EXISTENT_NAME)
+            .with_multipart_copy_part_size(1024)
+            .build()
+            .unwrap();
+        let path = Path::from("test.txt");
+        let payloads = store.multipart_copy_payloads(&path, 2000);
+        assert_eq!(payloads.len(), 2);
+        let mut payloads = payloads.into_iter();
+        let Some(PutPartPayload::CopyRange(payload_path, range)) = payloads.next() else {
+            panic!("expected CopyRange payload");
+        };
+        assert_eq!(payload_path, &path);
+        assert_eq!(range, 0..1024);
+        let Some(PutPartPayload::CopyRange(payload_path, range)) = payloads.next() else {
+            panic!("expected CopyRange payload");
+        };
+        assert_eq!(payload_path, &path);
+        assert_eq!(range, 1024..2000);
+        assert!(payloads.next().is_none());
     }
 }
