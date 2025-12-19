@@ -19,7 +19,7 @@
 
 # Changelog
 
-## [v0.13.0](https://github.com/apache/arrow-rs-object-store/tree/v0.13.0) (2025-12-18)
+## [v0.13.0](https://github.com/apache/arrow-rs-object-store/tree/v0.13.0) (2025-12-19)
 
 [Full Changelog](https://github.com/apache/arrow-rs-object-store/compare/v0.12.4...v0.13.0)
 
@@ -80,6 +80,8 @@
 
 **Merged pull requests:**
 
+- Add A "upgrading to 0.13.0" guide in docs [\#584](https://github.com/apache/arrow-rs-object-store/pull/584) ([alamb](https://github.com/alamb))
+- Update release schedule on README [\#583](https://github.com/apache/arrow-rs-object-store/pull/583) ([alamb](https://github.com/alamb))
 - correctly expose HttpError through RetryError::source [\#580](https://github.com/apache/arrow-rs-object-store/pull/580) ([carlsverre](https://github.com/carlsverre))
 - Remove dev dependency on openssl [\#577](https://github.com/apache/arrow-rs-object-store/pull/577) ([tustvold](https://github.com/tustvold))
 - Documentation for backend support of bulk delete [\#571](https://github.com/apache/arrow-rs-object-store/pull/571) ([jayvdb](https://github.com/jayvdb))
