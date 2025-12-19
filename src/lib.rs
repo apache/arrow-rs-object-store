@@ -729,7 +729,7 @@ pub type MultipartId = String;
 /// ```
 /// to
 /// ```
-///  object_store::Error::NotImplemented {
+/// object_store::Error::NotImplemented {
 ///    operation: "put".to_string(),
 ///    implementer: "RequestCountingObjectStore".to_string(),
 ///  };
