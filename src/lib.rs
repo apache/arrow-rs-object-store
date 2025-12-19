@@ -706,7 +706,7 @@ pub type MultipartId = String;
 ///    --> datafusion/datasource/src/url.rs:993:14
 /// ```
 ///
-/// 2. Remove any (now) redundant implementations (such as `ObjectStore::put`)  from any
+/// 2. Remove any (now) redundant implementations (such as `ObjectStore::put`) from any
 ///   `ObjectStore` implementations to resolve the error
 ///
 /// ```text
