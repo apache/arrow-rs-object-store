@@ -167,6 +167,7 @@ pub(crate) struct AzureConfig {
     pub skip_signature: bool,
     pub disable_tagging: bool,
     pub client_options: ClientOptions,
+    pub ignore_unparsable_paths: bool,
 }
 
 impl AzureConfig {
@@ -997,7 +998,7 @@ impl ListClient for Arc<AzureClient> {
         let token = response.next_marker.take().filter(|x| !x.is_empty());
 
         Ok(PaginatedListResult {
-            result: to_list_result(response, prefix)?,
+            result: to_list_result(response, prefix, self.config.ignore_unparsable_paths)?,
             page_token: token,
         })
     }
@@ -1014,7 +1015,11 @@ struct ListResultInternal {
     pub blobs: Blobs,
 }
 
-fn to_list_result(value: ListResultInternal, prefix: Option<&str>) -> Result<ListResult> {
+fn to_list_result(
+    value: ListResultInternal,
+    prefix: Option<&str>,
+    ignore_unparsable_paths: bool,
+) -> Result<ListResult> {
     let prefix = prefix.unwrap_or_default();
     let common_prefixes = value
         .blobs
@@ -1033,6 +1038,12 @@ fn to_list_result(value: ListResultInternal, prefix: Option<&str>) -> Result<Lis
         .filter(|blob| {
             !matches!(blob.properties.resource_type.as_ref(), Some(typ) if typ == "directory")
                 && blob.name.len() > prefix.len()
+        })
+        .map(BlobInternal::try_from)
+        .filter_map(|parsed| match parsed {
+            Ok(parsed) => Some(parsed),
+            Err(_) if ignore_unparsable_paths => None,
+            Err(e) => panic!("cannot parse path: {e}"),
         })
         .map(ObjectMeta::try_from)
         .collect::<Result<_>>()?;
@@ -1072,15 +1083,31 @@ struct Blob {
     pub metadata: Option<HashMap<String, String>>,
 }
 
-impl TryFrom<Blob> for ObjectMeta {
+struct BlobInternal {
+    pub blob: Blob,
+    pub path: Path,
+}
+
+impl TryFrom<Blob> for BlobInternal {
+    type Error = crate::path::Error;
+
+    fn try_from(value: Blob) -> Result<Self, crate::path::Error> {
+        Ok(Self {
+            path: Path::parse(&value.name)?,
+            blob: value,
+        })
+    }
+}
+
+impl TryFrom<BlobInternal> for ObjectMeta {
     type Error = crate::Error;
 
-    fn try_from(value: Blob) -> Result<Self> {
+    fn try_from(value: BlobInternal) -> Result<Self> {
         Ok(Self {
-            location: Path::parse(value.name)?,
-            last_modified: value.properties.last_modified,
-            size: value.properties.content_length,
-            e_tag: value.properties.e_tag,
+            location: value.path,
+            last_modified: value.blob.properties.last_modified,
+            size: value.blob.properties.content_length,
+            e_tag: value.blob.properties.e_tag,
             version: None, // For consistency with S3 and GCP which don't include this
         })
     }
@@ -1379,6 +1406,7 @@ mod tests {
             skip_signature: false,
             disable_tagging: false,
             client_options: Default::default(),
+            ignore_unparsable_paths: Default::default(),
         };
 
         let client = AzureClient::new(config, HttpClient::new(Client::new()));
@@ -1515,5 +1543,136 @@ Time:2018-06-14T16:46:54.6040685Z</Message></Error>\r
         assert_eq!(paths[2].as_ref(), path);
         assert_eq!("404", code);
         assert_eq!("The specified blob does not exist.", reason);
+    }
+
+    #[tokio::test]
+    async fn test_list_blobs() {
+        let fake_properties = BlobProperties {
+            last_modified: Utc::now(),
+            content_length: 8,
+            content_type: "text/plain".to_string(),
+            content_encoding: None,
+            content_language: None,
+            e_tag: Some("etag".to_string()),
+            resource_type: Some("resource".to_string()),
+        };
+        let fake_result = ListResultInternal {
+            prefix: None,
+            max_results: None,
+            delimiter: None,
+            next_marker: None,
+            blobs: Blobs {
+                blob_prefix: vec![],
+                blobs: vec![
+                    Blob {
+                        name: "blob0.txt".to_string(),
+                        version_id: None,
+                        is_current_version: None,
+                        deleted: None,
+                        properties: fake_properties.clone(),
+                        metadata: None,
+                    },
+                    Blob {
+                        name: "blob1.txt".to_string(),
+                        version_id: None,
+                        is_current_version: None,
+                        deleted: None,
+                        properties: fake_properties.clone(),
+                        metadata: None,
+                    },
+                ],
+            },
+        };
+        let result = to_list_result(fake_result, None, false).unwrap();
+        assert_eq!(result.common_prefixes.len(), 0);
+        assert_eq!(result.objects.len(), 2);
+        assert_eq!(result.objects[0].location, Path::from("blob0.txt"));
+        assert_eq!(result.objects[1].location, Path::from("blob1.txt"));
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "cannot parse path: Path \"foo//blob1.txt\" contained empty path segment")]
+    async fn test_list_blobs_invalid_paths() {
+        let fake_properties = BlobProperties {
+            last_modified: Utc::now(),
+            content_length: 8,
+            content_type: "text/plain".to_string(),
+            content_encoding: None,
+            content_language: None,
+            e_tag: Some("etag".to_string()),
+            resource_type: Some("resource".to_string()),
+        };
+        let fake_result = ListResultInternal {
+            prefix: None,
+            max_results: None,
+            delimiter: None,
+            next_marker: None,
+            blobs: Blobs {
+                blob_prefix: vec![],
+                blobs: vec![
+                    Blob {
+                        name: "foo/blob0.txt".to_string(),
+                        version_id: None,
+                        is_current_version: None,
+                        deleted: None,
+                        properties: fake_properties.clone(),
+                        metadata: None,
+                    },
+                    Blob {
+                        name: "foo//blob1.txt".to_string(),
+                        version_id: None,
+                        is_current_version: None,
+                        deleted: None,
+                        properties: fake_properties.clone(),
+                        metadata: None,
+                    },
+                ],
+            },
+        };
+        to_list_result(fake_result, None, false).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_list_blobs_ignore_invalid_paths() {
+        let fake_properties = BlobProperties {
+            last_modified: Utc::now(),
+            content_length: 8,
+            content_type: "text/plain".to_string(),
+            content_encoding: None,
+            content_language: None,
+            e_tag: Some("etag".to_string()),
+            resource_type: Some("resource".to_string()),
+        };
+        let fake_result = ListResultInternal {
+            prefix: None,
+            max_results: None,
+            delimiter: None,
+            next_marker: None,
+            blobs: Blobs {
+                blob_prefix: vec![],
+                blobs: vec![
+                    Blob {
+                        name: "foo/blob0.txt".to_string(),
+                        version_id: None,
+                        is_current_version: None,
+                        deleted: None,
+                        properties: fake_properties.clone(),
+                        metadata: None,
+                    },
+                    Blob {
+                        name: "foo//blob1.txt".to_string(),
+                        version_id: None,
+                        is_current_version: None,
+                        deleted: None,
+                        properties: fake_properties.clone(),
+                        metadata: None,
+                    },
+                ],
+            },
+        };
+        let result = to_list_result(fake_result, None, true).unwrap();
+        assert_eq!(result.common_prefixes.len(), 0);
+        assert_eq!(result.objects.len(), 1);
+        assert_eq!(result.objects[0].location, Path::from("foo/blob0.txt"));
     }
 }
