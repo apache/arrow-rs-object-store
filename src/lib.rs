@@ -735,7 +735,6 @@ pub type MultipartId = String;
 ///  };
 /// ```
 ///
-///
 #[async_trait]
 pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Save the provided `payload` to `location` with the given options
