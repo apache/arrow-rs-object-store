@@ -80,19 +80,19 @@
     doc = "* Local filesystem: [`LocalFileSystem`](local::LocalFileSystem)"
 )]
 #![cfg_attr(
-    feature = "gcp",
+    feature = "gcp-no-crypto",
     doc = "* [`gcp`]: [Google Cloud Storage](https://cloud.google.com/storage/) support. See [`GoogleCloudStorageBuilder`](gcp::GoogleCloudStorageBuilder)"
 )]
 #![cfg_attr(
-    feature = "aws",
+    feature = "aws-no-crypto",
     doc = "* [`aws`]: [Amazon S3](https://aws.amazon.com/s3/). See [`AmazonS3Builder`](aws::AmazonS3Builder)"
 )]
 #![cfg_attr(
-    feature = "azure",
+    feature = "azure-no-crypto",
     doc = "* [`azure`]: [Azure Blob Storage](https://azure.microsoft.com/en-gb/services/storage/blobs/). See [`MicrosoftAzureBuilder`](azure::MicrosoftAzureBuilder)"
 )]
 #![cfg_attr(
-    feature = "http",
+    feature = "http-no-crypto",
     doc = "* [`http`]: [HTTP/WebDAV Storage](https://datatracker.ietf.org/doc/html/rfc2518). See [`HttpBuilder`](http::HttpBuilder)"
 )]
 //!
@@ -136,7 +136,7 @@
 //! application complexity.
 //!
 //! ```no_run,ignore-wasm32
-//! # #[cfg(feature = "aws")] {
+//! # #[cfg(feature = "aws-no-crypto")] {
 //! # use url::Url;
 //! # use object_store::{parse_url, parse_url_opts};
 //! # use object_store::aws::{AmazonS3, AmazonS3Builder};
@@ -537,18 +537,18 @@
 //!
 //! [`HttpConnector`]: client::HttpConnector
 
-#[cfg(feature = "aws")]
+#[cfg(feature = "aws-no-crypto")]
 pub mod aws;
-#[cfg(feature = "azure")]
+#[cfg(feature = "azure-no-crypto")]
 pub mod azure;
 #[cfg(feature = "tokio")]
 pub mod buffered;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod chunked;
 pub mod delimited;
-#[cfg(feature = "gcp")]
+#[cfg(feature = "gcp-no-crypto")]
 pub mod gcp;
-#[cfg(feature = "http")]
+#[cfg(feature = "http-no-crypto")]
 pub mod http;
 #[cfg(feature = "tokio")]
 pub mod limit;
@@ -558,24 +558,24 @@ pub mod memory;
 pub mod path;
 pub mod prefix;
 pub mod registry;
-#[cfg(feature = "cloud")]
+#[cfg(feature = "cloud-no-crypto")]
 pub mod signer;
 #[cfg(feature = "tokio")]
 pub mod throttle;
 
-#[cfg(feature = "cloud")]
+#[cfg(feature = "cloud-no-crypto")]
 pub mod client;
 
-#[cfg(feature = "cloud")]
+#[cfg(feature = "cloud-no-crypto")]
 pub use client::{
     ClientConfigKey, ClientOptions, CredentialProvider, StaticCredentialProvider,
     backoff::BackoffConfig, retry::RetryConfig,
 };
 
-#[cfg(all(feature = "cloud", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "cloud-no-crypto", not(target_arch = "wasm32")))]
 pub use client::Certificate;
 
-#[cfg(feature = "cloud")]
+#[cfg(feature = "cloud-no-crypto")]
 mod config;
 
 mod tags;
@@ -2173,7 +2173,7 @@ mod tests {
         store.list(Some(&path))
     }
 
-    #[cfg(any(feature = "azure", feature = "aws"))]
+    #[cfg(any(feature = "azure-no-crypto", feature = "aws-no-crypto"))]
     pub(crate) async fn signing<T>(integration: &T)
     where
         T: ObjectStore + signer::Signer,
@@ -2196,7 +2196,7 @@ mod tests {
         assert_eq!(data, loaded);
     }
 
-    #[cfg(any(feature = "aws", feature = "azure"))]
+    #[cfg(any(feature = "aws-no-crypto", feature = "azure-no-crypto"))]
     pub(crate) async fn tagging<F, Fut>(storage: Arc<dyn ObjectStore>, validate: bool, get_tags: F)
     where
         F: Fn(Path) -> Fut + Send + Sync,
@@ -2369,7 +2369,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "http")]
+    #[cfg(feature = "http-no-crypto")]
     fn test_reexported_types() {
         // Test HeaderMap
         let mut headers = HeaderMap::new();
