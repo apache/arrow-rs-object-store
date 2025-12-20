@@ -535,17 +535,17 @@
 //!
 //! [`HttpConnector`]: client::HttpConnector
 
-#[cfg(feature = "aws")]
+#[cfg(any(feature = "aws", feature = "aws-aws-lc"))]
 pub mod aws;
-#[cfg(feature = "azure")]
+#[cfg(any(feature = "azure", feature = "azure-aws-lc"))]
 pub mod azure;
 pub mod buffered;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod chunked;
 pub mod delimited;
-#[cfg(feature = "gcp")]
+#[cfg(any(feature = "gcp", feature = "gcp-aws-lc"))]
 pub mod gcp;
-#[cfg(feature = "http")]
+#[cfg(any(feature = "http", feature = "http-aws-lc"))]
 pub mod http;
 pub mod limit;
 #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
@@ -598,6 +598,21 @@ pub use util::{GetRange, OBJECT_STORE_COALESCE_DEFAULT, coalesce_ranges, collect
 
 // Re-export HTTP types used in public API
 pub use ::http::{Extensions, HeaderMap, HeaderValue};
+
+// Cryptographic backend abstraction module
+mod crypto_backend;
+
+#[cfg(any(
+    feature = "aws",
+    feature = "azure",
+    feature = "gcp",
+    feature = "http",
+    feature = "aws-aws-lc",
+    feature = "azure-aws-lc",
+    feature = "gcp-aws-lc",
+    feature = "http-aws-lc"
+))]
+pub(crate) use crypto_backend::crypto;
 
 use crate::path::Path;
 #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
