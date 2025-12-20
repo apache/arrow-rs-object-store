@@ -24,7 +24,7 @@ use crate::client::s3::{
     CompleteMultipartUpload, CompleteMultipartUploadResult, InitiateMultipartUploadResult,
     ListResponse,
 };
-use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpResponse};
+use crate::client::{CryptoProvider, GetOptionsExt, HttpClient, HttpError, HttpResponse};
 use crate::gcp::credential::CredentialExt;
 use crate::gcp::{GcpCredential, GcpCredentialProvider, GcpSigningCredentialProvider, STORE};
 use crate::list::{PaginatedListOptions, PaginatedListResult};
@@ -141,6 +141,8 @@ pub(crate) struct GoogleCloudStorageConfig {
     pub credentials: GcpCredentialProvider,
 
     pub signing_credentials: GcpSigningCredentialProvider,
+
+    pub crypto: Option<Arc<dyn CryptoProvider>>,
 
     pub bucket_name: String,
 

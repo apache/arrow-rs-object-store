@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Generic utilities for [`reqwest`] based [`ObjectStore`] implementations
+//! Generic utilities for network based [`ObjectStore`] implementations
 //!
 //! [`ObjectStore`]: crate::ObjectStore
 
@@ -30,28 +30,59 @@ pub(crate) mod mock_server;
 
 pub(crate) mod retry;
 
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+#[cfg(any(
+    feature = "aws-no-crypto",
+    feature = "gcp-no-crypto",
+    feature = "azure-no-crypto"
+))]
 pub(crate) mod pagination;
 
 pub(crate) mod get;
 
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+#[cfg(any(
+    feature = "aws-no-crypto",
+    feature = "gcp-no-crypto",
+    feature = "azure-no-crypto"
+))]
 pub(crate) mod list;
 
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+#[cfg(any(
+    feature = "aws-no-crypto",
+    feature = "gcp-no-crypto",
+    feature = "azure-no-crypto"
+))]
 pub(crate) mod token;
 
 pub(crate) mod header;
 
-#[cfg(any(feature = "aws", feature = "gcp"))]
+#[cfg(any(feature = "aws-no-crypto", feature = "gcp-no-crypto"))]
 pub(crate) mod s3;
 
 pub(crate) mod builder;
 mod http;
 
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
-pub(crate) mod parts;
 pub use http::*;
+
+#[cfg(any(
+    feature = "aws-no-crypto",
+    feature = "gcp-no-crypto",
+    feature = "azure-no-crypto"
+))]
+pub(crate) mod parts;
+
+#[cfg(any(
+    feature = "aws-no-crypto",
+    feature = "gcp-no-crypto",
+    feature = "azure-no-crypto"
+))]
+mod crypto;
+
+#[cfg(any(
+    feature = "aws-no-crypto",
+    feature = "gcp-no-crypto",
+    feature = "azure-no-crypto"
+))]
+pub use crypto::*;
 
 use async_trait::async_trait;
 use reqwest::header::{HeaderMap, HeaderValue};
@@ -241,7 +272,7 @@ impl FromStr for ClientConfigKey {
             "timeout" => Ok(Self::Timeout),
             "user_agent" => Ok(Self::UserAgent),
             _ => Err(super::Error::UnknownConfigurationKey {
-                store: "HTTP",
+                store: "http-no-crypto",
                 key: s.into(),
             }),
         }
@@ -723,7 +754,11 @@ impl ClientOptions {
     /// In particular:
     /// * Allows HTTP as metadata endpoints do not use TLS
     /// * Configures a low connection timeout to provide quick feedback if not present
-    #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+    #[cfg(any(
+        feature = "aws-no-crypto",
+        feature = "gcp-no-crypto",
+        feature = "azure-no-crypto"
+    ))]
     pub(crate) fn metadata_options(&self) -> Self {
         self.clone()
             .with_allow_http(true)
@@ -926,7 +961,11 @@ where
     }
 }
 
-#[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
+#[cfg(any(
+    feature = "aws-no-crypto",
+    feature = "azure-no-crypto",
+    feature = "gcp-no-crypto"
+))]
 mod cloud {
     use super::*;
     use crate::RetryConfig;
@@ -952,7 +991,7 @@ mod cloud {
         }
 
         /// Override the minimum remaining TTL for a cached token to be used
-        #[cfg(any(feature = "aws", feature = "gcp"))]
+        #[cfg(any(feature = "aws-no-crypto", feature = "gcp-no-crypto"))]
         pub(crate) fn with_min_ttl(mut self, min_ttl: Duration) -> Self {
             self.cache = self.cache.with_min_ttl(min_ttl);
             self
@@ -983,7 +1022,11 @@ mod cloud {
 }
 
 use crate::client::builder::HttpRequestBuilder;
-#[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
+#[cfg(any(
+    feature = "aws-no-crypto",
+    feature = "azure-no-crypto",
+    feature = "gcp-no-crypto"
+))]
 pub(crate) use cloud::*;
 
 #[cfg(test)]

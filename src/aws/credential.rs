@@ -19,8 +19,11 @@ use crate::aws::{AwsCredentialProvider, STORE, STRICT_ENCODE_SET, STRICT_PATH_EN
 use crate::client::builder::HttpRequestBuilder;
 use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
-use crate::client::{HttpClient, HttpError, HttpRequest, TokenProvider};
-use crate::util::{hex_digest, hex_encode, hmac_sha256};
+use crate::client::{
+    CryptoProvider, DigestAlgorithm, HttpClient, HttpError, HttpRequest, TokenProvider,
+    crypto_provider,
+};
+use crate::util::{hex_digest, hex_encode};
 use crate::{CredentialProvider, Result, RetryConfig};
 use async_trait::async_trait;
 use bytes::Buf;
@@ -91,13 +94,33 @@ impl AwsCredential {
     /// Signs a string
     ///
     /// <https://docs.aws.amazon.com/general/latest/gr/sigv4-calculate-signature.html>
-    fn sign(&self, to_sign: &str, date: DateTime<Utc>, region: &str, service: &str) -> String {
+    fn sign(
+        &self,
+        crypto: &dyn CryptoProvider,
+        to_sign: &str,
+        date: DateTime<Utc>,
+        region: &str,
+        service: &str,
+    ) -> Result<String> {
         let date_string = date.format("%Y%m%d").to_string();
-        let date_hmac = hmac_sha256(format!("AWS4{}", self.secret_key), date_string);
-        let region_hmac = hmac_sha256(date_hmac, region);
-        let service_hmac = hmac_sha256(region_hmac, service);
-        let signing_hmac = hmac_sha256(service_hmac, b"aws4_request");
-        hex_encode(hmac_sha256(signing_hmac, to_sign).as_ref())
+        let secret_key = format!("AWS4{}", self.secret_key);
+
+        let mut ctx = crypto.hmac(DigestAlgorithm::Sha256, secret_key.as_bytes())?;
+        ctx.update(date_string.as_bytes());
+
+        let mut ctx = crypto.hmac(DigestAlgorithm::Sha256, ctx.finish()?)?;
+        ctx.update(region.as_bytes());
+
+        let mut ctx = crypto.hmac(DigestAlgorithm::Sha256, ctx.finish()?)?;
+        ctx.update(service.as_bytes());
+
+        let mut ctx = crypto.hmac(DigestAlgorithm::Sha256, ctx.finish()?)?;
+        ctx.update(b"aws4_request");
+
+        let mut ctx = crypto.hmac(DigestAlgorithm::Sha256, ctx.finish()?)?;
+        ctx.update(to_sign.as_bytes());
+
+        Ok(hex_encode(ctx.finish()?))
     }
 }
 
@@ -108,6 +131,7 @@ impl AwsCredential {
 pub struct AwsAuthorizer<'a> {
     date: Option<DateTime<Utc>>,
     credential: &'a AwsCredential,
+    crypto: Option<&'a dyn CryptoProvider>,
     service: &'a str,
     region: &'a str,
     token_header: Option<HeaderName>,
@@ -129,6 +153,7 @@ impl<'a> AwsAuthorizer<'a> {
             credential,
             service,
             region,
+            crypto: None,
             date: None,
             sign_payload: true,
             token_header: None,
@@ -157,6 +182,24 @@ impl<'a> AwsAuthorizer<'a> {
         self
     }
 
+    /// Specify the crypto provider
+    pub fn with_crypto(mut self, crypto: &'a dyn CryptoProvider) -> Self {
+        self.crypto = Some(crypto);
+        self
+    }
+
+    /// Authorize `request` with an optional pre-calculated SHA256 digest by attaching
+    /// the relevant [AWS SigV4] headers
+    ///
+    /// # Panics
+    ///
+    /// Panics on cryptography error
+    ///
+    #[deprecated(note = "use AwsAuthorized::try_authorize")]
+    pub fn authorize(&self, request: &mut HttpRequest, pre_calculated_digest: Option<&[u8]>) {
+        self.try_authorize(request, pre_calculated_digest).unwrap()
+    }
+
     /// Authorize `request` with an optional pre-calculated SHA256 digest by attaching
     /// the relevant [AWS SigV4] headers
     ///
@@ -170,7 +213,12 @@ impl<'a> AwsAuthorizer<'a> {
     /// * Otherwise it is set to the hex encoded SHA256 of the request body
     ///
     /// [AWS SigV4]: https://docs.aws.amazon.com/IAM/latest/UserGuide/create-signed-request.html
-    pub fn authorize(&self, request: &mut HttpRequest, pre_calculated_digest: Option<&[u8]>) {
+    pub fn try_authorize(
+        &self,
+        request: &mut HttpRequest,
+        pre_calculated_digest: Option<&[u8]>,
+    ) -> Result<()> {
+        let crypto = crypto_provider(self.crypto)?;
         let url = Url::parse(&request.uri().to_string()).unwrap();
 
         if let Some(ref token) = self.credential.token {
@@ -195,7 +243,7 @@ impl<'a> AwsAuthorizer<'a> {
                 None => match request.body().is_empty() {
                     true => EMPTY_SHA256_HASH.to_string(),
                     false => match request.body().as_bytes() {
-                        Some(bytes) => hex_digest(bytes),
+                        Some(bytes) => hex_digest(crypto, bytes)?,
                         None => STREAMING_PAYLOAD.to_string(),
                     },
                 },
@@ -219,6 +267,7 @@ impl<'a> AwsAuthorizer<'a> {
         let scope = self.scope(date);
 
         let string_to_sign = self.string_to_sign(
+            crypto,
             date,
             &scope,
             request.method(),
@@ -226,12 +275,12 @@ impl<'a> AwsAuthorizer<'a> {
             &canonical_headers,
             &signed_headers,
             &digest,
-        );
+        )?;
 
         // sign the string
-        let signature = self
-            .credential
-            .sign(&string_to_sign, date, self.region, self.service);
+        let signature =
+            self.credential
+                .sign(crypto, &string_to_sign, date, self.region, self.service)?;
 
         // build the actual auth header
         let authorisation = format!(
@@ -243,9 +292,12 @@ impl<'a> AwsAuthorizer<'a> {
         request
             .headers_mut()
             .insert(&AUTHORIZATION, authorization_val);
+        Ok(())
     }
 
-    pub(crate) fn sign(&self, method: Method, url: &mut Url, expires_in: Duration) {
+    pub(crate) fn sign(&self, method: Method, url: &mut Url, expires_in: Duration) -> Result<()> {
+        let crypto = crypto_provider(self.crypto)?;
+
         let date = self.date.unwrap_or_else(Utc::now);
         let scope = self.scope(date);
 
@@ -285,6 +337,7 @@ impl<'a> AwsAuthorizer<'a> {
         let (signed_headers, canonical_headers) = canonicalize_headers(&headers);
 
         let string_to_sign = self.string_to_sign(
+            crypto,
             date,
             &scope,
             &method,
@@ -292,19 +345,21 @@ impl<'a> AwsAuthorizer<'a> {
             &canonical_headers,
             &signed_headers,
             digest,
-        );
+        )?;
 
-        let signature = self
-            .credential
-            .sign(&string_to_sign, date, self.region, self.service);
+        let signature =
+            self.credential
+                .sign(crypto, &string_to_sign, date, self.region, self.service)?;
 
         url.query_pairs_mut()
             .append_pair("X-Amz-Signature", &signature);
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
     fn string_to_sign(
         &self,
+        crypto: &dyn CryptoProvider,
         date: DateTime<Utc>,
         scope: &str,
         request_method: &Method,
@@ -312,7 +367,7 @@ impl<'a> AwsAuthorizer<'a> {
         canonical_headers: &str,
         signed_headers: &str,
         digest: &str,
-    ) -> String {
+    ) -> Result<String> {
         // Each path segment must be URI-encoded twice (except for Amazon S3 which only gets
         // URI-encoded once).
         // see https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html
@@ -334,15 +389,15 @@ impl<'a> AwsAuthorizer<'a> {
             digest
         );
 
-        let hashed_canonical_request = hex_digest(canonical_request.as_bytes());
+        let hashed_canonical_request = hex_digest(crypto, canonical_request.as_bytes())?;
 
-        format!(
+        Ok(format!(
             "{}\n{}\n{}\n{}",
             ALGORITHM,
             date.format("%Y%m%dT%H%M%SZ"),
             scope,
             hashed_canonical_request
-        )
+        ))
     }
 
     fn scope(&self, date: DateTime<Utc>) -> String {
@@ -355,13 +410,13 @@ impl<'a> AwsAuthorizer<'a> {
     }
 }
 
-pub(crate) trait CredentialExt {
+pub(crate) trait CredentialExt: Sized {
     /// Sign a request <https://docs.aws.amazon.com/general/latest/gr/sigv4_signing.html>
     fn with_aws_sigv4(
         self,
         authorizer: Option<AwsAuthorizer<'_>>,
         payload_sha256: Option<&[u8]>,
-    ) -> Self;
+    ) -> Result<Self>;
 }
 
 impl CredentialExt for HttpRequestBuilder {
@@ -369,16 +424,16 @@ impl CredentialExt for HttpRequestBuilder {
         self,
         authorizer: Option<AwsAuthorizer<'_>>,
         payload_sha256: Option<&[u8]>,
-    ) -> Self {
+    ) -> Result<Self> {
         match authorizer {
             Some(authorizer) => {
                 let (client, request) = self.into_parts();
                 let mut request = request.expect("request valid");
-                authorizer.authorize(&mut request, payload_sha256);
+                authorizer.try_authorize(&mut request, payload_sha256)?;
 
-                Self::from_parts(client, request)
+                Ok(Self::from_parts(client, request))
             }
-            None => self,
+            None => Ok(self),
         }
     }
 }
@@ -816,6 +871,7 @@ pub(crate) struct SessionProvider {
     pub endpoint: String,
     pub region: String,
     pub credentials: AwsCredentialProvider,
+    pub crypto: Option<Arc<dyn CryptoProvider>>,
 }
 
 #[async_trait]
@@ -827,12 +883,13 @@ impl TokenProvider for SessionProvider {
         client: &HttpClient,
         retry: &RetryConfig,
     ) -> Result<TemporaryToken<Arc<Self::Credential>>> {
+        let crypto = crypto_provider(self.crypto.as_deref())?;
         let creds = self.credentials.get_credential().await?;
-        let authorizer = AwsAuthorizer::new(&creds, "s3", &self.region);
+        let authorizer = AwsAuthorizer::new(&creds, "s3", &self.region).with_crypto(crypto);
 
         let bytes = client
             .get(format!("{}?session", self.endpoint))
-            .with_aws_sigv4(Some(authorizer), None)
+            .with_aws_sigv4(Some(authorizer), None)?
             .send_retry(retry)
             .await
             .map_err(|source| Error::CreateSessionRequest { source })?
@@ -899,6 +956,7 @@ mod tests {
 
         let signer = AwsAuthorizer {
             date: Some(date),
+            crypto: None,
             credential: &credential,
             service: "ec2",
             region: "us-east-1",
@@ -907,7 +965,7 @@ mod tests {
             request_payer: false,
         };
 
-        signer.authorize(&mut request, None);
+        signer.try_authorize(&mut request, None).unwrap();
         assert_eq!(
             request.headers().get(&AUTHORIZATION).unwrap(),
             "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=a3c787a7ed37f7fdfbfd2d7056a3d7c9d85e6d52a2bfbec73793c0be6e7862d4"
@@ -943,6 +1001,7 @@ mod tests {
 
         let signer = AwsAuthorizer {
             date: Some(date),
+            crypto: None,
             credential: &credential,
             service: "ec2",
             region: "us-east-1",
@@ -951,7 +1010,7 @@ mod tests {
             request_payer: true,
         };
 
-        signer.authorize(&mut request, None);
+        signer.try_authorize(&mut request, None).unwrap();
         assert_eq!(
             request.headers().get(&AUTHORIZATION).unwrap(),
             "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-request-payer, Signature=7030625a9e9b57ed2a40e63d749f4a4b7714b6e15004cab026152f870dd8565d"
@@ -987,6 +1046,7 @@ mod tests {
 
         let authorizer = AwsAuthorizer {
             date: Some(date),
+            crypto: None,
             credential: &credential,
             service: "ec2",
             region: "us-east-1",
@@ -995,7 +1055,7 @@ mod tests {
             request_payer: false,
         };
 
-        authorizer.authorize(&mut request, None);
+        authorizer.try_authorize(&mut request, None).unwrap();
         assert_eq!(
             request.headers().get(&AUTHORIZATION).unwrap(),
             "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=653c3d8ea261fd826207df58bc2bb69fbb5003e9eb3c0ef06e4a51f2a81d8699"
@@ -1017,6 +1077,7 @@ mod tests {
 
         let authorizer = AwsAuthorizer {
             date: Some(date),
+            crypto: None,
             credential: &credential,
             service: "s3",
             region: "us-east-1",
@@ -1026,7 +1087,9 @@ mod tests {
         };
 
         let mut url = Url::parse("https://examplebucket.s3.amazonaws.com/test.txt").unwrap();
-        authorizer.sign(Method::GET, &mut url, Duration::from_secs(86400));
+        authorizer
+            .sign(Method::GET, &mut url, Duration::from_secs(86400))
+            .unwrap();
 
         assert_eq!(
             url,
@@ -1058,6 +1121,7 @@ mod tests {
 
         let authorizer = AwsAuthorizer {
             date: Some(date),
+            crypto: None,
             credential: &credential,
             service: "s3",
             region: "us-east-1",
@@ -1067,7 +1131,9 @@ mod tests {
         };
 
         let mut url = Url::parse("https://examplebucket.s3.amazonaws.com/test.txt").unwrap();
-        authorizer.sign(Method::GET, &mut url, Duration::from_secs(86400));
+        authorizer
+            .sign(Method::GET, &mut url, Duration::from_secs(86400))
+            .unwrap();
 
         assert_eq!(
             url,
@@ -1113,6 +1179,7 @@ mod tests {
 
         let authorizer = AwsAuthorizer {
             date: Some(date),
+            crypto: None,
             credential: &credential,
             service: "s3",
             region: "us-east-1",
@@ -1121,7 +1188,7 @@ mod tests {
             request_payer: false,
         };
 
-        authorizer.authorize(&mut request, None);
+        authorizer.try_authorize(&mut request, None).unwrap();
         assert_eq!(
             request.headers().get(&AUTHORIZATION).unwrap(),
             "AWS4-HMAC-SHA256 Credential=H20ABqCkLZID4rLe/20220809/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=9ebf2f92872066c99ac94e573b4e1b80f4dbb8a32b1e8e23178318746e7d1b4d"

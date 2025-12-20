@@ -21,8 +21,10 @@ use crate::azure::STORE;
 use crate::client::builder::{HttpRequestBuilder, add_query_pairs};
 use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
-use crate::client::{CredentialProvider, HttpClient, HttpError, HttpRequest, TokenProvider};
-use crate::util::hmac_sha256;
+use crate::client::{
+    CredentialProvider, CryptoProvider, DigestAlgorithm, HttpClient, HttpError, HttpRequest,
+    TokenProvider, crypto_provider,
+};
 use async_trait::async_trait;
 use base64::Engine;
 use base64::prelude::{BASE64_STANDARD, BASE64_URL_SAFE_NO_PAD};
@@ -187,7 +189,12 @@ impl AzureSigner {
         }
     }
 
-    pub(crate) fn sign(&self, method: &Method, url: &mut Url) -> Result<()> {
+    pub(crate) fn sign(
+        &self,
+        crypto: &dyn CryptoProvider,
+        method: &Method,
+        url: &mut Url,
+    ) -> crate::Result<()> {
         let (str_to_sign, query_pairs) = match &self.delegation_key {
             Some(delegation_key) => string_to_sign_user_delegation_sas(
                 url,
@@ -199,7 +206,10 @@ impl AzureSigner {
             ),
             None => string_to_sign_service_sas(url, method, &self.account, &self.start, &self.end),
         };
-        let auth = hmac_sha256(&self.signing_key.0, str_to_sign);
+        let mut ctx = crypto.hmac(DigestAlgorithm::Sha256, &self.signing_key.0)?;
+        ctx.update(str_to_sign.as_bytes());
+        let auth = ctx.finish()?;
+
         url.query_pairs_mut().extend_pairs(query_pairs);
         url.query_pairs_mut()
             .append_pair("sig", BASE64_STANDARD.encode(auth).as_str());
@@ -223,6 +233,7 @@ fn add_date_and_version_headers(request: &mut HttpRequest) {
 #[derive(Debug)]
 pub struct AzureAuthorizer<'a> {
     credential: &'a AzureCredential,
+    crypto: Option<&'a dyn CryptoProvider>,
     account: &'a str,
 }
 
@@ -232,23 +243,43 @@ impl<'a> AzureAuthorizer<'a> {
         AzureAuthorizer {
             credential,
             account,
+            crypto: None,
         }
     }
 
+    /// Specify the crypto provider
+    pub fn with_crypto(mut self, crypto: &'a dyn CryptoProvider) -> Self {
+        self.crypto = Some(crypto);
+        self
+    }
+
     /// Authorize `request`
+    ///
+    /// # Panics
+    ///
+    /// Panics on cryptography error
+    #[deprecated(note = "use AzureAuthorizer::try_authorize")]
     pub fn authorize(&self, request: &mut HttpRequest) {
+        self.try_authorize(request).unwrap()
+    }
+
+    /// Authorize `request`
+    pub fn try_authorize(&self, request: &mut HttpRequest) -> crate::Result<()> {
+        let crypto = crypto_provider(self.crypto)?;
+
         add_date_and_version_headers(request);
 
         match self.credential {
             AzureCredential::AccessKey(key) => {
                 let url = Url::parse(&request.uri().to_string()).unwrap();
                 let signature = generate_authorization(
+                    crypto,
                     request.headers(),
                     &url,
                     request.method(),
                     self.account,
                     key,
-                );
+                )?;
 
                 // "signature" is a base 64 encoded string so it should never
                 // contain illegal characters
@@ -267,53 +298,65 @@ impl<'a> AzureAuthorizer<'a> {
                 add_query_pairs(request.uri_mut(), query_pairs);
             }
         }
+        Ok(())
     }
 }
 
-pub(crate) trait CredentialExt {
+pub(crate) trait CredentialExt: Sized {
     /// Apply authorization to requests against azure storage accounts
     /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-requests-to-azure-storage>
     fn with_azure_authorization(
         self,
+        crypto: Option<&dyn CryptoProvider>,
         credential: &Option<impl Deref<Target = AzureCredential>>,
         account: &str,
-    ) -> Self;
+    ) -> crate::Result<Self>;
 }
 
 impl CredentialExt for HttpRequestBuilder {
     fn with_azure_authorization(
         self,
+        crypto: Option<&dyn CryptoProvider>,
         credential: &Option<impl Deref<Target = AzureCredential>>,
         account: &str,
-    ) -> Self {
+    ) -> crate::Result<Self> {
         let (client, request) = self.into_parts();
         let mut request = request.expect("request valid");
 
         match credential.as_deref() {
             Some(credential) => {
-                AzureAuthorizer::new(credential, account).authorize(&mut request);
+                AzureAuthorizer::new(credential, account)
+                    .with_crypto(crypto_provider(crypto)?)
+                    .try_authorize(&mut request)?;
             }
             None => {
                 add_date_and_version_headers(&mut request);
             }
         }
 
-        Self::from_parts(client, request)
+        Ok(Self::from_parts(client, request))
     }
 }
 
 /// Generate signed key for authorization via access keys
 /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key>
 fn generate_authorization(
+    crypto: &dyn CryptoProvider,
     h: &HeaderMap,
     u: &Url,
     method: &Method,
     account: &str,
     key: &AzureAccessKey,
-) -> String {
+) -> crate::Result<String> {
     let str_to_sign = string_to_sign(h, u, method, account);
-    let auth = hmac_sha256(&key.0, str_to_sign);
-    format!("SharedKey {}:{}", account, BASE64_STANDARD.encode(auth))
+    let mut ctx = crypto.hmac(DigestAlgorithm::Sha256, &key.0)?;
+    ctx.update(str_to_sign.as_bytes());
+    let auth = ctx.finish()?;
+    Ok(format!(
+        "SharedKey {}:{}",
+        account,
+        BASE64_STANDARD.encode(auth)
+    ))
 }
 
 fn add_if_exists<'a>(h: &'a HeaderMap, key: &HeaderName) -> &'a str {
