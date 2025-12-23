@@ -1202,7 +1202,7 @@ as_ref_impl!(Box<T>);
 
 /// Extension trait for [`ObjectStore`] with convenience functions.
 ///
-/// See the [module-level documentation](crate) for a high leve overview and
+/// See the [module-level documentation](crate) for a high level overview and
 /// examples. See "contract" section within the [`ObjectStore`] documentation
 /// for more reasoning.
 ///
