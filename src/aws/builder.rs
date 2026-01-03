@@ -259,6 +259,7 @@ pub enum AmazonS3ConfigKey {
     /// Supported keys:
     /// - `aws_endpoint`
     /// - `aws_endpoint_url`
+    /// - `aws_endpoint_url_s3`
     /// - `endpoint`
     /// - `endpoint_url`
     Endpoint,
@@ -469,7 +470,9 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_default_region" | "default_region" => Ok(Self::DefaultRegion),
             "aws_region" | "region" => Ok(Self::Region),
             "aws_bucket" | "aws_bucket_name" | "bucket_name" | "bucket" => Ok(Self::Bucket),
-            "aws_endpoint_url" | "aws_endpoint" | "endpoint_url" | "endpoint" => Ok(Self::Endpoint),
+            "aws_endpoint_url_s3" | "aws_endpoint_url" | "aws_endpoint" | "endpoint_url" | "endpoint" => {
+                Ok(Self::Endpoint)
+            }
             "aws_session_token" | "aws_token" | "session_token" | "token" => Ok(Self::Token),
             "aws_virtual_hosted_style_request" | "virtual_hosted_style_request" => {
                 Ok(Self::VirtualHostedStyleRequest)
@@ -538,6 +541,7 @@ impl AmazonS3Builder {
     /// * `AWS_SECRET_ACCESS_KEY` -> secret_access_key
     /// * `AWS_DEFAULT_REGION` -> region
     /// * `AWS_ENDPOINT` -> endpoint
+    /// * `AWS_ENDPOINT_URL_S3` -> endpoint (takes precedence over `AWS_ENDPOINT` and `AWS_ENDPOINT_URL`)
     /// * `AWS_SESSION_TOKEN` -> token
     /// * `AWS_WEB_IDENTITY_TOKEN_FILE` -> path to file containing web identity token for AssumeRoleWithWebIdentity
     /// * `AWS_ROLE_ARN` -> ARN of the role to assume when using web identity token
@@ -559,13 +563,22 @@ impl AmazonS3Builder {
     pub fn from_env() -> Self {
         let mut builder: Self = Default::default();
 
-        for (os_key, os_value) in std::env::vars_os() {
-            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
-                if key.starts_with("AWS_") {
-                    if let Ok(config_key) = key.to_ascii_lowercase().parse() {
-                        builder = builder.with_config(config_key, value);
-                    }
-                }
+        // Collect and sort environment variables to ensure deterministic precedence.
+        // Service-specific endpoint URLs (e.g., AWS_ENDPOINT_URL_S3) should override
+        // generic ones (e.g., AWS_ENDPOINT_URL). Sorting alphabetically achieves this
+        // since "AWS_ENDPOINT_URL_S3" > "AWS_ENDPOINT_URL", so it will be processed last.
+        let mut vars: Vec<_> = std::env::vars_os()
+            .filter_map(|(k, v)| {
+                let key = k.to_str()?;
+                let value = v.to_str()?;
+                key.starts_with("AWS_").then(|| (key.to_string(), value.to_string()))
+            })
+            .collect();
+        vars.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (key, value) in vars {
+            if let Ok(config_key) = key.to_ascii_lowercase().parse() {
+                builder = builder.with_config(config_key, value);
             }
         }
 
@@ -1452,6 +1465,19 @@ mod tests {
             Checksum::SHA256
         );
         assert!(builder.unsigned_payload.get().unwrap());
+    }
+
+    #[test]
+    fn s3_test_endpoint_url_s3_config() {
+        // Verify aws_endpoint_url_s3 parses to Endpoint config key
+        let key: AmazonS3ConfigKey = "aws_endpoint_url_s3".parse().unwrap();
+        assert!(matches!(key, AmazonS3ConfigKey::Endpoint));
+
+        // Verify service-specific endpoint takes precedence when applied after generic
+        let builder = AmazonS3Builder::new()
+            .with_config(AmazonS3ConfigKey::Endpoint, "http://generic-endpoint")
+            .with_config("aws_endpoint_url_s3".parse().unwrap(), "http://s3-specific-endpoint");
+        assert_eq!(builder.endpoint.unwrap(), "http://s3-specific-endpoint");
     }
 
     #[test]
