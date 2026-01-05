@@ -848,6 +848,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[expect(
+        deprecated,
+        reason = "SO_LINGER w/ zero timeout doesn't block, see https://github.com/tokio-rs/tokio/issues/7751#issuecomment-3709831265"
+    )]
     async fn test_connection_reset_is_retried() {
         let retry = RetryConfig {
             backoff: Default::default(),
