@@ -444,10 +444,10 @@ impl ObjectStore for LocalFileSystem {
         let ranges = ranges.to_vec();
         maybe_spawn_blocking(move || {
             // Vectored IO might be faster
-            let (mut file, _) = open_file(&path)?;
+            let (mut file, metadata) = open_file(&path)?;
             ranges
                 .into_iter()
-                .map(|r| read_range(&mut file, &path, r))
+                .map(|r| read_range(&mut file, metadata.len(), &path, r))
                 .collect()
         })
         .await
@@ -968,15 +968,14 @@ pub(crate) fn chunked_stream(
     .boxed()
 }
 
-pub(crate) fn read_range(file: &mut File, path: &PathBuf, range: Range<u64>) -> Result<Bytes> {
-    let file_metadata = file.metadata().map_err(|e| Error::Metadata {
-        source: e.into(),
-        path: path.to_string_lossy().to_string(),
-    })?;
-
+pub(crate) fn read_range(
+    file: &mut File,
+    file_len: u64,
+    path: &PathBuf,
+    range: Range<u64>,
+) -> Result<Bytes> {
     // If none of the range is satisfiable we should error, e.g. if the start offset is beyond the
     // extents of the file
-    let file_len = file_metadata.len();
     if range.start >= file_len {
         return Err(Error::InvalidRange {
             source: InvalidGetRange::StartTooLarge {
