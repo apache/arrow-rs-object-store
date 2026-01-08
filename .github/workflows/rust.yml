@@ -56,9 +56,18 @@ jobs:
         # Necessary because tokio 1.30.0 updates MSRV to 1.63
         # and url 2.5.1, updates to 1.67
         run: |
+          cargo update -p parking_lot --precise 0.12.4
+          cargo update -p parking_lot_core --precise 0.9.11
+          cargo update -p lock_api --precise 0.4.13
+          cargo update -p quote --precise 1.0.41
+          cargo update -p proc-macro2 --precise 1.0.103
+          cargo update -p itoa --precise 1.0.15
+          cargo update -p syn --precise 2.0.106
+          cargo update -p tokio-util --precise 0.7.17
           cargo update -p tokio --precise 1.29.1
           cargo update -p url --precise 2.5.0
           cargo update -p once_cell --precise 1.20.3
+          cargo update -p tracing --precise 0.1.41
           cargo update -p tracing-core --precise 0.1.33
           cargo update -p tracing-attributes --precise 0.1.28
       - name: Check

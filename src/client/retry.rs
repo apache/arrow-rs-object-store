@@ -844,6 +844,8 @@ mod tests {
             // Reset the connection on the first n-1 attempts
             for _ in 0..retry.max_retries {
                 let (stream, _) = listener.accept().await.unwrap();
+                // TcpStream::set_linger is deprecated but this use case is valid to reset the stream
+                #[allow(deprecated)]
                 stream.set_linger(Some(Duration::from_secs(0))).unwrap();
             }
             // Succeed on the last attempt
