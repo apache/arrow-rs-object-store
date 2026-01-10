@@ -470,9 +470,11 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_default_region" | "default_region" => Ok(Self::DefaultRegion),
             "aws_region" | "region" => Ok(Self::Region),
             "aws_bucket" | "aws_bucket_name" | "bucket_name" | "bucket" => Ok(Self::Bucket),
-            "aws_endpoint_url_s3" | "aws_endpoint_url" | "aws_endpoint" | "endpoint_url" | "endpoint" => {
-                Ok(Self::Endpoint)
-            }
+            "aws_endpoint_url_s3"
+            | "aws_endpoint_url"
+            | "aws_endpoint"
+            | "endpoint_url"
+            | "endpoint" => Ok(Self::Endpoint),
             "aws_session_token" | "aws_token" | "session_token" | "token" => Ok(Self::Token),
             "aws_virtual_hosted_style_request" | "virtual_hosted_style_request" => {
                 Ok(Self::VirtualHostedStyleRequest)
@@ -571,7 +573,8 @@ impl AmazonS3Builder {
             .filter_map(|(k, v)| {
                 let key = k.to_str()?;
                 let value = v.to_str()?;
-                key.starts_with("AWS_").then(|| (key.to_string(), value.to_string()))
+                key.starts_with("AWS_")
+                    .then(|| (key.to_string(), value.to_string()))
             })
             .collect();
         vars.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1476,7 +1479,10 @@ mod tests {
         // Verify service-specific endpoint takes precedence when applied after generic
         let builder = AmazonS3Builder::new()
             .with_config(AmazonS3ConfigKey::Endpoint, "http://generic-endpoint")
-            .with_config("aws_endpoint_url_s3".parse().unwrap(), "http://s3-specific-endpoint");
+            .with_config(
+                "aws_endpoint_url_s3".parse().unwrap(),
+                "http://s3-specific-endpoint",
+            );
         assert_eq!(builder.endpoint.unwrap(), "http://s3-specific-endpoint");
     }
 
