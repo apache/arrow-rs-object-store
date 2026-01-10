@@ -455,7 +455,7 @@ async fn parse_blob_batch_delete_body(
 
         // Parse part response headers
         // Documentation mentions 5 headers and states that other standard HTTP headers
-        // may be provided, in order to not incurr in more complexity to support an arbitrary
+        // may be provided, in order to not incur in more complexity to support an arbitrary
         // amount of headers we chose a conservative amount and error otherwise
         // https://learn.microsoft.com/en-us/rest/api/storageservices/delete-blob?tabs=microsoft-entra-id#response-headers
         let mut headers = [httparse::EMPTY_HEADER; 48];
@@ -794,7 +794,7 @@ impl AzureClient {
     /// Creat an AzureSigner for generating SAS tokens (pre-signed urls).
     ///
     /// Depending on the type of credential, this will either use the account key or a user delegation key.
-    /// Since delegation keys are acquired ad-hoc, the signer aloows for signing multiple urls with the same key.
+    /// Since delegation keys are acquired ad-hoc, the signer allows for signing multiple urls with the same key.
     pub(crate) async fn signer(&self, expires_in: Duration) -> Result<AzureSigner> {
         let credential = self.get_credential().await?;
         let signed_start = chrono::Utc::now();
