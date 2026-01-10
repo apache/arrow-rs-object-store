@@ -54,7 +54,7 @@ hyper = { version = "1.2", default-features = false, optional = true }
 md-5 = { version = "0.10.6", default-features = false, optional = true }
 quick-xml = { version = "0.38.0", features = ["serialize", "overlapped-lists"], optional = true }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"], optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "http2"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["http2", "rustls-tls-no-provider"], optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 rustls-pki-types = { version = "1.9", default-features = false, features = ["std"], optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
@@ -71,12 +71,24 @@ wasm-bindgen-futures = "0.4.18"
 
 [features]
 default = ["fs"]
-cloud = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/stream", "chrono/serde", "base64", "rand", "ring", "http-body-util", "form_urlencoded", "serde_urlencoded"]
-azure = ["cloud", "httparse"]
+cloud-no-crypto = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/stream", "chrono/serde", "base64", "rand","http-body-util", "form_urlencoded", "serde_urlencoded"]
+cloud = ["ring", "rustls-pki-types", "cloud-no-crypto", "reqwest?/rustls-tls-native-roots"]
+
+
+azure-no-crypto = ["cloud-no-crypto", "httparse"]
+azure = ["cloud", "azure-no-crypto"]
+
 fs = ["walkdir"]
-gcp = ["cloud", "rustls-pki-types"]
-aws = ["cloud", "md-5"]
-http = ["cloud"]
+
+gcp-no-crypto = ["cloud-no-crypto"]
+gcp = ["cloud", "gcp-no-crypto"]
+
+aws-no-crypto = ["cloud-no-crypto", "md-5"]
+aws = ["cloud", "aws-no-crypto"]
+
+http-no-crypto = ["cloud-no-crypto"]
+http = ["cloud", "http-no-crypto"]
+
 tls-webpki-roots = ["reqwest?/rustls-tls-webpki-roots"]
 integration = ["rand"]
 

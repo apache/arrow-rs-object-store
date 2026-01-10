@@ -19,7 +19,9 @@ use super::client::GoogleCloudStorageClient;
 use crate::client::builder::HttpRequestBuilder;
 use crate::client::retry::RetryExt;
 use crate::client::token::TemporaryToken;
-use crate::client::{HttpClient, HttpError, TokenProvider};
+use crate::client::{
+    CryptoProvider, HttpClient, HttpError, Signer, SigningAlgorithm, TokenProvider,
+};
 use crate::gcp::{GcpSigningCredentialProvider, STORE};
 use crate::util::{STRICT_ENCODE_SET, hex_digest, hex_encode};
 use crate::{RetryConfig, StaticCredentialProvider};
@@ -31,7 +33,6 @@ use futures::TryFutureExt;
 use http::{HeaderMap, Method};
 use itertools::Itertools;
 use percent_encoding::utf8_percent_encode;
-use ring::signature::RsaKeyPair;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::env;
@@ -54,7 +55,7 @@ const DEFAULT_METADATA_HOST: &str = "metadata.google.internal";
 const DEFAULT_METADATA_IP: &str = "169.254.169.254";
 
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
+pub(super) enum Error {
     #[error("Unable to open service account file from {}: {}", path.display(), source)]
     OpenCredentials {
         source: std::io::Error,
@@ -64,23 +65,8 @@ pub enum Error {
     #[error("Unable to decode service account file: {}", source)]
     DecodeCredentials { source: serde_json::Error },
 
-    #[error("No RSA key found in pem file")]
-    MissingKey,
-
-    #[error("Invalid RSA key: {}", source)]
-    InvalidKey {
-        #[from]
-        source: ring::error::KeyRejected,
-    },
-
-    #[error("Error signing: {}", source)]
-    Sign { source: ring::error::Unspecified },
-
     #[error("Error encoding jwt payload: {}", source)]
     Encode { source: serde_json::Error },
-
-    #[error("Unsupported key encoding: {}", encoding)]
-    UnsupportedKey { encoding: String },
 
     #[error("Error performing token request: {}", source)]
     TokenRequest {
@@ -89,11 +75,6 @@ pub enum Error {
 
     #[error("Error getting token response body: {}", source)]
     TokenResponseBody { source: HttpError },
-
-    #[error("Error reading pem file: {}", source)]
-    ReadPem {
-        source: rustls_pki_types::pem::Error,
-    },
 }
 
 impl From<Error> for crate::Error {
@@ -123,44 +104,43 @@ pub struct GcpSigningCredential {
 }
 
 /// A private RSA key for a service account
-#[derive(Debug)]
-pub struct ServiceAccountKey(RsaKeyPair);
+pub struct ServiceAccountKey(Box<dyn Signer>);
+
+impl std::fmt::Debug for ServiceAccountKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ServiceAccountKey").finish_non_exhaustive()
+    }
+}
 
 impl ServiceAccountKey {
+    /// Creates a [`ServiceAccountKey`] from the provided [`Signer`]
+    pub fn new(signer: Box<dyn Signer>) -> Self {
+        Self(signer)
+    }
+
     /// Parses a pem-encoded RSA key
-    pub fn from_pem(encoded: &[u8]) -> Result<Self> {
-        use rustls_pki_types::PrivateKeyDer;
-        use rustls_pki_types::pem::PemObject;
-
-        match PrivateKeyDer::from_pem_slice(encoded) {
-            Ok(PrivateKeyDer::Pkcs8(key)) => Self::from_pkcs8(key.secret_pkcs8_der()),
-            Ok(PrivateKeyDer::Pkcs1(key)) => Self::from_der(key.secret_pkcs1_der()),
-            Ok(_) => Err(Error::MissingKey),
-            Err(source) => Err(Error::ReadPem { source }),
-        }
+    #[cfg(feature = "ring")]
+    pub fn from_pem(encoded: &[u8]) -> crate::Result<Self> {
+        let key = crate::client::ring::RsaKeyPair::from_pem(encoded)?;
+        Ok(Self::new(Box::new(key)))
     }
 
     /// Parses an unencrypted PKCS#8-encoded RSA private key.
-    pub fn from_pkcs8(key: &[u8]) -> Result<Self> {
-        Ok(Self(RsaKeyPair::from_pkcs8(key)?))
+    #[cfg(feature = "ring")]
+    pub fn from_pkcs8(key: &[u8]) -> crate::Result<Self> {
+        let key = crate::client::ring::RsaKeyPair::from_pkcs8(key)?;
+        Ok(Self::new(Box::new(key)))
     }
 
     /// Parses an unencrypted PKCS#8-encoded RSA private key.
-    pub fn from_der(key: &[u8]) -> Result<Self> {
-        Ok(Self(RsaKeyPair::from_der(key)?))
+    #[cfg(feature = "ring")]
+    pub fn from_der(key: &[u8]) -> crate::Result<Self> {
+        let key = crate::client::ring::RsaKeyPair::from_der(key)?;
+        Ok(Self::new(Box::new(key)))
     }
 
-    fn sign(&self, string_to_sign: &str) -> Result<String> {
-        let mut signature = vec![0; self.0.public().modulus_len()];
-        self.0
-            .sign(
-                &ring::signature::RSA_PKCS1_SHA256,
-                &ring::rand::SystemRandom::new(),
-                string_to_sign.as_bytes(),
-                &mut signature,
-            )
-            .map_err(|source| Error::Sign { source })?;
-
+    fn sign(&self, string_to_sign: &[u8]) -> crate::Result<String> {
+        let signature = self.0.sign(string_to_sign)?;
         Ok(hex_encode(&signature))
     }
 }
@@ -287,17 +267,7 @@ impl TokenProvider for SelfSignedJwt {
 
         let claim_str = b64_encode_obj(&claims)?;
         let message = [jwt_header.as_ref(), claim_str.as_ref()].join(".");
-        let mut sig_bytes = vec![0; self.private_key.0.public().modulus_len()];
-        self.private_key
-            .0
-            .sign(
-                &ring::signature::RSA_PKCS1_SHA256,
-                &ring::rand::SystemRandom::new(),
-                message.as_bytes(),
-                &mut sig_bytes,
-            )
-            .map_err(|source| Error::Sign { source })?;
-
+        let sig_bytes = self.private_key.sign(message.as_bytes())?;
         let signature = BASE64_URL_SAFE_NO_PAD.encode(sig_bytes);
         let bearer = [message, signature].join(".");
 
@@ -360,20 +330,28 @@ impl ServiceAccountCredentials {
     /// # References
     /// - <https://stackoverflow.com/questions/63222450/service-account-authorization-without-oauth-can-we-get-file-from-google-cloud/71834557#71834557>
     /// - <https://www.codejam.info/2022/05/google-cloud-service-account-authorization-without-oauth.html>
-    pub(crate) fn token_provider(self) -> crate::Result<SelfSignedJwt> {
+    pub(crate) fn token_provider(
+        self,
+        crypto: &dyn CryptoProvider,
+    ) -> crate::Result<SelfSignedJwt> {
+        let key = crypto.sign(SigningAlgorithm::RS256, self.private_key.as_bytes())?;
         Ok(SelfSignedJwt::new(
             self.private_key_id,
             self.client_email,
-            ServiceAccountKey::from_pem(self.private_key.as_bytes())?,
+            ServiceAccountKey::new(key),
             DEFAULT_SCOPE.to_string(),
         )?)
     }
 
-    pub(crate) fn signing_credentials(self) -> crate::Result<GcpSigningCredentialProvider> {
+    pub(crate) fn signing_credentials(
+        self,
+        crypto: &dyn CryptoProvider,
+    ) -> crate::Result<GcpSigningCredentialProvider> {
+        let key = crypto.sign(SigningAlgorithm::RS256, self.private_key.as_bytes())?;
         Ok(Arc::new(StaticCredentialProvider::new(
             GcpSigningCredential {
                 email: self.client_email,
-                private_key: Some(ServiceAccountKey::from_pem(self.private_key.as_bytes())?),
+                private_key: Some(ServiceAccountKey::new(key)),
             },
         )))
     }
@@ -763,6 +741,7 @@ impl GCSAuthorizer {
 
     pub(crate) async fn sign(
         &self,
+        crypto: &dyn CryptoProvider,
         method: Method,
         url: &mut Url,
         expires_in: Duration,
@@ -785,9 +764,9 @@ impl GCSAuthorizer {
             .append_pair("X-Goog-Expires", &expires_in.as_secs().to_string())
             .append_pair("X-Goog-SignedHeaders", &signed_headers);
 
-        let string_to_sign = self.string_to_sign(date, &method, url, &headers);
+        let string_to_sign = self.string_to_sign(crypto, date, &method, url, &headers)?;
         let signature = match &self.credential.private_key {
-            Some(key) => key.sign(&string_to_sign)?,
+            Some(key) => key.sign(string_to_sign.as_bytes())?,
             None => client.sign_blob(&string_to_sign, email).await?,
         };
 
@@ -885,22 +864,23 @@ impl GCSAuthorizer {
     /// <https://cloud.google.com/storage/docs/authentication/signatures#string-to-sign>
     pub(crate) fn string_to_sign(
         &self,
+        crypto: &dyn CryptoProvider,
         date: DateTime<Utc>,
         request_method: &Method,
         url: &Url,
         headers: &HeaderMap,
-    ) -> String {
+    ) -> crate::Result<String> {
         let canonical_request = Self::canonicalize_request(url, request_method, headers);
-        let hashed_canonical_req = hex_digest(canonical_request.as_bytes());
+        let hashed_canonical_req = hex_digest(crypto, canonical_request.as_bytes())?;
         let scope = self.scope(date);
 
-        format!(
+        Ok(format!(
             "{}\n{}\n{}\n{}",
             "GOOG4-RSA-SHA256",
             date.format("%Y%m%dT%H%M%SZ"),
             scope,
             hashed_canonical_req
-        )
+        ))
     }
 }
 
