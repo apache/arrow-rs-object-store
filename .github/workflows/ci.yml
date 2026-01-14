@@ -39,6 +39,10 @@ jobs:
       - uses: actions/checkout@v6
       - name: Setup Clippy
         run: rustup component add clippy
+      - name: Check no crypto crates
+        run:
+          cargo tree --features gcp-no-crypto,aws-no-crypto,azure-no-crypto,http-no-crypto \
+          | grep -qE '\b(ring|openssl)\b' && { echo "❌ disallowed crate found"; exit 1; } || echo "✅ no disallowed crates"
       # Run different tests for the library on its own as well as
       # all targets to ensure that it still works in the absence of
       # features that might be enabled by dev-dependencies of other
@@ -49,12 +53,20 @@ jobs:
         run: cargo clippy --no-default-features -- -D warnings
       - name: Run clippy with fs features
         run: cargo clippy --no-default-features --features fs -- -D warnings
+      - name: Run clippy with aws-no-crypto feature
+        run: cargo clippy --features aws-no-crypto -- -D warnings
       - name: Run clippy with aws feature
         run: cargo clippy --features aws -- -D warnings
+      - name: Run clippy with gcp-no-crypto feature
+        run: cargo clippy --features gcp-no-crypto -- -D warnings
       - name: Run clippy with gcp feature
         run: cargo clippy --features gcp -- -D warnings
+      - name: Run clippy with azure-no-crypto feature
+        run: cargo clippy --features azure-no-crypto -- -D warnings
       - name: Run clippy with azure feature
         run: cargo clippy --features azure -- -D warnings
+      - name: Run clippy with http-no-crypto feature
+        run: cargo clippy --features http-no-crypto -- -D warnings
       - name: Run clippy with http feature
         run: cargo clippy --features http -- -D warnings
       - name: Run clippy with integration feature
