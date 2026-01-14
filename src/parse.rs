@@ -52,7 +52,7 @@ impl From<Error> for super::Error {
 /// - `memory:///` -> [`InMemory`]
 /// - `s3://bucket/path` -> [`AmazonS3`](crate::aws::AmazonS3) (also supports `s3a`)
 /// - `gs://bucket/path` -> [`GoogleCloudStorage`](crate::gcp::GoogleCloudStorage)
-/// - `az://account/container/path` -> [`MicrosoftAzure`](crate::azure::MicrosoftAzure) (also supports `adl`, `azure`, `abfs`, `abfss`)
+/// - `[az|abfs[s]]://container[@<account>.<host>]/path` -> [`MicrosoftAzure`](crate::azure::MicrosoftAzure)
 /// - `http://mydomain/path` -> [`HttpStore`](crate::http::HttpStore)
 /// - `https://mydomain/path` -> [`HttpStore`](crate::http::HttpStore)
 ///
@@ -110,8 +110,9 @@ impl ObjectStoreScheme {
             ("memory", None) => (Self::Memory, url.path()),
             ("s3" | "s3a", Some(_)) => (Self::AmazonS3, url.path()),
             ("gs", Some(_)) => (Self::GoogleCloudStorage, url.path()),
-            ("az", Some(_)) => (Self::MicrosoftAzure, strip_bucket().unwrap_or_default()),
-            ("adl" | "azure" | "abfs" | "abfss", Some(_)) => (Self::MicrosoftAzure, url.path()),
+            ("az" | "adl" | "azure" | "abfs" | "abfss", Some(_)) => {
+                (Self::MicrosoftAzure, url.path())
+            }
             ("http", Some(_)) => (Self::Http, url.path()),
             ("https", Some(host)) => {
                 if host.ends_with("dfs.core.windows.net")
@@ -299,11 +300,35 @@ mod tests {
                 (ObjectStoreScheme::MicrosoftAzure, "path"),
             ),
             (
-                "az://account/container",
-                (ObjectStoreScheme::MicrosoftAzure, ""),
+                "az://container/path",
+                (ObjectStoreScheme::MicrosoftAzure, "path"),
             ),
             (
-                "az://account/container/path",
+                "az://container@account/path",
+                (ObjectStoreScheme::MicrosoftAzure, "path"),
+            ),
+            (
+                "abfs://container/path",
+                (ObjectStoreScheme::MicrosoftAzure, "path"),
+            ),
+            (
+                "abfs://container@account/path",
+                (ObjectStoreScheme::MicrosoftAzure, "path"),
+            ),
+            (
+                "abfss://container/path",
+                (ObjectStoreScheme::MicrosoftAzure, "path"),
+            ),
+            (
+                "abfss://container@account/path",
+                (ObjectStoreScheme::MicrosoftAzure, "path"),
+            ),
+            (
+                "adl://container/path",
+                (ObjectStoreScheme::MicrosoftAzure, "path"),
+            ),
+            (
+                "adl://container@account/path",
                 (ObjectStoreScheme::MicrosoftAzure, "path"),
             ),
             (
