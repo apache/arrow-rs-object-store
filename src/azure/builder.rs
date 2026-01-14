@@ -670,13 +670,13 @@ impl MicrosoftAzureBuilder {
                             self.account_name = Some(validate(a)?);
                             self.container_name = Some(validate(parsed.username())?);
                         }
-                        Some((a, "dfs.fabric.microsoft.com")) | Some((a, "blob.fabric.microsoft.net")) => {
+                        Some((a, "dfs.fabric.microsoft.com"))
+                        | Some((a, "blob.fabric.microsoft.net")) => {
                             self.account_name = Some(validate(a)?);
                             self.container_name = Some(validate(parsed.username())?);
                             self.use_fabric_endpoint = true.into();
                         }
-                        _ => return Err(Error::UrlNotRecognised { url: url.into() }.into())
-
+                        _ => return Err(Error::UrlNotRecognised { url: url.into() }.into()),
                     }
                 }
             }
