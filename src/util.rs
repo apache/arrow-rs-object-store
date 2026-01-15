@@ -43,9 +43,12 @@ where
 }
 
 #[cfg(any(feature = "aws", feature = "azure"))]
-pub(crate) fn hmac_sha256(secret: impl AsRef<[u8]>, bytes: impl AsRef<[u8]>) -> ring::hmac::Tag {
-    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_ref());
-    ring::hmac::sign(&key, bytes.as_ref())
+pub(crate) fn hmac_sha256(
+    secret: impl AsRef<[u8]>,
+    bytes: impl AsRef<[u8]>,
+) -> aws_lc_rs::hmac::Tag {
+    let key = aws_lc_rs::hmac::Key::new(aws_lc_rs::hmac::HMAC_SHA256, secret.as_ref());
+    aws_lc_rs::hmac::sign(&key, bytes.as_ref())
 }
 
 /// Collect a stream into [`Bytes`] avoiding copying in the event of a single chunk
@@ -310,7 +313,7 @@ pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet = percent_encodin
 /// Computes the SHA256 digest of `body` returned as a hex encoded string
 #[cfg(any(feature = "aws", feature = "gcp"))]
 pub(crate) fn hex_digest(bytes: &[u8]) -> String {
-    let digest = ring::digest::digest(&ring::digest::SHA256, bytes);
+    let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, bytes);
     hex_encode(digest.as_ref())
 }
 

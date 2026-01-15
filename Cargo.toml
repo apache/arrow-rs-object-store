@@ -46,6 +46,7 @@ url = "2.2"
 walkdir = { version = "2", optional = true }
 
 # Cloud storage support
+aws-lc-rs = { version = "1", default-features = false, features = ["alloc"], optional = true }
 base64 = { version = "0.22", default-features = false, features = ["std"], optional = true }
 form_urlencoded = { version = "1.2", optional = true }
 http-body-util = { version = "0.1.2", optional = true }
@@ -55,7 +56,6 @@ md-5 = { version = "0.10.6", default-features = false, optional = true }
 quick-xml = { version = "0.38.0", features = ["serialize", "overlapped-lists"], optional = true }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"], optional = true }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2"], optional = true }
-ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 rustls-pki-types = { version = "1.9", default-features = false, features = ["std"], optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
@@ -72,7 +72,7 @@ wasm-bindgen-futures = "0.4.18"
 
 [features]
 default = ["fs"]
-cloud = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/stream", "chrono/serde", "base64", "rand", "ring", "http-body-util", "form_urlencoded", "serde_urlencoded"]
+cloud = ["aws-lc-rs", "serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/stream", "chrono/serde", "base64", "rand", "http-body-util", "form_urlencoded", "serde_urlencoded"]
 azure = ["cloud", "httparse"]
 fs = ["walkdir"]
 gcp = ["cloud", "rustls-pki-types"]

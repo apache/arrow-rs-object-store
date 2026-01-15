@@ -52,8 +52,8 @@ use itertools::Itertools;
 use md5::{Digest, Md5};
 use percent_encoding::{PercentEncode, utf8_percent_encode};
 use quick_xml::events::{self as xml_events};
-use ring::digest;
-use ring::digest::Context;
+use aws_lc_rs::digest;
+use aws_lc_rs::digest::Context;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
