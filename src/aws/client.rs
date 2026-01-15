@@ -40,6 +40,8 @@ use crate::{
     PutPayload, PutResult, Result, RetryConfig, TagSet,
 };
 use async_trait::async_trait;
+use aws_lc_rs::digest;
+use aws_lc_rs::digest::Context;
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use bytes::{Buf, Bytes};
@@ -52,8 +54,6 @@ use itertools::Itertools;
 use md5::{Digest, Md5};
 use percent_encoding::{PercentEncode, utf8_percent_encode};
 use quick_xml::events::{self as xml_events};
-use aws_lc_rs::digest;
-use aws_lc_rs::digest::Context;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
