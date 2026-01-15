@@ -25,9 +25,10 @@ use futures::future::BoxFuture;
 use http::{Method, Uri};
 use reqwest::StatusCode;
 use reqwest::header::LOCATION;
+use std::str::FromStr;
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use std::time::{Duration, Instant};
-use tracing::info;
+use tracing::{debug, info};
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 use web_time::{Duration, Instant};
 
@@ -102,6 +103,29 @@ impl RetryContext {
     pub(crate) fn backoff(&mut self) -> Duration {
         self.retries += 1;
         self.backoff.next()
+    }
+}
+
+/// Context of the redirect
+pub(crate) struct RedirectContext {
+    redirects: usize,
+    max_redirects: usize,
+}
+
+impl RedirectContext {
+    pub(crate) fn new(config: &RedirectConfig) -> Self {
+        Self {
+            redirects: 0,
+            max_redirects: config.max_redirects,
+        }
+    }
+
+    pub(crate) fn exhausted(&self) -> bool {
+        self.redirects >= self.max_redirects
+    }
+
+    pub(crate) fn redirect(&mut self) {
+        self.redirects += 1;
     }
 }
 
@@ -259,6 +283,21 @@ impl Default for RetryConfig {
     }
 }
 
+/// The configuration for redirect behavior
+#[derive(Debug, Clone)]
+pub(crate) struct RedirectConfig {
+    /// The maximum number of times to redirect
+    ///
+    /// Set to 0 to disable redirects
+    pub max_redirects: usize,
+}
+
+impl Default for RedirectConfig {
+    fn default() -> Self {
+        Self { max_redirects: 10 }
+    }
+}
+
 fn body_contains_error(response_body: &str) -> bool {
     response_body.contains("InternalError") || response_body.contains("SlowDown")
 }
@@ -266,7 +305,7 @@ fn body_contains_error(response_body: &str) -> bool {
 /// Combines a [`RetryableRequest`] with a [`RetryContext`]
 pub(crate) struct RetryableRequestBuilder {
     request: RetryableRequest,
-    context: RetryContext,
+    retry_context: RetryContext,
 }
 
 impl RetryableRequestBuilder {
@@ -307,8 +346,11 @@ impl RetryableRequestBuilder {
         self
     }
 
-    pub(crate) async fn send(mut self) -> Result<HttpResponse> {
-        self.request.send(&mut self.context).await
+    pub(crate) async fn send(mut self, redirect_config: &RedirectConfig) -> Result<HttpResponse> {
+        let mut redirect_ctx = RedirectContext::new(redirect_config);
+        self.request
+            .send(&mut self.retry_context, Some(&mut redirect_ctx))
+            .await
     }
 }
 
@@ -343,7 +385,11 @@ impl RetryableRequest {
         }))
     }
 
-    pub(crate) async fn send(self, ctx: &mut RetryContext) -> Result<HttpResponse> {
+    pub(crate) async fn send(
+        mut self,
+        retry_ctx: &mut RetryContext,
+        mut redirect_ctx: Option<&mut RedirectContext>,
+    ) -> Result<HttpResponse> {
         loop {
             let mut request = self.http.clone();
 
@@ -366,7 +412,7 @@ impl RetryableRequest {
                         let (parts, body) = r.into_parts();
                         let body = match body.text().await {
                             Ok(body) => body,
-                            Err(e) => return Err(self.err(RequestError::Http(e), ctx)),
+                            Err(e) => return Err(self.err(RequestError::Http(e), retry_ctx)),
                         };
 
                         if !body_contains_error(&body) {
@@ -374,37 +420,74 @@ impl RetryableRequest {
                             return Ok(HttpResponse::from_parts(parts, body.into()));
                         } else {
                             // Retry as if this was a 5xx response
-                            if ctx.exhausted() {
-                                return Err(self.err(RequestError::Response { body, status }, ctx));
+                            if retry_ctx.exhausted() {
+                                return Err(
+                                    self.err(RequestError::Response { body, status }, retry_ctx)
+                                );
                             }
 
-                            let sleep = ctx.backoff();
+                            let sleep = retry_ctx.backoff();
                             info!(
                                 "Encountered a response status of {} but body contains Error, backing off for {} seconds, retry {} of {}",
                                 status,
                                 sleep.as_secs_f32(),
-                                ctx.retries,
-                                ctx.max_retries,
+                                retry_ctx.retries,
+                                retry_ctx.max_retries,
                             );
                             tokio::time::sleep(sleep).await;
                         }
                     } else if status == StatusCode::NOT_MODIFIED {
-                        return Err(self.err(RequestError::Status { status, body: None }, ctx));
+                        return Err(
+                            self.err(RequestError::Status { status, body: None }, retry_ctx)
+                        );
                     } else if status.is_redirection() {
-                        let is_bare_redirect = !r.headers().contains_key(LOCATION);
-                        return match is_bare_redirect {
-                            true => Err(self.err(RequestError::BareRedirect, ctx)),
-                            false => Err(self.err(
+                        let Some(redirect_ctx) = redirect_ctx.as_deref_mut() else {
+                            return Err(self.err(
                                 RequestError::Status {
                                     body: None,
                                     status: r.status(),
                                 },
-                                ctx,
-                            )),
+                                retry_ctx,
+                            ));
                         };
+
+                        if redirect_ctx.exhausted() {
+                            return Err(self.err(
+                                RequestError::Status {
+                                    body: None,
+                                    status: r.status(),
+                                },
+                                retry_ctx,
+                            ));
+                        }
+
+                        let Some(location) = r.headers().get(LOCATION) else {
+                            return Err(self.err(RequestError::BareRedirect, retry_ctx));
+                        };
+
+                        if let Ok(location) = location.to_str()
+                            && let Ok(new_uri) = Uri::from_str(location)
+                        {
+                            debug!("Redirecting to {new_uri}");
+                            *self.http.uri_mut() = new_uri;
+                            redirect_ctx.redirect();
+                            continue;
+                        } else {
+                            debug!(
+                                "Failed to parse redirect location. Original value: {location:?}"
+                            );
+
+                            return Err(self.err(
+                                RequestError::Status {
+                                    body: None,
+                                    status: r.status(),
+                                },
+                                retry_ctx,
+                            ));
+                        }
                     } else {
                         let status = r.status();
-                        if ctx.exhausted()
+                        if retry_ctx.exhausted()
                             || !(status.is_server_error()
                                 || status == StatusCode::TOO_MANY_REQUESTS
                                 || status == StatusCode::REQUEST_TIMEOUT
@@ -420,16 +503,16 @@ impl RetryableRequest {
                                 },
                                 false => RequestError::Status { status, body: None },
                             };
-                            return Err(self.err(source, ctx));
+                            return Err(self.err(source, retry_ctx));
                         };
 
-                        let sleep = ctx.backoff();
+                        let sleep = retry_ctx.backoff();
                         info!(
                             "Encountered server error with status {}, backing off for {} seconds, retry {} of {}",
                             status,
                             sleep.as_secs_f32(),
-                            ctx.retries,
-                            ctx.max_retries,
+                            retry_ctx.retries,
+                            retry_ctx.max_retries,
                         );
                         tokio::time::sleep(sleep).await;
                     }
@@ -445,16 +528,16 @@ impl RetryableRequest {
                         HttpErrorKind::Unknown | HttpErrorKind::Decode => false,
                     };
 
-                    if ctx.exhausted() || !do_retry {
-                        return Err(self.err(RequestError::Http(e), ctx));
+                    if retry_ctx.exhausted() || !do_retry {
+                        return Err(self.err(RequestError::Http(e), retry_ctx));
                     }
-                    let sleep = ctx.backoff();
+                    let sleep = retry_ctx.backoff();
                     info!(
                         "Encountered transport error of kind {:?}, backing off for {} seconds, retry {} of {}: {}",
                         e.kind(),
                         sleep.as_secs_f32(),
-                        ctx.retries,
-                        ctx.max_retries,
+                        retry_ctx.retries,
+                        retry_ctx.max_retries,
                         e,
                     );
                     tokio::time::sleep(sleep).await;
@@ -480,10 +563,10 @@ pub(crate) trait RetryExt {
 }
 
 impl RetryExt for HttpRequestBuilder {
-    fn retryable(self, config: &RetryConfig) -> RetryableRequestBuilder {
+    fn retryable(self, retry_config: &RetryConfig) -> RetryableRequestBuilder {
         RetryableRequestBuilder {
             request: self.retryable_request(),
-            context: RetryContext::new(config),
+            retry_context: RetryContext::new(retry_config),
         }
     }
 
@@ -504,7 +587,7 @@ impl RetryExt for HttpRequestBuilder {
 
     fn send_retry(self, config: &RetryConfig) -> BoxFuture<'static, Result<HttpResponse>> {
         let request = self.retryable(config);
-        Box::pin(async move { request.send().await })
+        Box::pin(async move { request.send(&RedirectConfig::default()).await })
     }
 }
 
@@ -513,7 +596,9 @@ impl RetryExt for HttpRequestBuilder {
 mod tests {
     use crate::RetryConfig;
     use crate::client::mock_server::MockServer;
-    use crate::client::retry::{RequestError, RetryContext, RetryExt, body_contains_error};
+    use crate::client::retry::{
+        RedirectConfig, RequestError, RetryContext, RetryExt, body_contains_error,
+    };
     use crate::client::{HttpClient, HttpError, HttpErrorKind, HttpResponse};
     use http::StatusCode;
     use hyper::Response;
@@ -794,7 +879,11 @@ mod tests {
             .request(Method::GET, &url)
             .retryable(&retry)
             .sensitive(true);
-        let err = req.send().await.unwrap_err().to_string();
+        let err = req
+            .send(&RedirectConfig::default())
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(!err.contains("SENSITIVE"), "{err}");
 
         for _ in 0..=retry.max_retries {
@@ -805,7 +894,11 @@ mod tests {
             .request(Method::GET, &url)
             .retryable(&retry)
             .sensitive(true);
-        let err = req.send().await.unwrap_err().to_string();
+        let err = req
+            .send(&RedirectConfig::default())
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(!err.contains("SENSITIVE"), "{err}");
 
         // Success response with error in body is retried
@@ -820,7 +913,7 @@ mod tests {
             .retryable(&retry)
             .idempotent(true)
             .retry_error_body(true);
-        let r = req.send().await.unwrap();
+        let r = req.send(&RedirectConfig::default()).await.unwrap();
         assert_eq!(r.status(), StatusCode::OK);
         // Response with InternalError should have been retried
         let b = r.into_body().text().await.unwrap();
@@ -838,7 +931,7 @@ mod tests {
             .retryable(&retry)
             .idempotent(true)
             .retry_error_body(true);
-        let r = req.send().await.unwrap();
+        let r = req.send(&RedirectConfig::default()).await.unwrap();
         assert_eq!(r.status(), StatusCode::OK);
         let b = r.into_body().text().await.unwrap();
         assert!(b.contains("success"));
@@ -890,7 +983,7 @@ mod tests {
         let res = client
             .get(url)
             .retryable_request()
-            .send(ctx)
+            .send(ctx, None)
             .await
             .expect("request should eventually succeed");
         assert_eq!(res.status(), StatusCode::OK);
