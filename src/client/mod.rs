@@ -797,8 +797,19 @@ impl ClientOptions {
             builder = builder.proxy(proxy);
         }
 
-        for certificate in &self.root_certificates {
-            builder = builder.add_root_certificate(certificate.0.clone());
+        builder = builder.tls_certs_merge(
+            self.root_certificates
+                .iter()
+                .map(|certificate| certificate.0.clone()),
+        );
+
+        #[cfg(feature = "tls-webpki-roots")]
+        {
+            let mut web_pki_roots = Vec::new();
+            for root_cert in webpki_root_certs::TLS_SERVER_ROOT_CERTS {
+                web_pki_roots.push(Certificate::from_der(root_cert.as_ref())?.0);
+            }
+            builder = builder.tls_certs_merge(web_pki_roots);
         }
 
         if let Some(timeout) = &self.timeout {

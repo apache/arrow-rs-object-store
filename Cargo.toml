@@ -54,13 +54,14 @@ hyper = { version = "1.2", default-features = false, optional = true }
 md-5 = { version = "0.10.6", default-features = false, optional = true }
 quick-xml = { version = "0.38.0", features = ["serialize", "overlapped-lists"], optional = true }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"], optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["http2", "rustls-tls-no-provider"], optional = true }
+reqwest = { version = "0.13", default-features = false, features = ["http2", "rustls-no-provider"], optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 rustls-pki-types = { version = "1.9", default-features = false, features = ["std"], optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
 serde_urlencoded = { version = "0.7", optional = true }
 tokio = { version = "1.29.0", features = ["sync", "macros", "rt", "time", "io-util"] }
+webpki-root-certs = { version = "1", optional = true }
 
 [target.'cfg(target_family="unix")'.dev-dependencies]
 nix = { version = "0.30.0", features = ["fs"] }
@@ -72,7 +73,7 @@ wasm-bindgen-futures = "0.4.18"
 [features]
 default = ["fs"]
 cloud-no-crypto = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/stream", "chrono/serde", "base64", "rand","http-body-util", "form_urlencoded", "serde_urlencoded"]
-cloud = ["ring", "rustls-pki-types", "cloud-no-crypto", "reqwest?/rustls-tls-native-roots"]
+cloud = ["ring", "rustls-pki-types", "cloud-no-crypto"]
 
 
 azure-no-crypto = ["cloud-no-crypto", "httparse"]
@@ -89,7 +90,7 @@ aws = ["cloud", "aws-no-crypto"]
 http-no-crypto = ["cloud-no-crypto"]
 http = ["cloud", "http-no-crypto"]
 
-tls-webpki-roots = ["reqwest?/rustls-tls-webpki-roots"]
+tls-webpki-roots = ["webpki-root-certs"]
 integration = ["rand"]
 
 [dev-dependencies] # In alphabetical order
@@ -99,7 +100,7 @@ rand = "0.9"
 tempfile = "3.1.0"
 regex = "1.11.1"
 # The "gzip" feature for reqwest is enabled for an integration test.
-reqwest = { version = "0.12", default-features = false, features = ["gzip"] }
+reqwest = { version = "0.13", default-features = false, features = ["gzip"] }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
 wasm-bindgen-test = "0.3.50"
