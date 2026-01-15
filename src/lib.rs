@@ -564,7 +564,8 @@ pub mod client;
 #[cfg(feature = "cloud")]
 pub use client::{
     ClientConfigKey, ClientOptions, CredentialProvider, StaticCredentialProvider,
-    backoff::BackoffConfig, retry::RetryConfig,
+    backoff::BackoffConfig,
+    retry::{RedirectConfig, RetryConfig},
 };
 
 #[cfg(all(feature = "cloud", not(target_arch = "wasm32")))]

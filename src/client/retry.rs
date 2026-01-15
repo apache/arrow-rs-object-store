@@ -284,8 +284,8 @@ impl Default for RetryConfig {
 }
 
 /// The configuration for redirect behavior
-#[derive(Debug, Clone)]
-pub(crate) struct RedirectConfig {
+#[derive(Debug, Clone, Copy)]
+pub struct RedirectConfig {
     /// The maximum number of times to redirect
     ///
     /// Set to 0 to disable redirects
