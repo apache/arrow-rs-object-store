@@ -662,7 +662,7 @@ mod tests {
         let store = AmazonS3Builder::from_env()
             .with_bucket_name(bucket)
             .with_multipart_copy_threshold(5 * 1024 * 1024)
-            .with_multipart_copy_part_size(5 * 1024 * 1024)
+            .with_multipart_copy_part_size(1337 * 1024)
             .build()
             .unwrap();
 
