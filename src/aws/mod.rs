@@ -166,6 +166,11 @@ impl AmazonS3 {
     }
 }
 
+enum CopyMethod {
+    SingleRequest,
+    Multipart(u64),
+}
+
 #[async_trait]
 impl Signer for AmazonS3 {
     /// Create a URL containing the relevant [AWS SigV4] query parameters that authorize a request
@@ -368,30 +373,37 @@ impl ObjectStore for AmazonS3 {
             mode,
             extensions: _,
         } = options;
-        // Determine source size to decide between single CopyObject and multipart copy
-        let head_meta = self
-            .client
-            .get_opts(
-                from,
-                GetOptions {
-                    head: true,
-                    ..Default::default()
-                },
-            )
-            .await?
-            .meta;
+
+        let copy_method = if let Some(limit) = self.client.config.multipart_copy_threshold {
+            let size = self
+                .client
+                .get_opts(from, GetOptions::new().with_head(true))
+                .await?
+                .meta
+                .size;
+            if size < limit {
+                CopyMethod::SingleRequest
+            } else {
+                CopyMethod::Multipart(size)
+            }
+        } else {
+            CopyMethod::SingleRequest
+        };
 
         match mode {
             CopyMode::Overwrite => {
-                if head_meta.size <= self.client.config.multipart_copy_threshold {
-                    self.client
-                        .copy_request(from, to)
-                        .idempotent(true)
-                        .send()
-                        .await?;
-                } else {
-                    self.copy_multipart(from, to, head_meta.size, CompleteMultipartMode::Overwrite)
-                        .await?;
+                match copy_method {
+                    CopyMethod::SingleRequest => {
+                        self.client
+                            .copy_request(from, to)
+                            .idempotent(true)
+                            .send()
+                            .await?;
+                    }
+                    CopyMethod::Multipart(size) => {
+                        self.copy_multipart(from, to, size, CompleteMultipartMode::Overwrite)
+                            .await?;
+                    }
                 }
                 Ok(())
             }
@@ -402,8 +414,17 @@ impl ObjectStore for AmazonS3 {
                     }
                     Some(S3CopyIfNotExists::HeaderWithStatus(k, v, status)) => (k, v, *status),
                     Some(S3CopyIfNotExists::Multipart) => {
+                        let size = if let CopyMethod::Multipart(size) = copy_method {
+                            size
+                        } else {
+                            self.client
+                                .get_opts(from, GetOptions::new().with_head(true))
+                                .await?
+                                .meta
+                                .size
+                        };
                         return self
-                            .copy_multipart(from, to, head_meta.size, CompleteMultipartMode::Create)
+                            .copy_multipart(from, to, size, CompleteMultipartMode::Create)
                             .await
                             .map_err(|err| match err {
                                 Error::Precondition { .. } => Error::AlreadyExists {
@@ -419,9 +440,17 @@ impl ObjectStore for AmazonS3 {
                         });
                     }
                 };
+                if matches!(copy_method, CopyMethod::Multipart(_)) {
+                    return Err(Error::NotSupported {
+                        source: "Object size is above multipart copy threshold, but \
+                        CopyIfNotExists headers are not supported for multipart copies"
+                            .into(),
+                    });
+                }
 
                 let req = self.client.copy_request(from, to);
                 match req.header(k, v).send().await {
+                    Ok(_) => Ok(()),
                     Err(RequestError::Retry { source, path })
                         if source.status() == Some(status) =>
                     {
@@ -431,7 +460,6 @@ impl ObjectStore for AmazonS3 {
                         })
                     }
                     Err(e) => Err(e.into()),
-                    Ok(_) => Ok(()),
                 }
             }
         }

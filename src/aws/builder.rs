@@ -194,7 +194,8 @@ pub struct AmazonS3Builder {
     request_payer: ConfigValue<bool>,
     /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
-    /// Threshold (bytes) above which copy uses multipart copy. If not set, defaults to 5 GiB.
+    /// Threshold (bytes) above which copy uses multipart copy. If not set, all copies are performed
+    /// as single requests.
     multipart_copy_threshold: Option<ConfigValue<u64>>,
     /// Preferred multipart copy part size (bytes). If not set, defaults to 5 GiB.
     multipart_copy_part_size: Option<ConfigValue<u64>>,
@@ -1235,8 +1236,7 @@ impl AmazonS3Builder {
         let multipart_copy_threshold = self
             .multipart_copy_threshold
             .map(|val| val.get())
-            .transpose()?
-            .unwrap_or(MAX_SINGLE_REQUEST_COPY_SIZE);
+            .transpose()?;
         let multipart_copy_part_size = self
             .multipart_copy_part_size
             .map(|val| val.get())

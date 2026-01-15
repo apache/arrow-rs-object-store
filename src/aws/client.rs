@@ -211,8 +211,8 @@ pub(crate) struct S3Config {
     pub request_payer: bool,
     pub(super) encryption_headers: S3EncryptionHeaders,
     /// Threshold in bytes above which copy will use multipart copy
-    pub multipart_copy_threshold: u64,
-    /// Preferred multipart copy part size in bytes (None => auto)
+    pub multipart_copy_threshold: Option<u64>,
+    /// Preferred multipart copy part size in bytes (None => 5GiB)
     pub multipart_copy_part_size: u64,
 }
 
@@ -1020,7 +1020,7 @@ mod tests {
             conditional_put: Default::default(),
             encryption_headers: Default::default(),
             request_payer: false,
-            multipart_copy_threshold: 5 * 1024 * 1024 * 1024,
+            multipart_copy_threshold: None,
             multipart_copy_part_size: 5 * 1024 * 1024 * 1024,
         };
 
