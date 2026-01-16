@@ -45,9 +45,9 @@ use crate::client::{HttpConnector, http_connector};
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
-    ClientConfigKey, ClientOptions, CopyMode, CopyOptions, GetOptions, GetResult, ListResult,
-    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload,
-    PutResult, Result, RetryConfig,
+    ClientConfigKey, ClientOptions, CopyMode, CopyOptions, DeleteOptions, GetOptions, GetResult,
+    ListResult, MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions,
+    PutPayload, PutResult, Result, RetryConfig,
 };
 
 mod client;
@@ -136,6 +136,14 @@ impl ObjectStore for HttpStore {
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         self.client.get_opts(location, options).await
+    }
+
+    async fn delete_opts(&self, location: &Path, opts: DeleteOptions) -> Result<()> {
+        let _ = (location, opts);
+        Err(crate::Error::NotImplemented {
+            operation: "`delete_opts`".into(),
+            implementer: self.to_string(),
+        })
     }
 
     fn delete_stream(

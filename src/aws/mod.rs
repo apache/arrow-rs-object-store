@@ -44,9 +44,9 @@ use crate::multipart::{MultipartStore, PartId};
 use crate::signer::Signer;
 use crate::util::STRICT_ENCODE_SET;
 use crate::{
-    CopyMode, CopyOptions, Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, Path, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult,
-    Result, UploadPart,
+    CopyMode, CopyOptions, DeleteOptions, Error, GetOptions, GetResult, ListResult, MultipartId,
+    MultipartUpload, ObjectMeta, ObjectStore, Path, PutMode, PutMultipartOptions, PutOptions,
+    PutPayload, PutResult, Result, UploadPart,
 };
 
 static TAGS_HEADER: HeaderName = HeaderName::from_static("x-amz-tagging");
@@ -257,6 +257,17 @@ impl ObjectStore for AmazonS3 {
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         self.client.get_opts(location, options).await
+    }
+
+    async fn delete_opts(&self, location: &Path, opts: DeleteOptions) -> Result<()> {
+        let mut request = self.client.request(Method::DELETE, location);
+
+        if let Some(if_match) = &opts.if_match {
+            request = request.header(&IF_MATCH, if_match);
+        }
+
+        request.with_extensions(opts.extensions).send().await?;
+        Ok(())
     }
 
     fn delete_stream(
@@ -658,6 +669,8 @@ mod tests {
         }
         if test_conditional_put {
             put_opts(&integration, true).await;
+            delete_opts(&integration, true).await;
+            delete_opts_race_condition(&integration, true).await;
         }
 
         // run integration test with unsigned payload enabled

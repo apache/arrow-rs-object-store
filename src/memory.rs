@@ -29,9 +29,9 @@ use parking_lot::RwLock;
 use crate::multipart::{MultipartStore, PartId};
 use crate::util::InvalidGetRange;
 use crate::{
-    Attributes, GetRange, GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutResult, Result,
-    UpdateVersion, UploadPart, path::Path,
+    Attributes, DeleteOptions, GetRange, GetResult, GetResultPayload, ListResult, MultipartId,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutResult,
+    Result, UpdateVersion, UploadPart, path::Path,
 };
 use crate::{CopyMode, CopyOptions, GetOptions, PutPayload};
 
@@ -292,6 +292,23 @@ impl ObjectStore for InMemory {
                 Ok(entry.data.slice(r_start..r_end))
             })
             .collect()
+    }
+
+    async fn delete_opts(&self, location: &Path, opts: DeleteOptions) -> Result<()> {
+        if opts.if_match.is_some() {
+            let entry = self.entry(location)?;
+            let meta = ObjectMeta {
+                location: location.clone(),
+                last_modified: entry.last_modified,
+                size: entry.data.len() as u64,
+                e_tag: Some(entry.e_tag.to_string()),
+                version: None,
+            };
+            opts.check_preconditions(&meta)?;
+        }
+
+        self.storage.write().map.remove(location);
+        Ok(())
     }
 
     fn delete_stream(
@@ -555,6 +572,8 @@ mod tests {
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;
         put_opts(&integration, true).await;
+        delete_opts(&integration, true).await;
+        delete_opts_race_condition(&integration, true).await;
         multipart(&integration, &integration).await;
         put_get_attributes(&integration).await;
     }
