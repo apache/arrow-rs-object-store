@@ -28,8 +28,8 @@ use crate::list::{PaginatedListOptions, PaginatedListResult};
 use crate::multipart::PartId;
 use crate::util::{GetRange, deserialize_rfc1123};
 use crate::{
-    Attribute, Attributes, ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode,
-    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, RetryConfig, TagSet,
+    Attribute, Attributes, ClientOptions, DeleteOptions, GetOptions, ListResult, ObjectMeta, Path,
+    PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, RetryConfig, TagSet,
 };
 use async_trait::async_trait;
 use base64::Engine;
@@ -70,6 +70,12 @@ pub(crate) enum Error {
 
     #[error("Error performing put request {}: {}", path, source)]
     PutRequest {
+        source: crate::client::retry::RetryError,
+        path: String,
+    },
+
+    #[error("Error performing delete request {}: {}", path, source)]
+    DeleteRequest {
         source: crate::client::retry::RetryError,
         path: String,
     },
@@ -144,9 +150,9 @@ pub(crate) enum Error {
 impl From<Error> for crate::Error {
     fn from(err: Error) -> Self {
         match err {
-            Error::GetRequest { source, path } | Error::PutRequest { source, path } => {
-                source.error(STORE, path)
-            }
+            Error::GetRequest { source, path }
+            | Error::PutRequest { source, path }
+            | Error::DeleteRequest { source, path } => source.error(STORE, path),
             _ => Self::Generic {
                 store: STORE,
                 source: Box::new(err),
@@ -566,6 +572,40 @@ impl AzureClient {
         let response = builder.header(&BLOB_TYPE, "BlockBlob").send().await?;
         Ok(get_put_result(response.headers(), VERSION_HEADER)
             .map_err(|source| Error::Metadata { source })?)
+    }
+
+    /// Make an Azure DELETE request <https://learn.microsoft.com/en-us/rest/api/storageservices/delete-blob>
+    pub(crate) async fn delete_request(&self, path: &Path, opts: DeleteOptions) -> Result<()> {
+        let credential = self.get_credential().await?;
+        let url = self.config.path_url(path);
+        let sensitive = credential
+            .as_deref()
+            .map(|c| c.sensitive_request())
+            .unwrap_or_default();
+
+        let mut builder = self
+            .client
+            .delete(url.as_str())
+            .header(CONTENT_LENGTH, HeaderValue::from_static("0"))
+            .extensions(opts.extensions);
+
+        if let Some(etag) = &opts.if_match {
+            builder = builder.header(&IF_MATCH, etag);
+        }
+
+        builder
+            .with_azure_authorization(&credential, &self.config.account)
+            .retryable(&self.config.retry_config)
+            .sensitive(sensitive)
+            .idempotent(true)
+            .send()
+            .await
+            .map_err(|source| Error::DeleteRequest {
+                source,
+                path: path.to_string(),
+            })?;
+
+        Ok(())
     }
 
     /// PUT a block <https://learn.microsoft.com/en-us/rest/api/storageservices/put-block>

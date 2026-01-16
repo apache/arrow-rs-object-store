@@ -34,8 +34,8 @@ use url::Url;
 use walkdir::{DirEntry, WalkDir};
 
 use crate::{
-    Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
+    Attributes, DeleteOptions, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload,
+    ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
     UploadPart, maybe_spawn_blocking,
     path::{Path, absolute_path_to_url},
     util::InvalidGetRange,
@@ -451,6 +451,19 @@ impl ObjectStore for LocalFileSystem {
                 .collect()
         })
         .await
+    }
+
+    async fn delete_opts(&self, location: &Path, opts: DeleteOptions) -> Result<()> {
+        if opts.if_match.is_some() {
+            let meta = self.head(location).await?;
+            opts.check_preconditions(&meta)?;
+        }
+
+        let config = Arc::clone(&self.config);
+        let automatic_cleanup = self.automatic_cleanup;
+        let location = location.clone();
+        maybe_spawn_blocking(move || Self::delete_location(config, automatic_cleanup, &location))
+            .await
     }
 
     fn delete_stream(
@@ -1177,6 +1190,8 @@ mod tests {
         copy_rename_nonexistent_object(&integration).await;
         stream_get(&integration).await;
         put_opts(&integration, false).await;
+        delete_opts(&integration, true).await;
+        delete_opts_race_condition(&integration, true).await;
     }
 
     #[test]

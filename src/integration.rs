@@ -28,13 +28,15 @@ use crate::list::{PaginatedListOptions, PaginatedListStore};
 use crate::multipart::MultipartStore;
 use crate::path::Path;
 use crate::{
-    Attribute, Attributes, DynObjectStore, Error, GetOptions, GetRange, MultipartUpload,
-    ObjectStore, ObjectStoreExt, PutMode, PutPayload, UpdateVersion, WriteMultipart,
+    Attribute, Attributes, DeleteOptions, DynObjectStore, Error, GetOptions, GetRange,
+    MultipartUpload, ObjectStore, ObjectStoreExt, PutMode, PutPayload, UpdateVersion,
+    WriteMultipart,
 };
 use bytes::Bytes;
 use futures::stream::FuturesUnordered;
 use futures::{StreamExt, TryStreamExt};
 use rand::{Rng, rng};
+use rand::distr::Alphanumeric;
 use std::collections::HashSet;
 use std::slice;
 
@@ -686,6 +688,136 @@ pub async fn put_opts(storage: &dyn ObjectStore, supports_update: bool) {
     let b = storage.get(&path).await.unwrap().bytes().await.unwrap();
     let v = std::str::from_utf8(&b).unwrap().parse::<usize>().unwrap();
     assert_eq!(v, NUM_WORKERS * NUM_INCREMENTS);
+}
+
+/// Tests conditional deletes
+pub async fn delete_opts(storage: &dyn ObjectStore, supports_conditional: bool) {
+    let rng = rng();
+    let suffix = String::from_utf8(rng.sample_iter(Alphanumeric).take(32).collect()).unwrap();
+
+    // Test 1: Delete with matching ETag
+    let path = Path::from(format!("delete_opts_etag_{suffix}"));
+    let result = storage.put(&path, "test data".into()).await.unwrap();
+    let etag = result.e_tag.clone();
+
+    if supports_conditional && etag.is_some() {
+        let opts = DeleteOptions {
+            if_match: etag.clone(),
+            ..Default::default()
+        };
+        storage.delete_opts(&path, opts).await.unwrap();
+
+        let err = storage.get(&path).await.unwrap_err();
+        assert!(matches!(err, Error::NotFound { .. }), "{err}");
+    } else if !supports_conditional {
+        let opts = DeleteOptions {
+            if_match: Some("some-etag".to_string()),
+            ..Default::default()
+        };
+        let err = storage.delete_opts(&path, opts).await.unwrap_err();
+        assert!(matches!(err, Error::NotImplemented { .. }), "{err}");
+
+        storage.delete(&path).await.unwrap();
+        return;
+    }
+
+    // Test 2: Delete with non-matching ETag should fail
+    let path = Path::from(format!("delete_opts_etag_fail_{suffix}"));
+    let result = storage.put(&path, "test data".into()).await.unwrap();
+
+    if supports_conditional && result.e_tag.is_some() {
+        let opts = DeleteOptions {
+            if_match: Some("wrong-etag".to_string()),
+            ..Default::default()
+        };
+        let err = storage.delete_opts(&path, opts).await.unwrap_err();
+        assert!(matches!(err, Error::Precondition { .. }), "{err}");
+
+        let data = storage.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(data.as_ref(), b"test data");
+
+        storage.delete(&path).await.unwrap();
+    }
+
+    // Test 3: Delete with wildcard should succeed
+    let path = Path::from(format!("delete_opts_wildcard_{suffix}"));
+    storage.put(&path, "test data".into()).await.unwrap();
+
+    if supports_conditional {
+        let opts = DeleteOptions {
+            if_match: Some("*".to_string()),
+            ..Default::default()
+        };
+        storage.delete_opts(&path, opts).await.unwrap();
+    }
+
+    // Test 4: Delete with multiple ETags should succeed if one matches
+    let path = Path::from(format!("delete_opts_multi_etag_{suffix}"));
+    let result = storage.put(&path, "test data".into()).await.unwrap();
+
+    if supports_conditional && result.e_tag.is_some() {
+        let etag = result.e_tag.unwrap();
+        let opts = DeleteOptions {
+            if_match: Some(format!("\"wrong1\", {etag}, \"wrong2\"")),
+            ..Default::default()
+        };
+        storage.delete_opts(&path, opts).await.unwrap();
+
+        let err = storage.get(&path).await.unwrap_err();
+        assert!(matches!(err, Error::NotFound { .. }), "{err}");
+    }
+}
+
+/// Test concurrent conditional deletes (race conditions)
+pub async fn delete_opts_race_condition(storage: &dyn ObjectStore, supports_conditional: bool) {
+    if !supports_conditional {
+        return;
+    }
+
+    use futures::stream::{FuturesUnordered, StreamExt};
+
+    let rng = rng();
+    let suffix = String::from_utf8(rng.sample_iter(Alphanumeric).take(32).collect()).unwrap();
+    let path = Path::from(format!("delete_race_{suffix}"));
+
+    let result = storage.put(&path, "test data".into()).await.unwrap();
+
+    if let Some(etag) = result.e_tag {
+        const NUM_WORKERS: usize = 5;
+
+        let mut futures: FuturesUnordered<_> = (0..NUM_WORKERS)
+            .map(|_| {
+                let opts = DeleteOptions {
+                    if_match: Some(etag.clone()),
+                    ..Default::default()
+                };
+                storage.delete_opts(&path, opts)
+            })
+            .collect();
+
+        let mut success_count = 0;
+        let mut precondition_count = 0;
+        let mut not_found_count = 0;
+
+        while let Some(result) = futures.next().await {
+            match result {
+                Ok(_) => success_count += 1,
+                Err(Error::Precondition { .. }) => precondition_count += 1,
+                Err(Error::NotFound { .. }) => not_found_count += 1,
+                Err(err) => panic!("Unexpected error: {err}"),
+            }
+        }
+
+        assert_eq!(success_count, 1, "Exactly one delete should succeed");
+        assert_eq!(
+            precondition_count + not_found_count,
+            NUM_WORKERS - 1,
+            "Other deletes should fail"
+        );
+
+        let err = storage.get(&path).await.unwrap_err();
+        assert!(matches!(err, Error::NotFound { .. }));
+    }
 }
 
 /// Returns a chunk of length `chunk_length`
