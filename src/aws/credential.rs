@@ -17,7 +17,7 @@
 
 use crate::aws::{AwsCredentialProvider, STORE, STRICT_ENCODE_SET, STRICT_PATH_ENCODE_SET};
 use crate::client::builder::HttpRequestBuilder;
-use crate::client::retry::RetryExt;
+use crate::client::retry::{RedirectConfig, RetryExt};
 use crate::client::token::{TemporaryToken, TokenCache};
 use crate::client::{HttpClient, HttpError, HttpRequest, TokenProvider};
 use crate::util::{hex_digest, hex_encode, hmac_sha256};
@@ -571,7 +571,7 @@ async fn instance_creds(
         .header("X-aws-ec2-metadata-token-ttl-seconds", "600") // 10 minute TTL
         .retryable(retry_config)
         .idempotent(true)
-        .send()
+        .send(&RedirectConfig::default())
         .await;
 
     let token = match token_result {
@@ -674,7 +674,7 @@ async fn web_identity(
         .retryable(retry_config)
         .idempotent(true)
         .sensitive(true)
-        .send()
+        .send(&RedirectConfig::default())
         .await?
         .into_body()
         .bytes()

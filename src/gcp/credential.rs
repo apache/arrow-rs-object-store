@@ -22,7 +22,7 @@ use crate::client::token::TemporaryToken;
 use crate::client::{HttpClient, HttpError, TokenProvider};
 use crate::gcp::{GcpSigningCredentialProvider, STORE};
 use crate::util::{STRICT_ENCODE_SET, hex_digest, hex_encode};
-use crate::{RetryConfig, StaticCredentialProvider};
+use crate::{RedirectConfig, RetryConfig, StaticCredentialProvider};
 use async_trait::async_trait;
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
@@ -629,7 +629,7 @@ async fn get_token_response(
         ])
         .retryable(retry)
         .idempotent(true)
-        .send()
+        .send(&RedirectConfig::default())
         .await
         .map_err(|source| Error::TokenRequest { source })?
         .into_body()

@@ -27,7 +27,7 @@ use crate::client::get::GetClient;
 use crate::client::header::{HeaderConfig, get_etag};
 use crate::client::header::{get_put_result, get_version};
 use crate::client::list::ListClient;
-use crate::client::retry::{RetryContext, RetryExt};
+use crate::client::retry::{RedirectConfig, RetryContext, RetryExt};
 use crate::client::s3::{
     CompleteMultipartUpload, CompleteMultipartUploadResult, CopyPartResult,
     InitiateMultipartUploadResult, ListResponse, PartMetadata,
@@ -439,7 +439,7 @@ impl Request<'_> {
             .idempotent(self.idempotent)
             .retry_error_body(self.retry_error_body)
             .payload(self.payload)
-            .send()
+            .send(&RedirectConfig::default())
             .await
             .map_err(|source| {
                 let path = path.into();
@@ -793,7 +793,7 @@ impl S3Client {
             .retryable(&self.config.retry_config)
             .idempotent(true)
             .retry_error_body(true)
-            .send()
+            .send(&RedirectConfig::default())
             .await
             .map_err(|source| Error::CompleteMultipartRequest {
                 source,
@@ -880,7 +880,7 @@ impl GetClient for S3Client {
             .with_get_options(options)
             .with_aws_sigv4(credential.authorizer(), None)
             .retryable_request()
-            .send(ctx)
+            .send(ctx, None)
             .await
             .map_err(|e| e.error(STORE, path.to_string()))?;
 
