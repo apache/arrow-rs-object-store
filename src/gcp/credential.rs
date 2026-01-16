@@ -24,6 +24,7 @@ use crate::gcp::{GcpSigningCredentialProvider, STORE};
 use crate::util::{STRICT_ENCODE_SET, hex_digest, hex_encode};
 use crate::{RetryConfig, StaticCredentialProvider};
 use async_trait::async_trait;
+use aws_lc_rs::signature::RsaKeyPair;
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
@@ -31,7 +32,6 @@ use futures::TryFutureExt;
 use http::{HeaderMap, Method};
 use itertools::Itertools;
 use percent_encoding::utf8_percent_encode;
-use ring::signature::RsaKeyPair;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::env;
@@ -70,11 +70,13 @@ pub enum Error {
     #[error("Invalid RSA key: {}", source)]
     InvalidKey {
         #[from]
-        source: ring::error::KeyRejected,
+        source: aws_lc_rs::error::KeyRejected,
     },
 
     #[error("Error signing: {}", source)]
-    Sign { source: ring::error::Unspecified },
+    Sign {
+        source: aws_lc_rs::error::Unspecified,
+    },
 
     #[error("Error encoding jwt payload: {}", source)]
     Encode { source: serde_json::Error },
@@ -151,11 +153,11 @@ impl ServiceAccountKey {
     }
 
     fn sign(&self, string_to_sign: &str) -> Result<String> {
-        let mut signature = vec![0; self.0.public().modulus_len()];
+        let mut signature = vec![0; self.0.public_modulus_len()];
         self.0
             .sign(
-                &ring::signature::RSA_PKCS1_SHA256,
-                &ring::rand::SystemRandom::new(),
+                &aws_lc_rs::signature::RSA_PKCS1_SHA256,
+                &aws_lc_rs::rand::SystemRandom::new(),
                 string_to_sign.as_bytes(),
                 &mut signature,
             )
@@ -287,12 +289,12 @@ impl TokenProvider for SelfSignedJwt {
 
         let claim_str = b64_encode_obj(&claims)?;
         let message = [jwt_header.as_ref(), claim_str.as_ref()].join(".");
-        let mut sig_bytes = vec![0; self.private_key.0.public().modulus_len()];
+        let mut sig_bytes = vec![0; self.private_key.0.public_modulus_len()];
         self.private_key
             .0
             .sign(
-                &ring::signature::RSA_PKCS1_SHA256,
-                &ring::rand::SystemRandom::new(),
+                &aws_lc_rs::signature::RSA_PKCS1_SHA256,
+                &aws_lc_rs::rand::SystemRandom::new(),
                 message.as_bytes(),
                 &mut sig_bytes,
             )
