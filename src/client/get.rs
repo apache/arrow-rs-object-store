@@ -36,7 +36,7 @@ use http_body_util::BodyExt;
 use reqwest::header::ToStrError;
 use std::ops::Range;
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, warn};
 
 /// A client that can perform a get request
 #[async_trait]
@@ -215,6 +215,11 @@ impl<T: GetClient> GetContext<T> {
                         },
                         // Retry all response body errors
                         (Err(e), Some(etag)) if !ctx.retry_ctx.exhausted() => {
+                            // Full range already read; can't form valid 0-byte Range, return EOF
+                            if range.start >= range.end {
+                                return Ok(None);
+                            }
+
                             let sleep = ctx.retry_ctx.backoff();
                             info!(
                                 "Encountered error while reading response body: {}. Retrying in {}s",
@@ -237,9 +242,39 @@ impl<T: GetClient> GetContext<T> {
                                 .map_err(Self::err)?;
 
                             let (parts, retry_body) = request.into_parts();
+
+                            // Verify we got a 206 Partial Content response
+                            if parts.status != StatusCode::PARTIAL_CONTENT {
+                                warn!(
+                                    "Retry request for range {:?} returned {} instead of 206 Partial Content",
+                                    range, parts.status
+                                );
+                                // Return the original error
+                                return Err(Self::err(e));
+                            }
+
                             let retry_etag = get_etag(&parts.headers).map_err(Self::err)?;
 
                             if etag != &retry_etag {
+                                // Return the original error
+                                return Err(Self::err(e));
+                            }
+
+                            // Verify Content-Range matches our request
+                            if let Ok(content_range) = parse_range(&parts.headers) {
+                                if content_range.range != range {
+                                    warn!(
+                                        "Retry request for range {:?} returned Content-Range {:?}",
+                                        range, content_range.range
+                                    );
+                                    // Return the original error
+                                    return Err(Self::err(e));
+                                }
+                            } else {
+                                warn!(
+                                    "Retry request for range {:?} missing or invalid Content-Range header",
+                                    range
+                                );
                                 // Return the original error
                                 return Err(Self::err(e));
                             }
