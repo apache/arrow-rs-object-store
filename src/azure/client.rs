@@ -587,17 +587,17 @@ impl AzureClient {
             .client
             .delete(url.as_str())
             .header(CONTENT_LENGTH, HeaderValue::from_static("0"))
-            .extensions(opts.extensions)
-            .with_azure_authorization(&credential, &self.config.account)
-            .retryable(&self.config.retry_config)
-            .sensitive(sensitive)
-            .idempotent(true);
+            .extensions(opts.extensions);
 
         if let Some(etag) = &opts.if_match {
             builder = builder.header(&IF_MATCH, etag);
         }
 
         builder
+            .with_azure_authorization(&credential, &self.config.account)
+            .retryable(&self.config.retry_config)
+            .sensitive(sensitive)
+            .idempotent(true)
             .send()
             .await
             .map_err(|source| Error::DeleteRequest {
