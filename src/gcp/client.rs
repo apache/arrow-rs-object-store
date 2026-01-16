@@ -33,7 +33,7 @@ use crate::path::Path;
 use crate::util::hex_encode;
 use crate::{
     Attribute, Attributes, ClientOptions, GetOptions, MultipartId, PutMode, PutMultipartOptions,
-    PutOptions, PutPayload, PutResult, Result, RetryConfig,
+    PutOptions, PutPayload, PutResult, RedirectConfig, Result, RetryConfig,
 };
 use async_trait::async_trait;
 use base64::Engine;
@@ -239,7 +239,7 @@ impl Request<'_> {
             .retryable(&self.config.retry_config)
             .idempotent(self.idempotent)
             .payload(self.payload)
-            .send()
+            .send(&RedirectConfig::default())
             .await
             .map_err(|source| {
                 let path = self.path.as_ref().into();
@@ -339,7 +339,7 @@ impl GoogleCloudStorageClient {
             .json(&body)
             .retryable(&self.config.retry_config)
             .idempotent(true)
-            .send()
+            .send(&RedirectConfig::default())
             .await
             .map_err(|source| Error::SignBlobRequest { source })?
             .into_body()
@@ -537,7 +537,7 @@ impl GoogleCloudStorageClient {
             .body(data)
             .retryable(&self.config.retry_config)
             .idempotent(true)
-            .send()
+            .send(&RedirectConfig::default())
             .await
             .map_err(|source| Error::CompleteMultipartRequest { source })?;
 
@@ -594,7 +594,7 @@ impl GoogleCloudStorageClient {
             .header(CONTENT_LENGTH, 0)
             .retryable(&self.config.retry_config)
             .idempotent(!if_not_exists)
-            .send()
+            .send(&RedirectConfig::default())
             .await
             .map_err(|err| match err.status() {
                 Some(StatusCode::PRECONDITION_FAILED) => crate::Error::AlreadyExists {
@@ -647,7 +647,7 @@ impl GetClient for GoogleCloudStorageClient {
             .with_bearer_auth(credential.as_deref())
             .with_get_options(options)
             .retryable_request()
-            .send(ctx)
+            .send(ctx, None)
             .await
             .map_err(|source| {
                 let path = path.as_ref().into();

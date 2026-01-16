@@ -29,7 +29,8 @@ use crate::multipart::PartId;
 use crate::util::{GetRange, deserialize_rfc1123};
 use crate::{
     Attribute, Attributes, ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode,
-    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, RetryConfig, TagSet,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, RedirectConfig, Result, RetryConfig,
+    TagSet,
 };
 use async_trait::async_trait;
 use base64::Engine;
@@ -272,7 +273,7 @@ impl PutRequest<'_> {
             .sensitive(sensitive)
             .idempotent(self.idempotent)
             .payload(Some(self.payload))
-            .send()
+            .send(&RedirectConfig::default())
             .await
             .map_err(|source| {
                 let path = self.path.as_ref().into();
@@ -736,7 +737,7 @@ impl AzureClient {
             .retryable(&self.config.retry_config)
             .sensitive(sensitive)
             .idempotent(overwrite)
-            .send()
+            .send(&RedirectConfig::default())
             .await
             .map_err(|err| err.error(STORE, from.to_string()))?;
 
@@ -777,7 +778,7 @@ impl AzureClient {
             .retryable(&self.config.retry_config)
             .sensitive(sensitive)
             .idempotent(true)
-            .send()
+            .send(&RedirectConfig::default())
             .await
             .map_err(|source| Error::DelegationKeyRequest { source })?
             .into_body()
@@ -840,7 +841,7 @@ impl AzureClient {
             .with_azure_authorization(&credential, &self.config.account)
             .retryable(&self.config.retry_config)
             .sensitive(sensitive)
-            .send()
+            .send(&RedirectConfig::default())
             .await
             .map_err(|source| {
                 let path = path.as_ref().into();
@@ -910,7 +911,7 @@ impl GetClient for AzureClient {
             .with_azure_authorization(&credential, &self.config.account)
             .retryable_request()
             .sensitive(sensitive)
-            .send(ctx)
+            .send(ctx, None)
             .await
             .map_err(|source| {
                 let path = path.as_ref().into();
@@ -983,7 +984,7 @@ impl ListClient for Arc<AzureClient> {
             .with_azure_authorization(&credential, &self.config.account)
             .retryable(&self.config.retry_config)
             .sensitive(sensitive)
-            .send()
+            .send(&RedirectConfig::default())
             .await
             .map_err(|source| Error::ListRequest { source })?
             .into_body()

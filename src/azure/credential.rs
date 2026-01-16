@@ -16,13 +16,13 @@
 // under the License.
 
 use super::client::UserDelegationKey;
-use crate::RetryConfig;
 use crate::azure::STORE;
 use crate::client::builder::{HttpRequestBuilder, add_query_pairs};
 use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
 use crate::client::{CredentialProvider, HttpClient, HttpError, HttpRequest, TokenProvider};
 use crate::util::hmac_sha256;
+use crate::{RedirectConfig, RetryConfig};
 use async_trait::async_trait;
 use base64::Engine;
 use base64::prelude::{BASE64_STANDARD, BASE64_URL_SAFE_NO_PAD};
@@ -635,7 +635,7 @@ impl TokenProvider for ClientSecretOAuthProvider {
             ])
             .retryable(retry)
             .idempotent(true)
-            .send()
+            .send(&RedirectConfig::default())
             .await
             .map_err(|source| Error::TokenRequest { source })?
             .into_body()
@@ -821,7 +821,7 @@ impl TokenProvider for WorkloadIdentityOAuthProvider {
             ])
             .retryable(retry)
             .idempotent(true)
-            .send()
+            .send(&RedirectConfig::default())
             .await
             .map_err(|source| Error::TokenRequest { source })?
             .into_body()
@@ -1036,7 +1036,7 @@ impl TokenProvider for FabricTokenOAuthProvider {
             .query(&query_items)
             .retryable(retry)
             .idempotent(true)
-            .send()
+            .send(&RedirectConfig::default())
             .await
             .map_err(|source| Error::TokenRequest { source })?
             .into_body()
