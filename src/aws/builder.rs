@@ -388,7 +388,6 @@ pub enum AmazonS3ConfigKey {
     /// - `conditional_put`
     ConditionalPut,
 
-
     /// Skip signing request
     ///
     /// Supported keys:
