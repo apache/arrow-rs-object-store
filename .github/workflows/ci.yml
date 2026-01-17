@@ -205,7 +205,7 @@ jobs:
       - name: Install wasm32-wasip1
         run: rustup target add wasm32-wasip1
       - name: Build wasm32-wasip1
-        run: cargo build --all-features --target wasm32-wasip1
+        run: cargo build --features aws-no-crypto,gcp-no-crypto,azure-no-crypto,http-no-crypto,ring --target wasm32-wasip1
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - uses: actions/setup-node@v6

@@ -515,6 +515,21 @@
 //! [Apache Iceberg]: https://iceberg.apache.org/
 //! [Delta Lake]: https://delta.io/
 //!
+//! # Cryptography
+//!
+//! When using the non `*-no-crypto` features, i.e. `aws`, `gcp`, `azure`, etc... this crate makes use
+//! of [`aws-lc-rs`] for cryptography.
+//!
+//! Alternatively if you wish to use [`ring`], e.g. to support WASM targets, you should instead use the
+//! `*-no-crypto` feature flags, e.g. `aws-no-crypto`, and then enable the `ring` feature.
+//!
+//! Note: for TLS to work you will additionally need to register ring as the default rustls cryptography
+//! provider, e.g. `rustls::crypto::ring::default_provider().install_default()` in your main function.
+//!
+//! Alternatively the various builders can also accept custom [`CryptoProvider`] for maximum flexibility.
+//!
+//! [`aws-lc-rs`]: https://crates.io/crates/aws-lc-rs/
+//!
 //! # TLS Certificates
 //!
 //! Stores that use HTTPS/TLS (this is true for most cloud stores) can choose how certificates are validated.

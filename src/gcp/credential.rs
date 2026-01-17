@@ -119,21 +119,42 @@ impl ServiceAccountKey {
     }
 
     /// Parses a pem-encoded RSA key
-    #[cfg(feature = "ring")]
+    #[cfg(feature = "aws-lc-rs")]
+    pub fn from_pem(encoded: &[u8]) -> crate::Result<Self> {
+        let key = crate::client::aws_lc_rs::RsaKeyPair::from_pem(encoded)?;
+        Ok(Self::new(Box::new(key)))
+    }
+
+    /// Parses an unencrypted PKCS#8-encoded RSA private key.
+    #[cfg(feature = "aws-lc-rs")]
+    pub fn from_pkcs8(key: &[u8]) -> crate::Result<Self> {
+        let key = crate::client::aws_lc_rs::RsaKeyPair::from_pkcs8(key)?;
+        Ok(Self::new(Box::new(key)))
+    }
+
+    /// Parses an unencrypted PKCS#8-encoded RSA private key.
+    #[cfg(feature = "aws-lc-rs")]
+    pub fn from_der(key: &[u8]) -> crate::Result<Self> {
+        let key = crate::client::aws_lc_rs::RsaKeyPair::from_der(key)?;
+        Ok(Self::new(Box::new(key)))
+    }
+
+    /// Parses a pem-encoded RSA key
+    #[cfg(all(feature = "ring", not(feature = "aws-lc-rs")))]
     pub fn from_pem(encoded: &[u8]) -> crate::Result<Self> {
         let key = crate::client::ring::RsaKeyPair::from_pem(encoded)?;
         Ok(Self::new(Box::new(key)))
     }
 
     /// Parses an unencrypted PKCS#8-encoded RSA private key.
-    #[cfg(feature = "ring")]
+    #[cfg(all(feature = "ring", not(feature = "aws-lc-rs")))]
     pub fn from_pkcs8(key: &[u8]) -> crate::Result<Self> {
         let key = crate::client::ring::RsaKeyPair::from_pkcs8(key)?;
         Ok(Self::new(Box::new(key)))
     }
 
     /// Parses an unencrypted PKCS#8-encoded RSA private key.
-    #[cfg(feature = "ring")]
+    #[cfg(all(feature = "ring", not(feature = "aws-lc-rs")))]
     pub fn from_der(key: &[u8]) -> crate::Result<Self> {
         let key = crate::client::ring::RsaKeyPair::from_der(key)?;
         Ok(Self::new(Box::new(key)))
