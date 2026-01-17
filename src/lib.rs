@@ -526,7 +526,7 @@
 //! Note: for TLS to work you will additionally need to register ring as the default rustls cryptography
 //! provider, e.g. `rustls::crypto::ring::default_provider().install_default()` in your main function.
 //!
-//! Alternatively the various builders can also accept custom [`CryptoProvider`] for maximum flexibility.
+//! Alternatively the various builders can also accept custom [`client::CryptoProvider`] for maximum flexibility.
 //!
 //! [`aws-lc-rs`]: https://crates.io/crates/aws-lc-rs/
 //!
