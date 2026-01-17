@@ -541,7 +541,7 @@
 //!
 //! These could be a custom CA chain, or alternatively an alternative trust store, e.g. [`webpki-roots`].
 //!
-//! ```
+//! ```ignore-wasm32
 //! use object_store::{ClientOptions, Certificate};
 //!
 //! let mut options = ClientOptions::default().with_no_system_certificates(true);
