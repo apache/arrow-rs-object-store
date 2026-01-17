@@ -517,13 +517,26 @@
 //!
 //! # TLS Certificates
 //!
-//! Stores that use HTTPS/TLS (this is true for most cloud stores) can choose the source of their [CA]
-//! certificates. By default the system-bundled certificates are used (see
-//! [`rustls-native-certs`]). The `tls-webpki-roots` feature switch can be used to also bundle Mozilla's
-//! root certificates with the library/application (see [`webpki-roots`]).
+//! Stores that use HTTPS/TLS (this is true for most cloud stores) can choose how certificates are validated.
+//!
+//! By default [`rustls-platform-verifier`] is used to verify certificates using the system's certificate
+//! facilities. Alternatively, this functionality can be disabled using
+//! [`ClientOptions::with_no_system_certificates`] and certificates manually registered using
+//! [`ClientOptions::with_root_certificate].
+//!
+//! These could be a custom CA chain, or alternatively an alternative trust store, e.g. [`webpki-roots`].
+//!
+//! ```
+//! use object_store::{ClientOptions, Certificate};
+//!
+//! let mut options = ClientOptions::default().with_no_system_certificates(true);
+//! for root_cert in webpki_root_certs::TLS_SERVER_ROOT_CERTS {
+//!     options = options.with_root_certificate(Certificate::from_der(root_cert.as_ref()).unwrap());
+//! }
+//! ```
 //!
 //! [CA]: https://en.wikipedia.org/wiki/Certificate_authority
-//! [`rustls-native-certs`]: https://crates.io/crates/rustls-native-certs/
+//! [`rustls-platform-verifier`]: https://crates.io/crates/rustls-platform-verifier/
 //! [`webpki-roots`]: https://crates.io/crates/webpki-roots
 //!
 //! # Customizing HTTP Clients

@@ -134,6 +134,14 @@ pub enum ClientConfigKey {
     /// Supported keys:
     /// - `allow_invalid_certificates`
     AllowInvalidCertificates,
+    /// Disable certificate validation using the operating system's certificate facilities.
+    ///
+    /// See [`ClientOptions::with_no_system_certificates`]
+    ///
+    /// Supported keys:
+    ///
+    /// - `no_system_certificates`
+    NoSystemCertificates,
     /// Timeout for only the connect phase of a Client
     ///
     /// Supported keys:
@@ -228,6 +236,7 @@ impl AsRef<str> for ClientConfigKey {
         match self {
             Self::AllowHttp => "allow_http",
             Self::AllowInvalidCertificates => "allow_invalid_certificates",
+            Self::NoSystemCertificates => "disable_system_certificates",
             Self::ConnectTimeout => "connect_timeout",
             Self::DefaultContentType => "default_content_type",
             Self::Http1Only => "http1_only",
@@ -255,6 +264,7 @@ impl FromStr for ClientConfigKey {
         match s {
             "allow_http" => Ok(Self::AllowHttp),
             "allow_invalid_certificates" => Ok(Self::AllowInvalidCertificates),
+            "disable_system_certificates" => Ok(Self::NoSystemCertificates),
             "connect_timeout" => Ok(Self::ConnectTimeout),
             "default_content_type" => Ok(Self::DefaultContentType),
             "http1_only" => Ok(Self::Http1Only),
@@ -336,6 +346,7 @@ pub struct ClientOptions {
     user_agent: Option<ConfigValue<HeaderValue>>,
     #[cfg(not(target_arch = "wasm32"))]
     root_certificates: Vec<Certificate>,
+    no_system_certificates: ConfigValue<bool>,
     content_type_map: HashMap<String, String>,
     default_content_type: Option<String>,
     default_headers: Option<HeaderMap>,
@@ -370,6 +381,7 @@ impl Default for ClientOptions {
             user_agent: None,
             #[cfg(not(target_arch = "wasm32"))]
             root_certificates: Default::default(),
+            no_system_certificates: false.into(),
             content_type_map: Default::default(),
             default_content_type: None,
             default_headers: None,
@@ -407,6 +419,7 @@ impl ClientOptions {
         match key {
             ClientConfigKey::AllowHttp => self.allow_http.parse(value),
             ClientConfigKey::AllowInvalidCertificates => self.allow_insecure.parse(value),
+            ClientConfigKey::NoSystemCertificates => self.no_system_certificates.parse(value),
             ClientConfigKey::ConnectTimeout => {
                 self.connect_timeout = Some(ConfigValue::Deferred(value.into()))
             }
@@ -450,6 +463,7 @@ impl ClientOptions {
         match key {
             ClientConfigKey::AllowHttp => Some(self.allow_http.to_string()),
             ClientConfigKey::AllowInvalidCertificates => Some(self.allow_insecure.to_string()),
+            ClientConfigKey::NoSystemCertificates => Some(self.no_system_certificates.to_string()),
             ClientConfigKey::ConnectTimeout => self.connect_timeout.as_ref().map(fmt_duration),
             ClientConfigKey::DefaultContentType => self.default_content_type.clone(),
             ClientConfigKey::Http1Only => Some(self.http1_only.to_string()),
@@ -532,6 +546,7 @@ impl ClientOptions {
         self.allow_http = allow_http.into();
         self
     }
+
     /// Allows connections to invalid SSL certificates
     ///
     /// If `allow_invalid_certificates` is :
@@ -551,6 +566,20 @@ impl ClientOptions {
     /// </div>
     pub fn with_allow_invalid_certificates(mut self, allow_insecure: bool) -> Self {
         self.allow_insecure = allow_insecure.into();
+        self
+    }
+
+    /// Disable certificates provided by the system
+    ///
+    /// By default TLS certificates are validated using [`rustls-platform-verifier`],
+    /// which makes use of the system's trust store, in addition to any certificates
+    /// registered using [`Self::with_root_certificate`]. If disabled, instead [`rustls-webpki`]
+    /// is used with only the certificates registered using [`Self::with_root_certificate`].
+    ///
+    /// [`rustls-platform-verifier`]: https://crates.io/crates/rustls-platform-verifier
+    /// [`rustls-webpki`]: https://crates.io/crates/rustls-webpki
+    pub fn with_no_system_certificates(mut self, no_certs: bool) -> Self {
+        self.no_system_certificates = no_certs.into();
         self
     }
 
@@ -785,7 +814,7 @@ impl ClientOptions {
                 let certificate = reqwest::tls::Certificate::from_pem(certificate.as_bytes())
                     .map_err(map_client_error)?;
 
-                builder = builder.add_root_certificate(certificate);
+                builder = builder.tls_certs_merge(std::iter::once(certificate));
             }
 
             if let Some(proxy_excludes) = &self.proxy_excludes {
@@ -797,19 +826,15 @@ impl ClientOptions {
             builder = builder.proxy(proxy);
         }
 
-        builder = builder.tls_certs_merge(
-            self.root_certificates
-                .iter()
-                .map(|certificate| certificate.0.clone()),
-        );
+        let certs = self
+            .root_certificates
+            .iter()
+            .map(|certificate| certificate.0.clone());
 
-        #[cfg(feature = "tls-webpki-roots")]
-        {
-            let mut web_pki_roots = Vec::new();
-            for root_cert in webpki_root_certs::TLS_SERVER_ROOT_CERTS {
-                web_pki_roots.push(Certificate::from_der(root_cert.as_ref())?.0);
-            }
-            builder = builder.tls_certs_merge(web_pki_roots);
+        if self.no_system_certificates.get()? {
+            builder = builder.tls_certs_only(certs);
+        } else {
+            builder = builder.tls_certs_merge(certs);
         }
 
         if let Some(timeout) = &self.timeout {
