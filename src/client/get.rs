@@ -730,4 +730,106 @@ mod http_tests {
             "Generic HTTP error: HTTP error: request or response body error"
         );
     }
+
+    // Should detect 200 instead of 206 on range retry
+    #[tokio::test]
+    async fn test_retry_validates_partial_content_status() {
+        let mock = MockServer::new().await;
+        let retry = RetryConfig {
+            backoff: Default::default(),
+            max_retries: 3,
+            retry_timeout: Duration::from_secs(1000),
+        };
+
+        let options = ClientOptions::new().with_allow_http(true);
+        let store = HttpBuilder::new()
+            .with_client_options(options)
+            .with_retry(retry)
+            .with_url(mock.url())
+            .build()
+            .unwrap();
+
+        let path = Path::from("test");
+
+        // Deliver partial data then error
+        mock.push(
+            Response::builder()
+                .header(CONTENT_LENGTH, 10)
+                .header(ETAG, "test-etag")
+                .body(Chunked::new(vec![
+                    Ok(Bytes::from_static(b"hello")),
+                    Err(()),
+                ]))
+                .unwrap(),
+        );
+
+        // Server ignores Range and returns 200 OK instead of 206
+        mock.push_fn(|req| {
+            assert_eq!(
+                req.headers().get(RANGE).unwrap().to_str().unwrap(),
+                "bytes=5-9"
+            );
+
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(CONTENT_LENGTH, 10)
+                .header(ETAG, "test-etag")
+                .body("helloworld".to_string())
+                .unwrap()
+        });
+
+        store.get(&path).await.unwrap().bytes().await.unwrap_err();
+    }
+
+    // Should detect mismatched Content-Range header
+    #[tokio::test]
+    async fn test_retry_validates_content_range_header() {
+        let mock = MockServer::new().await;
+        let retry = RetryConfig {
+            backoff: Default::default(),
+            max_retries: 3,
+            retry_timeout: Duration::from_secs(1000),
+        };
+
+        let options = ClientOptions::new().with_allow_http(true);
+        let store = HttpBuilder::new()
+            .with_client_options(options)
+            .with_retry(retry)
+            .with_url(mock.url())
+            .build()
+            .unwrap();
+
+        let path = Path::from("test");
+
+        // Deliver partial data then error
+        mock.push(
+            Response::builder()
+                .header(CONTENT_LENGTH, 10)
+                .header(ETAG, "test-etag")
+                .body(Chunked::new(vec![
+                    Ok(Bytes::from_static(b"hello")),
+                    Err(()),
+                ]))
+                .unwrap(),
+        );
+
+        // Server returns 206 but with wrong Content-Range
+        mock.push_fn(|req| {
+            assert_eq!(
+                req.headers().get(RANGE).unwrap().to_str().unwrap(),
+                "bytes=5-9"
+            );
+
+            Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header(CONTENT_LENGTH, 5)
+                .header(ETAG, "test-etag")
+                .header(CONTENT_RANGE, "bytes 0-4/10")
+                .body("hello".to_string())
+                .unwrap()
+        });
+
+        // Returns original error since Content-Range doesn't match requested range
+        store.get(&path).await.unwrap().bytes().await.unwrap_err();
+    }
 }
