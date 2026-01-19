@@ -46,6 +46,11 @@ static DEFAULT_METADATA_ENDPOINT: &str = "http://169.254.169.254";
 /// [CopyObject](https://docs.aws.amazon.com/AmazonS3/latest/userguide/copy-object.html) for more
 /// details.
 const MAX_SINGLE_REQUEST_COPY_SIZE: u64 = 5 * 1024 * 1024 * 1024;
+/// AWS S3 rejects multipart upload parts smaller than 5 MiB, unless they are the last part of the
+/// upload. See
+/// [CompleteMultipartUpload](https://docs.aws.amazon.com/AmazonS3/latest/API/API_CompleteMultipartUpload.html)
+/// for more details.
+const MIN_PART_SIZE_BYTES: u64 = 5 * 1024 * 1024;
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, thiserror::Error)]
@@ -1242,6 +1247,13 @@ impl AmazonS3Builder {
             .map(|val| val.get())
             .transpose()?
             .unwrap_or(MAX_SINGLE_REQUEST_COPY_SIZE);
+
+        if multipart_copy_part_size < MIN_PART_SIZE_BYTES {
+            return Err(crate::Error::Generic {
+                source: "Multipart copy part size must be >= 5MB".into(),
+                store: STORE,
+            });
+        }
 
         let config = S3Config {
             region,

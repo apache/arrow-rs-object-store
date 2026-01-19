@@ -662,7 +662,7 @@ mod tests {
         let store = AmazonS3Builder::from_env()
             .with_bucket_name(bucket)
             .with_multipart_copy_threshold(5 * 1024 * 1024)
-            .with_multipart_copy_part_size(1337 * 1024)
+            .with_multipart_copy_part_size(6 * 1024 * 1024)
             .build()
             .unwrap();
 
@@ -687,7 +687,7 @@ mod tests {
     async fn small_file_copy_single_part() {
         maybe_skip_integration!();
 
-        let bucket = "test-bucket-for-multipart-copy-small";
+        let bucket = "test-bucket-for-multipart-copy-single";
         let store = AmazonS3Builder::from_env()
             .with_bucket_name(bucket)
             .with_multipart_copy_threshold(5 * 1024 * 1024) // trigger multipart copy
