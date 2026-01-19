@@ -518,17 +518,22 @@ mod tests {
 }
 #[cfg(all(test, feature = "http", not(target_arch = "wasm32")))]
 mod http_tests {
+    use super::{GetClient, GetClientExt};
+    use crate::client::header::HeaderConfig;
     use crate::client::mock_server::MockServer;
-    use crate::client::{HttpError, HttpErrorKind, HttpResponseBody};
+    use crate::client::retry::{RetryContext, RetryExt};
+    use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpErrorKind, HttpResponseBody};
     use crate::http::HttpBuilder;
     use crate::path::Path;
-    use crate::{ClientOptions, ObjectStoreExt, RetryConfig};
+    use crate::{ClientOptions, GetOptions, ObjectStoreExt, Result, RetryConfig};
+    use async_trait::async_trait;
     use bytes::Bytes;
     use futures::FutureExt;
     use http::header::{CONTENT_LENGTH, CONTENT_RANGE, ETAG, RANGE};
-    use http::{Response, StatusCode};
+    use http::{Method, Response, StatusCode};
     use hyper::body::Frame;
     use std::pin::Pin;
+    use std::sync::Arc;
     use std::task::{Context, Poll, ready};
     use std::time::Duration;
 
@@ -580,6 +585,118 @@ mod http_tests {
     impl From<Chunked> for HttpResponseBody {
         fn from(value: Chunked) -> Self {
             Self::new(value)
+        }
+    }
+
+    /// A minimal GetClient for testing, similar in structure to the cloud store clients.
+    /// Can optionally inject an error after N bytes have been read.
+    struct TestGetClient {
+        client: HttpClient,
+        base_url: String,
+        retry_config: RetryConfig,
+        /// If set, inject an error after this many bytes
+        error_after_bytes: Option<usize>,
+    }
+
+    impl TestGetClient {
+        async fn new(base_url: String, retry_config: RetryConfig) -> Self {
+            let client = HttpClient::new(reqwest::Client::new());
+            Self {
+                client,
+                base_url,
+                retry_config,
+                error_after_bytes: None,
+            }
+        }
+
+        fn with_error_after_bytes(mut self, n: usize) -> Self {
+            self.error_after_bytes = Some(n);
+            self
+        }
+    }
+
+    /// Wraps a body and injects an error after N bytes.
+    /// Simulates client-side errors (like reqwest timeouts) that can occur
+    /// even after full Content-Length has been received.
+    struct ErrorAfterBody {
+        inner: HttpResponseBody,
+        remaining: usize,
+    }
+
+    impl hyper::body::Body for ErrorAfterBody {
+        type Data = Bytes;
+        type Error = HttpError;
+
+        fn poll_frame(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+            if self.remaining == 0 {
+                return Poll::Ready(Some(Err(HttpError::new(
+                    HttpErrorKind::Unknown,
+                    ChunkedErr {},
+                ))));
+            }
+
+            let inner = Pin::new(&mut self.inner);
+            match ready!(inner.poll_frame(cx)) {
+                None => Poll::Ready(None),
+                Some(Err(e)) => Poll::Ready(Some(Err(e))),
+                Some(Ok(frame)) => {
+                    if let Some(data) = frame.data_ref() {
+                        self.remaining = self.remaining.saturating_sub(data.len());
+                    }
+                    Poll::Ready(Some(Ok(frame)))
+                }
+            }
+        }
+    }
+
+    #[async_trait]
+    impl GetClient for TestGetClient {
+        const STORE: &'static str = "TEST";
+        const HEADER_CONFIG: HeaderConfig = HeaderConfig {
+            etag_required: false,
+            last_modified_required: false,
+            version_header: None,
+            user_defined_metadata_prefix: None,
+        };
+
+        fn retry_config(&self) -> &RetryConfig {
+            &self.retry_config
+        }
+
+        async fn get_request(
+            &self,
+            ctx: &mut RetryContext,
+            path: &Path,
+            options: GetOptions,
+        ) -> Result<crate::client::HttpResponse> {
+            let url = format!("{}/{}", self.base_url, path);
+            let method = match options.head {
+                true => Method::HEAD,
+                false => Method::GET,
+            };
+
+            let response = self
+                .client
+                .request(method, url)
+                .with_get_options(options)
+                .retryable_request()
+                .send(ctx)
+                .await
+                .map_err(|e| e.error("TEST", path.to_string()))?;
+
+            if let Some(n) = self.error_after_bytes {
+                let (parts, body) = response.into_parts();
+                let wrapped = ErrorAfterBody {
+                    inner: body,
+                    remaining: n,
+                };
+                Ok(http::Response::from_parts(parts, HttpResponseBody::new(wrapped)))
+            } else {
+                Ok(response)
+            }
         }
     }
 
@@ -741,14 +858,7 @@ mod http_tests {
             retry_timeout: Duration::from_secs(1000),
         };
 
-        let options = ClientOptions::new().with_allow_http(true);
-        let store = HttpBuilder::new()
-            .with_client_options(options)
-            .with_retry(retry)
-            .with_url(mock.url())
-            .build()
-            .unwrap();
-
+        let client = Arc::new(TestGetClient::new(mock.url().to_string(), retry).await);
         let path = Path::from("test");
 
         // Deliver partial data then error
@@ -778,7 +888,52 @@ mod http_tests {
                 .unwrap()
         });
 
-        store.get(&path).await.unwrap().bytes().await.unwrap_err();
+        // Should fail - returns original error since retry got 200 instead of 206
+        client
+            .get_opts(&path, GetOptions::default())
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap_err();
+    }
+
+    // Should not retry when all bytes delivered before error
+    #[tokio::test]
+    async fn test_no_retry_when_complete() {
+        let mock = MockServer::new().await;
+        let retry = RetryConfig {
+            backoff: Default::default(),
+            max_retries: 3,
+            retry_timeout: Duration::from_secs(1000),
+        };
+
+        // Inject error after 5 bytes (the full content)
+        let client = Arc::new(
+            TestGetClient::new(mock.url().to_string(), retry)
+                .await
+                .with_error_after_bytes(5),
+        );
+        let path = Path::from("test");
+
+        // Server returns 5 bytes
+        mock.push(
+            Response::builder()
+                .header(CONTENT_LENGTH, 5)
+                .header(ETAG, "test-etag")
+                .body("hello".to_string())
+                .unwrap(),
+        );
+
+        // Error after Content-Length bytes should not trigger retry
+        let result = client
+            .get_opts(&path, GetOptions::default())
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(result.as_ref(), b"hello");
     }
 
     // Should detect mismatched Content-Range header
