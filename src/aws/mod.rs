@@ -138,9 +138,11 @@ impl Signer for AmazonS3 {
     /// # }
     /// ```
     async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
+        let crypto = self.client.config.crypto()?;
         let credential = self.credentials().get_credential().await?;
         let authorizer = AwsAuthorizer::new(&credential, "s3", &self.client.config.region)
-            .with_request_payer(self.client.config.request_payer);
+            .with_request_payer(self.client.config.request_payer)
+            .with_crypto(crypto);
 
         let path_url = self.path_url(path);
         let mut url = path_url.parse().map_err(|e| Error::Generic {
@@ -148,7 +150,7 @@ impl Signer for AmazonS3 {
             source: format!("Unable to parse url {path_url}: {e}").into(),
         })?;
 
-        authorizer.sign(method, &mut url, expires_in);
+        authorizer.sign(method, &mut url, expires_in)?;
 
         Ok(url)
     }
@@ -172,7 +174,7 @@ impl ObjectStore for AmazonS3 {
         let request = self
             .client
             .request(Method::PUT, location)
-            .with_payload(payload)
+            .with_payload(payload)?
             .with_attributes(attributes)
             .with_tags(tags)
             .with_extensions(extensions)
