@@ -1304,6 +1304,9 @@ mod tests {
             "abfss://file_system.bar@account.dfs.core.windows.net/",
             "https://blob.mydomain/",
             "https://blob.foo.dfs.core.windows.net/",
+            "https://ab000000000000000000000000000000.zcd.dfs.fabric.microsoft.com", // xy mismatch (ab != cd)
+            "https://ab00000000000000000000000000000.zab.dfs.fabric.microsoft.com",  // workspaceid 31 chars
+            "https://ab000000000000000000000000000000.zabc.dfs.fabric.microsoft.com", // xy 3 chars
         ];
         let mut builder = MicrosoftAzureBuilder::new();
         for case in err_cases {
