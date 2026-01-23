@@ -26,7 +26,9 @@ use crate::aws::{
 };
 use crate::client::{HttpConnector, TokenCredentialProvider, http_connector};
 use crate::config::ConfigValue;
-use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
+use crate::{
+    ClientConfigKey, ClientOptions, RedirectConfig, Result, RetryConfig, StaticCredentialProvider,
+};
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use itertools::Itertools;
@@ -141,6 +143,8 @@ pub struct AmazonS3Builder {
     url: Option<String>,
     /// Retry config
     retry_config: RetryConfig,
+    /// Redirect config
+    redirect_config: RedirectConfig,
     /// When set to true, fallback to IMDSv1
     imdsv1_fallback: ConfigValue<bool>,
     /// When set to true, virtual hosted style request has to be used
@@ -875,6 +879,12 @@ impl AmazonS3Builder {
     /// Set the retry configuration
     pub fn with_retry(mut self, retry_config: RetryConfig) -> Self {
         self.retry_config = retry_config;
+        self
+    }
+
+    /// Set the redirect configuration
+    pub fn with_redirect(mut self, redirect_config: RedirectConfig) -> Self {
+        self.redirect_config = redirect_config;
         self
     }
 
