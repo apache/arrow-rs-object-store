@@ -490,7 +490,7 @@ mod http_tests {
     use crate::{ClientOptions, ObjectStoreExt, RetryConfig};
     use bytes::Bytes;
     use futures::FutureExt;
-    use http::header::{CONTENT_LENGTH, CONTENT_RANGE, ETAG, RANGE};
+    use http::header::{CONNECTION, CONTENT_LENGTH, CONTENT_RANGE, ETAG, RANGE};
     use http::{Response, StatusCode};
     use hyper::body::Frame;
     use std::pin::Pin;
