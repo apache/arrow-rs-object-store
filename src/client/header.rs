@@ -71,7 +71,14 @@ pub(crate) enum Error {
 }
 
 /// Extracts a PutResult from the provided [`HeaderMap`]
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+#[cfg(any(
+    feature = "aws",
+    feature = "gcp",
+    feature = "azure",
+    feature = "aws-aws-lc",
+    feature = "gcp-aws-lc",
+    feature = "azure-aws-lc"
+))]
 pub(crate) fn get_put_result(
     headers: &HeaderMap,
     version: &str,
@@ -82,7 +89,14 @@ pub(crate) fn get_put_result(
 }
 
 /// Extracts a optional version from the provided [`HeaderMap`]
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+#[cfg(any(
+    feature = "aws",
+    feature = "gcp",
+    feature = "azure",
+    feature = "aws-aws-lc",
+    feature = "gcp-aws-lc",
+    feature = "azure-aws-lc"
+))]
 pub(crate) fn get_version(headers: &HeaderMap, version: &str) -> Result<Option<String>, Error> {
     Ok(match headers.get(version) {
         Some(x) => Some(
