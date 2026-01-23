@@ -17,7 +17,7 @@
 
 use std::future::Future;
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 
 /// A temporary authentication token with an associated expiry
 #[derive(Debug, Clone)]
@@ -33,7 +33,7 @@ pub(crate) struct TemporaryToken<T> {
 /// [`TemporaryToken`] based on its expiry
 #[derive(Debug)]
 pub(crate) struct TokenCache<T> {
-    cache: Mutex<Option<(TemporaryToken<T>, Instant)>>,
+    cache: RwLock<Option<(TemporaryToken<T>, Instant)>>,
     min_ttl: Duration,
     fetch_backoff: Duration,
 }
@@ -50,7 +50,7 @@ impl<T> Default for TokenCache<T> {
     }
 }
 
-impl<T: Clone + Send> TokenCache<T> {
+impl<T: Clone + Send + Sync> TokenCache<T> {
     /// Override the minimum remaining TTL for a cached token to be used
     #[cfg(any(feature = "aws", feature = "gcp"))]
     pub(crate) fn with_min_ttl(self, min_ttl: Duration) -> Self {
@@ -63,7 +63,27 @@ impl<T: Clone + Send> TokenCache<T> {
         Fut: Future<Output = Result<TemporaryToken<T>, E>> + Send,
     {
         let now = Instant::now();
-        let mut locked = self.cache.lock().await;
+        {
+            let read_guard = self.cache.read().await;
+
+            if let Some((cached, fetched_at)) = read_guard.as_ref() {
+                match cached.expiry {
+                    Some(ttl) => {
+                        if ttl.checked_duration_since(now).unwrap_or_default() > self.min_ttl ||
+                        // if we've recently attempted to fetch this token and it's not actually
+                        // expired, we'll wait to re-fetch it and return the cached one
+                        (fetched_at.elapsed() < self.fetch_backoff && ttl.checked_duration_since(now).is_some())
+                        {
+                            return Ok(cached.token.clone());
+                        }
+                    }
+                    None => return Ok(cached.token.clone()),
+                }
+            }
+        }
+
+        // We have to check again to see if anyone else has already updated the token
+        let mut locked = self.cache.write().await;
 
         if let Some((cached, fetched_at)) = locked.as_ref() {
             match cached.expiry {
