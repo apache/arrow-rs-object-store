@@ -935,28 +935,29 @@ pub(crate) fn chunked_stream(
 ) -> BoxStream<'static, Result<Bytes, super::Error>> {
     futures::stream::once(async move {
         let (file, path) = maybe_spawn_blocking(move || {
-            file.seek(SeekFrom::Start(range.start as _)).map_err(|err| {
-                if let Ok(m) = file.metadata() {
-                    if range.start >= m.len() {
-                        return Error::InvalidRange {
-                            source: InvalidGetRange::StartTooLarge {
-                                requested: range.start,
-                                length: m.len(),
-                            },
-                        };
+            file.seek(SeekFrom::Start(range.start as _))
+                .map_err(|err| {
+                    if let Ok(m) = file.metadata() {
+                        if range.start >= m.len() {
+                            return Error::InvalidRange {
+                                source: InvalidGetRange::StartTooLarge {
+                                    requested: range.start,
+                                    length: m.len(),
+                                },
+                            };
+                        }
+                        if m.is_dir() {
+                            return Error::NotFound {
+                                path: path.clone(),
+                                source: io::Error::new(ErrorKind::NotFound, "is directory"),
+                            };
+                        }
                     }
-                    if m.is_dir() {
-                        return Error::NotFound {
-                            path: path.clone(),
-                            source: io::Error::new(ErrorKind::NotFound, "is directory"),
-                        };
+                    Error::Seek {
+                        source: err,
+                        path: path.clone(),
                     }
-                }
-                Error::Seek {
-                    source: err,
-                    path: path.clone(),
-                }
-            })?;
+                })?;
             Ok((file, path))
         })
         .await?;
@@ -995,11 +996,7 @@ pub(crate) fn chunked_stream(
     .boxed()
 }
 
-pub(crate) fn read_range(
-    file: &mut File,
-    path: &PathBuf,
-    range: Range<u64>,
-) -> Result<Bytes> {
+pub(crate) fn read_range(file: &mut File, path: &PathBuf, range: Range<u64>) -> Result<Bytes> {
     file.seek(SeekFrom::Start(range.start)).map_err(|err| {
         if let Ok(m) = file.metadata() {
             if range.start >= m.len() {
