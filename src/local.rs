@@ -996,7 +996,11 @@ pub(crate) fn chunked_stream(
     .boxed()
 }
 
-pub(crate) fn read_range(file: &mut File, path: &PathBuf, range: Range<u64>) -> Result<Bytes> {
+pub(crate) fn read_range(
+    file: &mut File,
+    path: &std::path::Path,
+    range: Range<u64>,
+) -> Result<Bytes> {
     file.seek(SeekFrom::Start(range.start)).map_err(|err| {
         if let Ok(m) = file.metadata() {
             if range.start >= m.len() {
@@ -1009,14 +1013,14 @@ pub(crate) fn read_range(file: &mut File, path: &PathBuf, range: Range<u64>) -> 
             }
             if m.is_dir() {
                 return super::Error::from(Error::NotFound {
-                    path: path.clone(),
+                    path: path.to_path_buf(),
                     source: io::Error::new(ErrorKind::NotFound, "is directory"),
                 });
             }
         }
         super::Error::from(Error::Seek {
             source: err,
-            path: path.clone(),
+            path: path.to_path_buf(),
         })
     })?;
 
@@ -1026,14 +1030,14 @@ pub(crate) fn read_range(file: &mut File, path: &PathBuf, range: Range<u64>) -> 
         if let Ok(m) = file.metadata() {
             if m.is_dir() {
                 return super::Error::from(Error::NotFound {
-                    path: path.clone(),
+                    path: path.to_path_buf(),
                     source: io::Error::new(ErrorKind::NotFound, "is directory"),
                 });
             }
         }
         super::Error::from(Error::UnableToReadBytes {
             source: err,
-            path: path.clone(),
+            path: path.to_path_buf(),
         })
     })? as u64;
 
@@ -1057,7 +1061,7 @@ pub(crate) fn read_range(file: &mut File, path: &PathBuf, range: Range<u64>) -> 
         let expected = range.end.min(file_len) - range.start;
         if read != expected {
             return Err(Error::OutOfRange {
-                path: path.clone(),
+                path: path.to_path_buf(),
                 expected,
                 actual: read,
             }
