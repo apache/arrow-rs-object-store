@@ -444,10 +444,20 @@ impl ObjectStore for LocalFileSystem {
         let ranges = ranges.to_vec();
         maybe_spawn_blocking(move || {
             // Vectored IO might be faster
-            let (mut file, metadata) = open_file(&path)?;
+            // We do not read the metadata here, but error in `read_range` if necessary
+            let mut file = File::open(&path).map_err(|e| match e.kind() {
+                ErrorKind::NotFound => Error::NotFound {
+                    path: path.clone(),
+                    source: e,
+                },
+                _ => Error::UnableToOpenFile {
+                    path: path.clone(),
+                    source: e,
+                },
+            })?;
             ranges
                 .into_iter()
-                .map(|r| read_range(&mut file, metadata.len(), &path, r))
+                .map(|r| read_range(&mut file, &path, r))
                 .collect()
         })
         .await
@@ -925,11 +935,28 @@ pub(crate) fn chunked_stream(
 ) -> BoxStream<'static, Result<Bytes, super::Error>> {
     futures::stream::once(async move {
         let (file, path) = maybe_spawn_blocking(move || {
-            file.seek(SeekFrom::Start(range.start as _))
-                .map_err(|source| Error::Seek {
-                    source,
+            file.seek(SeekFrom::Start(range.start as _)).map_err(|err| {
+                if let Ok(m) = file.metadata() {
+                    if range.start >= m.len() {
+                        return Error::InvalidRange {
+                            source: InvalidGetRange::StartTooLarge {
+                                requested: range.start,
+                                length: m.len(),
+                            },
+                        };
+                    }
+                    if m.is_dir() {
+                        return Error::NotFound {
+                            path: path.clone(),
+                            source: io::Error::new(ErrorKind::NotFound, "is directory"),
+                        };
+                    }
+                }
+                Error::Seek {
+                    source: err,
                     path: path.clone(),
-                })?;
+                }
+            })?;
             Ok((file, path))
         })
         .await?;
@@ -970,44 +997,75 @@ pub(crate) fn chunked_stream(
 
 pub(crate) fn read_range(
     file: &mut File,
-    file_len: u64,
     path: &PathBuf,
     range: Range<u64>,
 ) -> Result<Bytes> {
-    // If none of the range is satisfiable we should error, e.g. if the start offset is beyond the
-    // extents of the file
-    if range.start >= file_len {
-        return Err(Error::InvalidRange {
-            source: InvalidGetRange::StartTooLarge {
-                requested: range.start,
-                length: file_len,
-            },
+    file.seek(SeekFrom::Start(range.start)).map_err(|err| {
+        if let Ok(m) = file.metadata() {
+            if range.start >= m.len() {
+                return super::Error::from(Error::InvalidRange {
+                    source: InvalidGetRange::StartTooLarge {
+                        requested: range.start,
+                        length: m.len(),
+                    },
+                });
+            }
+            if m.is_dir() {
+                return super::Error::from(Error::NotFound {
+                    path: path.clone(),
+                    source: io::Error::new(ErrorKind::NotFound, "is directory"),
+                });
+            }
         }
-        .into());
-    }
-
-    // Don't read past end of file
-    let to_read = range.end.min(file_len) - range.start;
-
-    file.seek(SeekFrom::Start(range.start)).map_err(|source| {
-        let path = path.into();
-        Error::Seek { source, path }
+        super::Error::from(Error::Seek {
+            source: err,
+            path: path.clone(),
+        })
     })?;
 
-    let mut buf = Vec::with_capacity(to_read as usize);
-    let read = file.take(to_read).read_to_end(&mut buf).map_err(|source| {
-        let path = path.into();
-        Error::UnableToReadBytes { source, path }
+    let requested = range.end - range.start;
+    let mut buf = Vec::with_capacity(requested.min(64 * 1024) as usize);
+    let read = file.take(requested).read_to_end(&mut buf).map_err(|err| {
+        if let Ok(m) = file.metadata() {
+            if m.is_dir() {
+                return super::Error::from(Error::NotFound {
+                    path: path.clone(),
+                    source: io::Error::new(ErrorKind::NotFound, "is directory"),
+                });
+            }
+        }
+        super::Error::from(Error::UnableToReadBytes {
+            source: err,
+            path: path.clone(),
+        })
     })? as u64;
 
-    if read != to_read {
-        let error = Error::OutOfRange {
-            path: path.into(),
-            expected: to_read,
-            actual: read,
-        };
+    if read != requested {
+        let metadata = file.metadata().map_err(|e| Error::Metadata {
+            source: e.into(),
+            path: path.to_string_lossy().to_string(),
+        })?;
+        let file_len = metadata.len();
 
-        return Err(error.into());
+        if range.start >= file_len {
+            return Err(Error::InvalidRange {
+                source: InvalidGetRange::StartTooLarge {
+                    requested: range.start,
+                    length: file_len,
+                },
+            }
+            .into());
+        }
+
+        let expected = range.end.min(file_len) - range.start;
+        if read != expected {
+            return Err(Error::OutOfRange {
+                path: path.clone(),
+                expected,
+                actual: read,
+            }
+            .into());
+        }
     }
 
     Ok(buf.into())
