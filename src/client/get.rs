@@ -592,7 +592,7 @@ mod http_tests {
 
         let b = store.get_range(&path, 1..5).await.unwrap();
         assert_eq!(b.as_ref(), b"ello");
-        
+
         // NOTE: if debug_assertions is true, hyper panics with response content length header
         // value does not match the length of response body.
         if !cfg!(debug_assertions) {
@@ -638,7 +638,10 @@ mod http_tests {
             );
 
             mock.push_fn(|req| {
-                assert_eq!(req.headers().get(RANGE).unwrap().to_str().unwrap(), "bytes=8-10");
+                assert_eq!(
+                    req.headers().get(RANGE).unwrap().to_str().unwrap(),
+                    "bytes=8-10"
+                );
 
                 Response::builder()
                     .status(StatusCode::PARTIAL_CONTENT)
@@ -652,7 +655,7 @@ mod http_tests {
             let ret = store.get_range(&path, 6..11).await.unwrap();
             assert_eq!(ret.as_ref(), b"World");
         }
-        
+
         // Should retry with range
         mock.push(
             Response::builder()
