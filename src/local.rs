@@ -1025,7 +1025,7 @@ pub(crate) fn read_range(
     })?;
 
     let requested = range.end - range.start;
-    let mut buf = Vec::with_capacity(requested.min(64 * 1024) as usize);
+    let mut buf = Vec::with_capacity(requested as usize);
     let read = file.take(requested).read_to_end(&mut buf).map_err(|err| {
         if let Ok(m) = file.metadata() {
             if m.is_dir() {
