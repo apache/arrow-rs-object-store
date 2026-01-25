@@ -23,12 +23,6 @@
 //!
 //! Unused blocks will automatically be dropped after 7 days.
 //!
-//! ## Paginated listing with offsets
-//!
-//! Azure supports the [`PaginatedListStore`] trait with offset-based listing via the `startFrom`
-//! parameter (requires API version 2026-02-06+). Note that Azure's `startFrom` is **inclusive**,
-//! meaning the specified blob is included in the results, unlike S3/GCP where `start-after` is
-//! exclusive.
 use crate::{
     CopyMode, CopyOptions, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
     ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
