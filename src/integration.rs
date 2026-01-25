@@ -1264,3 +1264,124 @@ pub async fn list_paginated(storage: &dyn ObjectStore, list: &dyn PaginatedListS
     );
     assert!(ret.page_token.is_none());
 }
+
+/// Tests that [`ObjectStore::list_with_offset`] returns an exclusive list
+/// that does not include the offset value itself.
+/// This is needed because some object stores (i.e. Azure) return inclusive results,
+/// while AWS S3 and GCP return exclusive results.
+pub async fn list_with_offset_exclusivity(storage: &DynObjectStore) {
+    delete_fixtures(storage).await;
+
+    // Create a set of test files with predictable ordering
+    let files = vec![
+        Path::from("test_offset/file_a.txt"),
+        Path::from("test_offset/file_b.txt"),
+        Path::from("test_offset/file_c.txt"),
+        Path::from("test_offset/file_d.txt"),
+        Path::from("test_offset/file_e.txt"),
+    ];
+
+    let data = Bytes::from("test data");
+    for file in &files {
+        storage.put(file, data.clone().into()).await.unwrap();
+    }
+
+    // Test 1: Offset at file_b, should return c, d, e but NOT b
+    let offset = Path::from("test_offset/file_b.txt");
+    let result: Vec<Path> = storage
+        .list_with_offset(Some(&Path::from("test_offset")), &offset)
+        .map_ok(|meta| meta.location)
+        .try_collect()
+        .await
+        .unwrap();
+
+    // Verify that the offset file (file_b) is NOT in the results
+    assert!(
+        !result.contains(&offset),
+        "list_with_offset should not include the offset value itself. Found {:?} in results: {:?}",
+        offset,
+        result
+    );
+
+    // Verify that only files after the offset are returned
+    let expected = vec![
+        Path::from("test_offset/file_c.txt"),
+        Path::from("test_offset/file_d.txt"),
+        Path::from("test_offset/file_e.txt"),
+    ];
+    assert_eq!(
+        result.len(),
+        expected.len(),
+        "Expected {} files after offset, got {}",
+        expected.len(),
+        result.len()
+    );
+    for file in &expected {
+        assert!(
+            result.contains(file),
+            "Expected file {:?} to be in results",
+            file
+        );
+    }
+
+    // Test 2: Offset at file_a, should return b, c, d, e but NOT a
+    let offset = Path::from("test_offset/file_a.txt");
+    let result: Vec<Path> = storage
+        .list_with_offset(Some(&Path::from("test_offset")), &offset)
+        .map_ok(|meta| meta.location)
+        .try_collect()
+        .await
+        .unwrap();
+
+    assert!(
+        !result.contains(&offset),
+        "list_with_offset should not include the offset value itself. Found {:?} in results: {:?}",
+        offset,
+        result
+    );
+    assert_eq!(result.len(), 4, "Expected 4 files after first file");
+
+    // Test 3: Offset at file_e (last file), should return empty list
+    let offset = Path::from("test_offset/file_e.txt");
+    let result: Vec<Path> = storage
+        .list_with_offset(Some(&Path::from("test_offset")), &offset)
+        .map_ok(|meta| meta.location)
+        .try_collect()
+        .await
+        .unwrap();
+
+    assert!(
+        result.is_empty(),
+        "list_with_offset with offset at last file should return empty list, got: {:?}",
+        result
+    );
+
+    // Test 4: Test without prefix - offset should still be exclusive
+    let offset = Path::from("test_offset/file_c.txt");
+    let result: Vec<Path> = storage
+        .list_with_offset(None, &offset)
+        .map_ok(|meta| meta.location)
+        .try_collect()
+        .await
+        .unwrap();
+
+    assert!(
+        !result.contains(&offset),
+        "list_with_offset without prefix should not include the offset value itself. Found {:?} in results: {:?}",
+        offset,
+        result
+    );
+
+    // Verify only files after file_c are included
+    let expected = vec![
+        Path::from("test_offset/file_d.txt"),
+        Path::from("test_offset/file_e.txt"),
+    ];
+    assert_eq!(result.len(), expected.len());
+    for file in &expected {
+        assert!(result.contains(file), "Expected file {:?} in results", file);
+    }
+
+    // Clean up
+    delete_fixtures(storage).await;
+}

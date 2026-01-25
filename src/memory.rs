@@ -548,6 +548,7 @@ mod tests {
         let integration = InMemory::new();
 
         put_get_delete_list(&integration).await;
+        list_with_offset_exclusivity(&integration).await;
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
@@ -564,6 +565,7 @@ mod tests {
         let integration: Box<dyn ObjectStore> = Box::new(InMemory::new());
 
         put_get_delete_list(&integration).await;
+        list_with_offset_exclusivity(&integration).await;
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
@@ -577,6 +579,7 @@ mod tests {
         let integration: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
 
         put_get_delete_list(&integration).await;
+        list_with_offset_exclusivity(&integration).await;
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
