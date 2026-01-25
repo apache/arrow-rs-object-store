@@ -1075,7 +1075,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ///
     /// Some stores, such as S3 and GCS, may be able to push `offset` down to reduce
     /// the number of network requests required.
-    /// 
+    ///
     /// This returns an exclusive offset, i.e. objects at exactly `offset` will not be included.
     ///
     /// Note: the order of returned [`ObjectMeta`] is not guaranteed
