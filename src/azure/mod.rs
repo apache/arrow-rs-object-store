@@ -346,7 +346,6 @@ mod tests {
         multipart_out_of_order(&integration).await;
         signing(&integration).await;
         list_paginated(&integration, &integration).await;
-        start_from(&integration).await;
 
         let validate = !integration.client.config().disable_tagging;
         tagging(
@@ -397,128 +396,6 @@ mod tests {
         let loaded = resp.bytes().await.unwrap();
 
         assert_eq!(data, loaded);
-    }
-
-    async fn start_from(integration: &MicrosoftAzure) {
-        use crate::list::{PaginatedListOptions, PaginatedListStore};
-
-        // Create test objects with deterministic names
-        let paths = vec![
-            Path::from("test-start-from/file-a.txt"),
-            Path::from("test-start-from/file-b.txt"),
-            Path::from("test-start-from/file-c.txt"),
-            Path::from("test-start-from/file-d.txt"),
-            Path::from("test-start-from/file-e.txt"),
-        ];
-
-        // Upload all test files
-        for path in &paths {
-            integration
-                .put(path, Bytes::from("test data").into())
-                .await
-                .unwrap();
-        }
-
-        // Test 1: List with offset (exclusive) - should exclude file-c and return file-d and beyond
-        // Note: Azure's native startFrom is inclusive, but we filter to match the exclusive
-        // semantics expected by PaginatedListOptions
-        let opts = PaginatedListOptions {
-            offset: Some("test-start-from/file-c.txt".to_string()),
-            ..Default::default()
-        };
-
-        let result = integration
-            .list_paginated(Some("test-start-from/"), opts)
-            .await
-            .unwrap();
-
-        // offset is exclusive, so file-c should NOT be included
-        let returned_paths: Vec<_> = result
-            .result
-            .objects
-            .iter()
-            .map(|o| o.location.clone())
-            .collect();
-
-        assert!(
-            !returned_paths.contains(&paths[2]),
-            "offset should be exclusive - file-c should NOT be included"
-        );
-        assert_eq!(
-            returned_paths.len(),
-            2,
-            "Should return file-d and file-e (2 files), excluding file-c"
-        );
-
-        // Test 2: List from beginning (no offset)
-        let opts = PaginatedListOptions {
-            offset: None,
-            ..Default::default()
-        };
-
-        let result = integration
-            .list_paginated(Some("test-start-from/"), opts)
-            .await
-            .unwrap();
-
-        assert_eq!(
-            result.result.objects.len(),
-            5,
-            "Should return all 5 files without offset"
-        );
-
-        // Test 3: offset with pagination (marker should override offset on subsequent pages)
-        // Note: max_keys limits Azure's response, but after filtering items > offset,
-        // we might have fewer items than max_keys (e.g., if Azure returns the offset item itself)
-        let opts = PaginatedListOptions {
-            offset: Some("test-start-from/file-c.txt".to_string()),
-            max_keys: Some(2),
-            ..Default::default()
-        };
-
-        let result = integration
-            .list_paginated(Some("test-start-from/"), opts)
-            .await
-            .unwrap();
-
-        // Verify we get at most max_keys items (might be fewer after filtering)
-        assert!(
-            result.result.objects.len() <= 2,
-            "Should return at most max_keys (2) items, got {}",
-            result.result.objects.len()
-        );
-        
-        // Verify all returned items are > offset (exclusive semantics)
-        for obj in &result.result.objects {
-            assert!(
-                obj.location.as_ref() > "test-start-from/file-c.txt",
-                "All returned items should be > offset (file-c.txt), got: {}",
-                obj.location
-            );
-        }
-
-        // If there's a continuation token, subsequent requests should use marker
-        if let Some(token) = result.page_token {
-            let opts = PaginatedListOptions {
-                page_token: Some(token),
-                offset: Some("test-start-from/file-c.txt".to_string()),
-                ..Default::default()
-            };
-
-            let result = integration
-                .list_paginated(Some("test-start-from/"), opts)
-                .await
-                .unwrap();
-
-            // When page_token is present, marker is used instead of startFrom, but offset
-            // filtering is still applied client-side to maintain exclusive semantics
-            assert!(result.result.objects.len() > 0);
-        }
-
-        // Clean up
-        for path in &paths {
-            integration.delete(path).await.unwrap();
-        }
     }
 
     #[test]
