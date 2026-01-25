@@ -939,16 +939,10 @@ impl ListClient for Arc<AzureClient> {
         prefix: Option<&str>,
         opts: PaginatedListOptions,
     ) -> Result<PaginatedListResult> {
-        if opts.offset.is_some() {
-            return Err(crate::Error::NotSupported {
-                source: "Azure does not support listing with offsets".into(),
-            });
-        }
-
         let credential = self.get_credential().await?;
         let url = self.config.path_url(&Path::default());
 
-        let mut query = Vec::with_capacity(5);
+        let mut query = Vec::with_capacity(6);
         query.push(("restype", "container"));
         query.push(("comp", "list"));
 
@@ -962,6 +956,10 @@ impl ListClient for Arc<AzureClient> {
 
         if let Some(token) = &opts.page_token {
             query.push(("marker", token.as_ref()))
+        } else if let Some(offset) = &opts.offset {
+            // startFrom is only used on the first request, subsequent requests use marker
+            // Note: startFrom is inclusive (unlike S3/GCP's start-after which is exclusive)
+            query.push(("startFrom", offset.as_ref()))
         }
 
         let max_keys_str;
@@ -995,6 +993,19 @@ impl ListClient for Arc<AzureClient> {
             .map_err(|source| Error::InvalidListResponse { source })?;
 
         let token = response.next_marker.take().filter(|x| !x.is_empty());
+
+        // Azure's startFrom is inclusive, so when an offset is provided, we need to filter out
+        // the offset item itself to match the exclusive semantics expected by ObjectStore::list_with_offset.
+        // Since Azure returns items in lexicographic order and startFrom is inclusive, the first item
+        // (if any) will be exactly == offset (if it exists), or > offset (if it doesn't exist).
+        // So we can efficiently remove just the first item if it equals the offset.
+        if let Some(offset) = &opts.offset {
+            if let Some(first) = response.blobs.blobs.first() {
+                if first.name == *offset {
+                    response.blobs.blobs.remove(0);
+                }
+            }
+        }
 
         Ok(PaginatedListResult {
             result: to_list_result(response, prefix)?,
