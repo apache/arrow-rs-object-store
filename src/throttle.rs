@@ -21,6 +21,7 @@ use std::ops::Range;
 use std::{convert::TryInto, sync::Arc};
 
 use crate::multipart::{MultipartStore, PartId};
+use crate::util::sleep;
 use crate::{CopyOptions, GetOptions, RenameOptions, UploadPart};
 use crate::{
     GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
@@ -98,13 +99,6 @@ pub struct ThrottleConfig {
     /// Sleeping is done before the underlying store is called and independently of the success of
     /// the operation.
     pub wait_put_per_call: Duration,
-}
-
-/// Sleep only if non-zero duration
-async fn sleep(duration: Duration) {
-    if !duration.is_zero() {
-        tokio::time::sleep(duration).await
-    }
 }
 
 /// Store wrapper that wraps an inner store with some `sleep` calls.
@@ -369,8 +363,13 @@ mod tests {
     use crate::ObjectStoreExt;
     use crate::{integration::*, memory::InMemory};
     use futures::TryStreamExt;
-    use tokio::time::Duration;
-    use tokio::time::Instant;
+    use web_time::{Duration, Instant};
+
+    #[cfg(not(target_arch = "wasm32"))]
+    use tokio::test as async_test;
+
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen_test::wasm_bindgen_test as async_test;
 
     const WAIT_TIME: Duration = Duration::from_millis(100);
     const ZERO: Duration = Duration::from_millis(0); // Duration::default isn't constant
@@ -388,7 +387,7 @@ mod tests {
         };
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn throttle_test() {
         let inner = InMemory::new();
         let store = ThrottledStore::new(inner, ThrottleConfig::default());
@@ -402,7 +401,7 @@ mod tests {
         multipart(&store, &store).await;
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn delete_test() {
         let inner = InMemory::new();
         let store = ThrottledStore::new(inner, ThrottleConfig::default());
@@ -417,9 +416,9 @@ mod tests {
         assert_bounds!(measure_delete(&store, Some(10)).await, 1);
     }
 
-    #[tokio::test]
+    #[async_test]
     // macos github runner is so slow it can't complete within WAIT_TIME*2
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_arch = "wasm32"))]
     async fn delete_stream_test() {
         let inner = InMemory::new();
         let store = ThrottledStore::new(inner, ThrottleConfig::default());
@@ -432,9 +431,9 @@ mod tests {
         assert_bounds!(measure_delete_stream(&store, 10).await, 10);
     }
 
-    #[tokio::test]
+    #[async_test]
     // macos github runner is so slow it can't complete within WAIT_TIME*2
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_arch = "wasm32"))]
     async fn get_test() {
         let inner = InMemory::new();
         let store = ThrottledStore::new(inner, ThrottleConfig::default());
@@ -461,9 +460,7 @@ mod tests {
         assert_bounds!(measure_get(&store, Some(2)).await, 3);
     }
 
-    #[tokio::test]
-    // macos github runner is so slow it can't complete within WAIT_TIME*2
-    #[cfg(target_os = "linux")]
+    #[async_test]
     async fn list_test() {
         let inner = InMemory::new();
         let store = ThrottledStore::new(inner, ThrottleConfig::default());
@@ -488,9 +485,7 @@ mod tests {
         assert_bounds!(measure_list(&store, 2).await, 3);
     }
 
-    #[tokio::test]
-    // macos github runner is so slow it can't complete within WAIT_TIME*2
-    #[cfg(target_os = "linux")]
+    #[async_test]
     async fn list_with_delimiter_test() {
         let inner = InMemory::new();
         let store = ThrottledStore::new(inner, ThrottleConfig::default());
@@ -515,7 +510,7 @@ mod tests {
         assert_bounds!(measure_list_with_delimiter(&store, 2).await, 3);
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn put_test() {
         let inner = InMemory::new();
         let store = ThrottledStore::new(inner, ThrottleConfig::default());
@@ -595,7 +590,7 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_arch = "wasm32"))]
     async fn measure_get(store: &ThrottledStore<InMemory>, n_bytes: Option<usize>) -> Duration {
         let path = place_test_object(store, n_bytes).await;
 
@@ -605,6 +600,7 @@ mod tests {
             // need to consume bytes to provoke sleep times
             let s = match res.unwrap().payload {
                 GetResultPayload::Stream(s) => s,
+                #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
                 GetResultPayload::File(_, _) => unimplemented!(),
             };
 

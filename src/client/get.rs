@@ -222,7 +222,7 @@ impl<T: GetClient> GetContext<T> {
                                 sleep.as_secs_f32()
                             );
 
-                            tokio::time::sleep(sleep).await;
+                            crate::util::sleep(sleep).await;
 
                             let options = GetOptions {
                                 range: Some(GetRange::Bounded(range.clone())),

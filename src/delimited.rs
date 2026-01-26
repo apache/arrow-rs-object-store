@@ -188,6 +188,12 @@ mod tests {
 
     use super::*;
 
+    #[cfg(not(target_arch = "wasm32"))]
+    use tokio::test as async_test;
+
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen_test::wasm_bindgen_test as async_test;
+
     #[test]
     fn test_delimiter() {
         let mut delimiter = LineDelimiter::new();
@@ -228,7 +234,7 @@ mod tests {
         assert!(delimiter.next().is_none());
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_delimiter_stream() {
         let input = vec!["hello\nworld\nbin", "go\ncup", "cakes"];
         let input_stream = futures::stream::iter(input.into_iter().map(|s| Ok(Bytes::from(s))));
@@ -244,7 +250,7 @@ mod tests {
             ]
         )
     }
-    #[tokio::test]
+    #[async_test]
     async fn test_delimiter_unfold_stream() {
         let input_stream: BoxStream<'static, Result<Bytes>> = futures::stream::unfold(
             VecDeque::from(["hello\nworld\nbin", "go\ncup", "cakes"]),

@@ -247,10 +247,14 @@ mod tests {
     use crate::memory::InMemory;
     use futures::stream::StreamExt;
     use std::pin::Pin;
-    use std::time::Duration;
-    use tokio::time::timeout;
 
-    #[tokio::test]
+    #[cfg(not(target_arch = "wasm32"))]
+    use tokio::test as async_test;
+
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen_test::wasm_bindgen_test as async_test;
+
+    #[async_test]
     async fn limit_test() {
         let max_requests = 10;
         let memory = InMemory::new();
@@ -270,11 +274,14 @@ mod tests {
             streams.push(stream);
         }
 
-        let t = Duration::from_millis(20);
-
         // Expect to not be able to make another request
-        let fut = integration.list(None).collect::<Vec<_>>();
-        assert!(timeout(t, fut).await.is_err());
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // tokio timeout will panic on WASM
+            let t = std::time::Duration::from_millis(20);
+            let fut = integration.list(None).collect::<Vec<_>>();
+            assert!(tokio::time::timeout(t, fut).await.is_err());
+        }
 
         // Drop one of the streams
         streams.pop();

@@ -16,8 +16,8 @@
 // under the License.
 
 use std::future::Future;
-use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+use web_time::{Duration, Instant};
 
 /// A temporary authentication token with an associated expiry
 #[derive(Debug, Clone)]
@@ -116,7 +116,7 @@ mod test {
         let _ = cache.get_or_insert_with(get_token).await.unwrap();
         assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
 
-        tokio::time::sleep(Duration::from_millis(2)).await;
+        crate::util::sleep(Duration::from_millis(2)).await;
 
         // Token is expired, so should fetch again
         let _ = cache.get_or_insert_with(get_token).await.unwrap();
@@ -146,7 +146,7 @@ mod test {
         let _ = cache.get_or_insert_with(get_token).await.unwrap();
         assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
 
-        tokio::time::sleep(Duration::from_millis(2)).await;
+        crate::util::sleep(Duration::from_millis(2)).await;
 
         // Should fetch, since we've passed fetch_backoff
         let _ = cache.get_or_insert_with(get_token).await.unwrap();

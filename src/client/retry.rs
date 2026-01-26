@@ -386,7 +386,7 @@ impl RetryableRequest {
                                 ctx.retries,
                                 ctx.max_retries,
                             );
-                            tokio::time::sleep(sleep).await;
+                            crate::util::sleep(sleep).await;
                         }
                     } else if status == StatusCode::NOT_MODIFIED {
                         return Err(self.err(RequestError::Status { status, body: None }, ctx));
@@ -431,7 +431,7 @@ impl RetryableRequest {
                             ctx.retries,
                             ctx.max_retries,
                         );
-                        tokio::time::sleep(sleep).await;
+                        crate::util::sleep(sleep).await;
                     }
                 }
                 Err(e) => {
@@ -457,7 +457,7 @@ impl RetryableRequest {
                         ctx.max_retries,
                         e,
                     );
-                    tokio::time::sleep(sleep).await;
+                    crate::util::sleep(sleep).await;
                 }
             }
         }
@@ -749,14 +749,14 @@ mod tests {
 
         // Retries on client timeout
         mock.push_async_fn(|_| async move {
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            crate::util::sleep(Duration::from_secs(10)).await;
             panic!()
         });
         do_request().await.unwrap();
 
         // Does not retry PUT request
         mock.push_async_fn(|_| async move {
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            crate::util::sleep(Duration::from_secs(10)).await;
             panic!()
         });
         let res = client.request(Method::PUT, mock.url()).send_retry(&retry);

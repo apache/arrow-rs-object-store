@@ -494,7 +494,13 @@ mod tests {
     use itertools::Itertools;
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
-    #[tokio::test]
+    #[cfg(not(target_arch = "wasm32"))]
+    use tokio::test as async_test;
+
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen_test::wasm_bindgen_test as async_test;
+
+    #[async_test]
     async fn test_buf_reader() {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
 
@@ -574,7 +580,7 @@ mod tests {
     }
 
     // Note: `BufWriter::with_tags` functionality is tested in `crate::tests::tagging`
-    #[tokio::test]
+    #[async_test]
     async fn test_buf_writer() {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
         let path = Path::from("file.txt");
@@ -612,7 +618,7 @@ mod tests {
         assert_eq!(response.attributes, attributes);
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_buf_writer_with_put() {
         let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
         let path = Path::from("file.txt");

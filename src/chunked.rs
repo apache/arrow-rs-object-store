@@ -183,9 +183,15 @@ mod tests {
     use crate::memory::InMemory;
     use crate::path::Path;
 
+    #[cfg(not(target_arch = "wasm32"))]
+    use tokio::test as async_test;
+
+    #[cfg(target_arch = "wasm32")]
+    use wasm_bindgen_test::wasm_bindgen_test as async_test;
+
     use super::*;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_chunked_basic() {
         let location = Path::parse("test").unwrap();
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
