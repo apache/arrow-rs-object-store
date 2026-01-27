@@ -110,6 +110,7 @@ impl Backoff {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_macros::test;
     use rand::rand_core::impls::fill_bytes_via_next;
 
     struct FixedRng(u64);

@@ -2159,9 +2159,26 @@ impl From<Error> for std::io::Error {
     }
 }
 
+/// Configure the test macro to use
+#[cfg(test)]
+pub mod test_macros {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub use test;
+
+    #[cfg(target_arch = "wasm32")]
+    pub use wasm_bindgen_test::wasm_bindgen_test as test;
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub use tokio::test as async_test;
+
+    #[cfg(target_arch = "wasm32")]
+    pub use wasm_bindgen_test::wasm_bindgen_test as async_test;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_macros::{async_test, test};
 
     use chrono::TimeZone;
 
@@ -2288,7 +2305,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_list_lifetimes() {
         let store = memory::InMemory::new();
         let mut stream = list_store(&store, "path");

@@ -272,6 +272,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_macros::test;
 
     #[test]
     fn test_add_query_pairs() {

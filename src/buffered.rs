@@ -494,11 +494,7 @@ mod tests {
     use itertools::Itertools;
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
-    #[cfg(not(target_arch = "wasm32"))]
-    use tokio::test as async_test;
-
-    #[cfg(target_arch = "wasm32")]
-    use wasm_bindgen_test::wasm_bindgen_test as async_test;
+    use crate::test_macros::*;
 
     #[async_test]
     async fn test_buf_reader() {

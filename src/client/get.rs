@@ -372,6 +372,7 @@ fn get_attributes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_macros::{async_test, test};
     use http::header::*;
 
     fn make_response(
@@ -407,7 +408,7 @@ mod tests {
         user_defined_metadata_prefix: Some("x-test-meta-"),
     };
 
-    #[tokio::test]
+    #[async_test]
     async fn test_get_range_meta() {
         let path = Path::from("test");
 

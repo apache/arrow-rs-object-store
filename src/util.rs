@@ -328,7 +328,7 @@ pub(crate) fn hex_encode(bytes: &[u8]) -> String {
 }
 
 /// Sleep only if non-zero duration
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none"))))]
 pub(crate) async fn sleep(duration: Duration) {
     if !duration.is_zero() {
         tokio::time::sleep(duration).await
@@ -336,7 +336,7 @@ pub(crate) async fn sleep(duration: Duration) {
 }
 
 /// Sleep only if non-zero duration
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", any(target_os = "unknown", target_os = "none")))]
 pub(crate) async fn sleep(duration: Duration) {
     use send_wrapper::SendWrapper;
     if !duration.is_zero() {
@@ -352,11 +352,7 @@ mod tests {
     use rand::{Rng, rng};
     use std::ops::Range;
 
-    #[cfg(not(target_arch = "wasm32"))]
-    use tokio::test as async_test;
-
-    #[cfg(target_arch = "wasm32")]
-    use wasm_bindgen_test::wasm_bindgen_test as async_test;
+    use crate::test_macros::{async_test, test};
 
     /// Calls coalesce_ranges and validates the returned data is correct
     ///

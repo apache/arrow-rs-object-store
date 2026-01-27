@@ -465,6 +465,7 @@ pub(crate) fn absolute_path_to_url(path: impl AsRef<std::path::Path>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_macros::test;
 
     #[test]
     fn delimiter_char_is_forward_slash() {
