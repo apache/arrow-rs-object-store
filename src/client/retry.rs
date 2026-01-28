@@ -410,15 +410,12 @@ impl RetryableRequest {
                                 || status == StatusCode::REQUEST_TIMEOUT
                                 || (self.retry_on_conflict && status == StatusCode::CONFLICT))
                         {
-                            let source = match status.is_client_error() {
-                                true => match r.into_body().text().await {
-                                    Ok(body) => RequestError::Status {
-                                        status,
-                                        body: Some(body),
-                                    },
-                                    Err(e) => RequestError::Http(e),
+                            let source = match r.into_body().text().await {
+                                Ok(body) => RequestError::Status {
+                                    status,
+                                    body: Some(body),
                                 },
-                                false => RequestError::Status { status, body: None },
+                                Err(e) => RequestError::Http(e),
                             };
                             return Err(self.err(source, ctx));
                         };
@@ -706,14 +703,16 @@ mod tests {
 
         let e = do_request().await.unwrap_err();
         assert!(
-            e.to_string().contains(" after 2 retries, max_retries: 2, retry_timeout: 1000s  - Server returned non-2xx status code: 502 Bad Gateway"),
+            e.to_string().contains(" after 2 retries, max_retries: 2, retry_timeout: 1000s  - Server returned non-2xx status code: 502 Bad Gateway: ignored"),
             "{e}"
         );
         // verify e.source() is available as well for users who need programmatic access
         assert_eq!(
             e.source().unwrap().to_string(),
-            "Server returned non-2xx status code: 502 Bad Gateway: ",
+            "Server returned non-2xx status code: 502 Bad Gateway: ignored",
         );
+        // verify body is accessible
+        assert_eq!(e.body(), Some("ignored"));
 
         // Panic results in an incomplete message error in the client
         mock.push_fn::<_, String>(|_| panic!());
@@ -844,6 +843,40 @@ mod tests {
         assert!(b.contains("success"));
 
         // Shutdown
+        mock.shutdown().await
+    }
+
+    #[tokio::test]
+    async fn test_503_error_body_captured() {
+        let mock = MockServer::new().await;
+
+        let retry = RetryConfig {
+            backoff: Default::default(),
+            max_retries: 0,
+            retry_timeout: Duration::from_secs(1000),
+        };
+
+        let client = HttpClient::new(Client::builder().build().unwrap());
+
+        // Test that 503 SlowDown body is captured for throttling detection
+        let slowdown_body = r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message></Error>"#;
+        mock.push(
+            Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .body(slowdown_body.to_string())
+                .unwrap(),
+        );
+
+        let e = client
+            .request(Method::GET, mock.url())
+            .send_retry(&retry)
+            .await
+            .unwrap_err();
+
+        assert_eq!(e.status().unwrap(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(e.body(), Some(slowdown_body));
+        assert!(e.body().unwrap().contains("SlowDown"));
+
         mock.shutdown().await
     }
 
