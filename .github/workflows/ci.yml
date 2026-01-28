@@ -131,6 +131,8 @@ jobs:
           aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-for-spawn
           aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-for-checksum
           aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-for-copy-if-not-exists
+          aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-for-multipart-copy-large
+          aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-for-multipart-copy-single
           aws --endpoint-url=http://localhost:4566 s3api create-bucket --bucket test-object-lock --object-lock-enabled-for-bucket
 
           KMS_KEY=$(aws --endpoint-url=http://localhost:4566 kms create-key --description "test key")

@@ -112,6 +112,15 @@ impl Parse for u32 {
     }
 }
 
+impl Parse for u64 {
+    fn parse(v: &str) -> Result<Self> {
+        Self::from_str(v).map_err(|_| Error::Generic {
+            store: "Config",
+            source: format!("failed to parse \"{v}\" as u64").into(),
+        })
+    }
+}
+
 impl Parse for HeaderValue {
     fn parse(v: &str) -> Result<Self> {
         Self::from_str(v).map_err(|_| Error::Generic {
