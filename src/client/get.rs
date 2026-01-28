@@ -222,7 +222,7 @@ impl<T: GetClient> GetContext<T> {
                                 sleep.as_secs_f32()
                             );
 
-                            tokio::time::sleep(sleep).await;
+                            crate::util::sleep(sleep).await;
 
                             let options = GetOptions {
                                 range: Some(GetRange::Bounded(range.clone())),
@@ -372,6 +372,7 @@ fn get_attributes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_macros::{async_test, test};
     use http::header::*;
 
     fn make_response(
@@ -407,7 +408,7 @@ mod tests {
         user_defined_metadata_prefix: Some("x-test-meta-"),
     };
 
-    #[tokio::test]
+    #[async_test]
     async fn test_get_range_meta() {
         let path = Path::from("test");
 

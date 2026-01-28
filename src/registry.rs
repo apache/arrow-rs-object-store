@@ -17,8 +17,8 @@
 
 //! Map object URLs to [`ObjectStore`]
 
+use crate::ObjectStore;
 use crate::path::{InvalidPart, Path, PathPart};
-use crate::{ObjectStore, parse_url_opts};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -107,7 +107,7 @@ impl From<Error> for crate::Error {
     }
 }
 
-/// An [`ObjectStoreRegistry`] that uses [`parse_url_opts`] to create stores based on the environment
+/// An [`ObjectStoreRegistry`] that uses [`crate::parse_url_opts`] to create stores based on the environment
 #[derive(Debug, Default)]
 pub struct DefaultObjectStoreRegistry {
     /// Mapping from [`url_key`] to [`PathEntry`]
@@ -196,7 +196,14 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
             }
         }
 
-        if let Ok((store, path)) = parse_url_opts(to_resolve, std::env::vars()) {
+        #[cfg(not(target_arch = "wasm32"))]
+        let parsed = crate::parse_url_opts(to_resolve, std::env::vars());
+
+        // std::env::vars isn't available on WASM
+        #[cfg(target_arch = "wasm32")]
+        let parsed = crate::parse_url(to_resolve);
+
+        if let Ok((store, path)) = parsed {
             let depth = num_segments(to_resolve.path()) - num_segments(path.as_ref());
 
             let mut map = self.map.write();
@@ -246,6 +253,7 @@ mod tests {
     use super::*;
     use crate::memory::InMemory;
     use crate::prefix::PrefixStore;
+    use crate::test_macros::test;
 
     #[test]
     fn test_num_segments() {

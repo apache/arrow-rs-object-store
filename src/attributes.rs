@@ -197,6 +197,7 @@ impl<'a> Iterator for AttributesIter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_macros::test;
 
     #[test]
     fn test_attributes_basic() {

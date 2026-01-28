@@ -280,6 +280,7 @@ impl From<PutPayloadMut> for PutPayload {
 #[cfg(test)]
 mod test {
     use crate::PutPayloadMut;
+    use crate::test_macros::test;
 
     #[test]
     fn test_put_payload() {

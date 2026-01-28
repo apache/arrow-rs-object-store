@@ -539,11 +539,13 @@ impl MultipartUpload for InMemoryUpload {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_macros::*;
+
     use crate::{ObjectStoreExt, integration::*};
 
     use super::*;
 
-    #[tokio::test]
+    #[async_test]
     async fn in_memory_test() {
         let integration = InMemory::new();
 
@@ -559,7 +561,7 @@ mod tests {
         put_get_attributes(&integration).await;
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn box_test() {
         let integration: Box<dyn ObjectStore> = Box::new(InMemory::new());
 
@@ -572,7 +574,7 @@ mod tests {
         stream_get(&integration).await;
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn arc_test() {
         let integration: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
 
@@ -585,7 +587,7 @@ mod tests {
         stream_get(&integration).await;
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn unknown_length() {
         let integration = InMemory::new();
 
@@ -610,7 +612,7 @@ mod tests {
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
 
-    #[tokio::test]
+    #[async_test]
     async fn nonexistent_location() {
         let integration = InMemory::new();
 

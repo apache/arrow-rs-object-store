@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::ready;
-use tokio::task::JoinSet;
+use n0_future::task::JoinSet;
 
 /// An upload part request
 pub type UploadPart = BoxFuture<'static, Result<()>>;
@@ -255,7 +255,9 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
+    use crate::test_macros::*;
+
+    #[async_test]
     async fn test_concurrency() {
         let config = ThrottleConfig {
             wait_put_per_call: Duration::from_millis(1),
@@ -298,7 +300,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_write_multipart() {
         let mut rng = StdRng::seed_from_u64(42);
 
