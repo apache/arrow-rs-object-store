@@ -116,6 +116,8 @@
 //!
 //! [`BufReader`]: buffered::BufReader
 //! [`BufWriter`]: buffered::BufWriter
+//! [`Read`]: std::io::Read
+//! [`Seek`]: std::io::Seek
 //!
 //! # Adapters
 //!
