@@ -1002,7 +1002,13 @@ pub(crate) fn read_range(
         let mut offset = range.start;
 
         while !buf_slice.is_empty() {
-            match file.read_at(buf_slice, offset) {
+            #[cfg(target_family = "unix")]
+            let read_result = file.read_at(buf_slice, offset);
+
+            #[cfg(target_family = "windows")]
+            let read_result = file.seek_read(buf_slice, offset);
+
+            match read_result {
                 Ok(0) => break,
                 Ok(n) => {
                     let tmp = buf_slice;
