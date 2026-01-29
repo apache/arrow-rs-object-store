@@ -19,6 +19,10 @@
 use std::fs::{File, Metadata, OpenOptions, metadata, symlink_metadata};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
+#[cfg(target_family = "unix")]
+use std::os::unix::fs::FileExt;
+#[cfg(target_family = "windows")]
+use std::os::windows::fs::FileExt;
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::{collections::BTreeSet, io};
@@ -992,11 +996,6 @@ pub(crate) fn read_range(
 
     #[cfg(any(target_family = "unix", target_family = "windows"))]
     {
-        #[cfg(target_family = "unix")]
-        use std::os::unix::fs::FileExt;
-        #[cfg(target_family = "windows")]
-        use std::os::windows::fs::FileExt;
-
         // Safety:
         // Setting the buffer's length to its capacity is safe as it remains within its allocated memory.
         // In cases where `read_exact_at` errors, the contents of the buffer are undefined,
