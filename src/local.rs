@@ -1005,11 +1005,40 @@ pub(crate) fn read_range(
             buf.set_len(to_read as usize);
         }
 
-        file.read_exact_at(&mut buf, range.start)
-            .map_err(|source| {
-                let path = path.into();
-                Error::UnableToReadBytes { source, path }
-            })?;
+        let mut buf_slice = &mut buf[..];
+        let mut offset = range.start;
+
+        while !buf_slice.is_empty() {
+            match file.read_at(buf_slice, offset) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let tmp = buf_slice;
+                    buf_slice = &mut tmp[n..];
+                    offset += n as u64;
+                }
+                // This error is recoverable
+                Err(e) if e.kind() == ErrorKind::Interrupted => {}
+                Err(source) => {
+                    let error = Error::UnableToReadBytes {
+                        source,
+                        path: path.into(),
+                    };
+
+                    return Err(error.into());
+                }
+            }
+        }
+
+        // If we reached EOF before filling the buffer
+        if !buf_slice.is_empty() {
+            let error = Error::OutOfRange {
+                path: path.into(),
+                expected: to_read,
+                actual: offset - range.start,
+            };
+
+            return Err(error.into());
+        }
     }
     #[cfg(all(not(windows), not(unix)))]
     {
