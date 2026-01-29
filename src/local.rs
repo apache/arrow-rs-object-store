@@ -19,6 +19,10 @@
 use std::fs::{File, Metadata, OpenOptions, metadata, symlink_metadata};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
+#[cfg(target_family = "unix")]
+use std::os::unix::fs::FileExt;
+#[cfg(target_family = "windows")]
+use std::os::windows::fs::FileExt;
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::{collections::BTreeSet, io};
@@ -975,8 +979,8 @@ pub(crate) fn read_range(
     range: Range<u64>,
 ) -> Result<Bytes> {
     // If none of the range is satisfiable we should error, e.g. if the start offset is beyond the
-    // extents of the file
-    if range.start >= file_len {
+    // extents of the file, or if its at the end of the file and wants to read a non-empty range.
+    if range.start > file_len || (range.start == file_len && !range.is_empty()) {
         return Err(Error::InvalidRange {
             source: InvalidGetRange::StartTooLarge {
                 requested: range.start,
@@ -988,26 +992,74 @@ pub(crate) fn read_range(
 
     // Don't read past end of file
     let to_read = range.end.min(file_len) - range.start;
-
-    file.seek(SeekFrom::Start(range.start)).map_err(|source| {
-        let path = path.into();
-        Error::Seek { source, path }
-    })?;
-
     let mut buf = Vec::with_capacity(to_read as usize);
-    let read = file.take(to_read).read_to_end(&mut buf).map_err(|source| {
-        let path = path.into();
-        Error::UnableToReadBytes { source, path }
-    })? as u64;
 
-    if read != to_read {
-        let error = Error::OutOfRange {
-            path: path.into(),
-            expected: to_read,
-            actual: read,
-        };
+    #[cfg(any(target_family = "unix", target_family = "windows"))]
+    {
+        buf.resize(to_read as usize, 0_u8);
 
-        return Err(error.into());
+        let mut buf_slice = &mut buf[..];
+        let mut offset = range.start;
+
+        while !buf_slice.is_empty() {
+            #[cfg(target_family = "unix")]
+            let read_result = file.read_at(buf_slice, offset);
+
+            #[cfg(target_family = "windows")]
+            let read_result = file.seek_read(buf_slice, offset);
+
+            match read_result {
+                Ok(0) => break,
+                Ok(n) => {
+                    let tmp = buf_slice;
+                    buf_slice = &mut tmp[n..];
+                    offset += n as u64;
+                }
+                // This error is recoverable
+                Err(e) if e.kind() == ErrorKind::Interrupted => {}
+                Err(source) => {
+                    let error = Error::UnableToReadBytes {
+                        source,
+                        path: path.into(),
+                    };
+
+                    return Err(error.into());
+                }
+            }
+        }
+
+        // If we reached EOF before filling the buffer
+        if !buf_slice.is_empty() {
+            let error = Error::OutOfRange {
+                path: path.into(),
+                expected: to_read,
+                actual: offset - range.start,
+            };
+
+            return Err(error.into());
+        }
+    }
+    #[cfg(all(not(windows), not(unix)))]
+    {
+        file.seek(SeekFrom::Start(range.start)).map_err(|source| {
+            let path = path.into();
+            Error::Seek { source, path }
+        })?;
+
+        let read = file.take(to_read).read_to_end(&mut buf).map_err(|source| {
+            let path = path.into();
+            Error::UnableToReadBytes { source, path }
+        })? as u64;
+
+        if read != to_read {
+            let error = Error::OutOfRange {
+                path: path.into(),
+                expected: to_read,
+                actual: read,
+            };
+
+            return Err(error.into());
+        }
     }
 
     Ok(buf.into())
