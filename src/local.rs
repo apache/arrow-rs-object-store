@@ -975,8 +975,8 @@ pub(crate) fn read_range(
     range: Range<u64>,
 ) -> Result<Bytes> {
     // If none of the range is satisfiable we should error, e.g. if the start offset is beyond the
-    // extents of the file
-    if range.start >= file_len {
+    // extents of the file, or if its at the end of the file and wants to read a non-empty range.
+    if range.start > file_len || (range.start == file_len && !range.is_empty()) {
         return Err(Error::InvalidRange {
             source: InvalidGetRange::StartTooLarge {
                 requested: range.start,
