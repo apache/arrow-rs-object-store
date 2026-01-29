@@ -996,13 +996,7 @@ pub(crate) fn read_range(
 
     #[cfg(any(target_family = "unix", target_family = "windows"))]
     {
-        // Safety:
-        // Setting the buffer's length to its capacity is safe as it remains within its allocated memory.
-        // In cases where `read_exact_at` errors, the contents of the buffer are undefined,
-        // but we discard it without using it.
-        unsafe {
-            buf.set_len(to_read as usize);
-        }
+        buf.resize(to_read as usize, 0_u8);
 
         let mut buf_slice = &mut buf[..];
         let mut offset = range.start;
