@@ -988,26 +988,50 @@ pub(crate) fn read_range(
 
     // Don't read past end of file
     let to_read = range.end.min(file_len) - range.start;
-
-    file.seek(SeekFrom::Start(range.start)).map_err(|source| {
-        let path = path.into();
-        Error::Seek { source, path }
-    })?;
-
     let mut buf = Vec::with_capacity(to_read as usize);
-    let read = file.take(to_read).read_to_end(&mut buf).map_err(|source| {
-        let path = path.into();
-        Error::UnableToReadBytes { source, path }
-    })? as u64;
 
-    if read != to_read {
-        let error = Error::OutOfRange {
-            path: path.into(),
-            expected: to_read,
-            actual: read,
-        };
+    #[cfg(any(target_family = "unix", target_family = "windows"))]
+    {
+        #[cfg(target_family = "unix")]
+        use std::os::unix::fs::FileExt;
+        #[cfg(target_family = "windows")]
+        use std::os::windows::fs::FileExt;
 
-        return Err(error.into());
+        // Safety:
+        // Setting the buffer's length to its capacity is safe as it remains within its allocated memory.
+        // In cases where `read_exact_at` errors, the contents of the buffer are undefined,
+        // but we discard it without using it.
+        unsafe {
+            buf.set_len(to_read as usize);
+        }
+
+        file.read_exact_at(&mut buf, range.start)
+            .map_err(|source| {
+                let path = path.into();
+                Error::UnableToReadBytes { source, path }
+            })?;
+    }
+    #[cfg(all(not(windows), not(unix)))]
+    {
+        file.seek(SeekFrom::Start(range.start)).map_err(|source| {
+            let path = path.into();
+            Error::Seek { source, path }
+        })?;
+
+        let read = file.take(to_read).read_to_end(&mut buf).map_err(|source| {
+            let path = path.into();
+            Error::UnableToReadBytes { source, path }
+        })? as u64;
+
+        if read != to_read {
+            let error = Error::OutOfRange {
+                path: path.into(),
+                expected: to_read,
+                actual: read,
+            };
+
+            return Err(error.into());
+        }
     }
 
     Ok(buf.into())
