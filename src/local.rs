@@ -16,6 +16,8 @@
 // under the License.
 
 //! An object store implementation for a local filesystem
+#[cfg(target_family = "unix")]
+use std::borrow::Cow;
 use std::fs::{File, Metadata, OpenOptions, metadata, symlink_metadata};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
@@ -34,9 +36,9 @@ use url::Url;
 use walkdir::{DirEntry, WalkDir};
 
 use crate::{
-    Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
-    UploadPart, maybe_spawn_blocking,
+    Attribute, Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload,
+    ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    Result, UploadPart, maybe_spawn_blocking,
     path::{Path, absolute_path_to_url},
     util::InvalidGetRange,
 };
@@ -112,6 +114,20 @@ pub(crate) enum Error {
 
     #[error("Upload aborted")]
     Aborted,
+
+    #[cfg(target_family = "unix")]
+    #[error("Unable to set extended attribute on {}: {source}", path.display())]
+    UnableToSetXattr {
+        source: std::io::Error,
+        path: PathBuf,
+    },
+
+    #[cfg(target_family = "unix")]
+    #[error("Unable to read extended attribute on {}: {source}", path.display())]
+    UnableToReadXattr {
+        source: std::io::Error,
+        path: PathBuf,
+    },
 }
 
 impl From<Error> for super::Error {
@@ -321,6 +337,98 @@ fn is_valid_file_path(path: &Path) -> bool {
     }
 }
 
+/// Sets extended attributes on a file from an Attributes collection
+#[cfg(target_family = "unix")]
+fn set_xattrs(path: &std::path::Path, attributes: &Attributes) -> Result<()> {
+    for (attr, value) in attributes {
+        let name: Cow<'static, str> = match attr {
+            Attribute::CacheControl => Cow::Borrowed("user.cache_control"),
+            Attribute::ContentDisposition => Cow::Borrowed("user.content_disposition"),
+            Attribute::ContentEncoding => Cow::Borrowed("user.content_encoding"),
+            Attribute::ContentLanguage => Cow::Borrowed("user.content_language"),
+            Attribute::ContentType => Cow::Borrowed("user.content_type"),
+            Attribute::StorageClass => Cow::Borrowed("user.storage_class"),
+            Attribute::Metadata(key) => Cow::Owned(format!("user.{key}")),
+        };
+        xattr::set(path, name.as_ref(), value.as_ref().as_bytes()).map_err(|source| {
+            Error::UnableToSetXattr {
+                source,
+                path: path.into(),
+            }
+        })?;
+    }
+    Ok(())
+}
+
+/// Reads extended attributes from a file and returns an Attributes collection
+#[cfg(target_family = "unix")]
+fn get_xattrs(path: &std::path::Path) -> Result<Attributes> {
+    let mut attributes = Attributes::new();
+
+    let list = match xattr::list(path) {
+        Ok(list) => list,
+        Err(source) => {
+            return Err(Error::UnableToReadXattr {
+                source,
+                path: path.into(),
+            }
+            .into());
+        }
+    };
+
+    for name in list {
+        let name_str = match name.to_str() {
+            Some(s) if s.starts_with("user.") => s,
+            _ => continue,
+        };
+
+        let value = match xattr::get(path, &name) {
+            Ok(Some(v)) => match String::from_utf8(v) {
+                Ok(s) => s,
+                Err(_) => continue,
+            },
+            Ok(None) => continue,
+            Err(source) => {
+                return Err(Error::UnableToReadXattr {
+                    source,
+                    path: path.into(),
+                }
+                .into());
+            }
+        };
+
+        let key = &name_str["user.".len()..];
+        let attr = match key {
+            "cache_control" => Attribute::CacheControl,
+            "content_disposition" => Attribute::ContentDisposition,
+            "content_encoding" => Attribute::ContentEncoding,
+            "content_language" => Attribute::ContentLanguage,
+            "content_type" => Attribute::ContentType,
+            "storage_class" => Attribute::StorageClass,
+            key => Attribute::Metadata(key.to_string().into()),
+        };
+        attributes.insert(attr, value.into());
+    }
+    Ok(attributes)
+}
+
+/// Returns an error if attributes are non-empty on non-Unix platforms.
+#[cfg(not(target_family = "unix"))]
+fn set_xattrs(_path: &std::path::Path, attributes: &Attributes) -> Result<()> {
+    if !attributes.is_empty() {
+        return Err(super::Error::NotSupported {
+            source: "Setting extended attributes is only supported on Unix platforms".into(),
+        });
+    }
+    Ok(())
+}
+
+/// No-op on non-Unix platforms: returns empty attributes.
+#[cfg(not(target_family = "unix"))]
+fn get_xattrs(_path: &std::path::Path) -> Result<Attributes> {
+    Ok(Attributes::new())
+}
+
 #[async_trait]
 impl ObjectStore for LocalFileSystem {
     async fn put_opts(
@@ -332,13 +440,6 @@ impl ObjectStore for LocalFileSystem {
         if matches!(opts.mode, PutMode::Update(_)) {
             return Err(crate::Error::NotImplemented {
                 operation: "`put_opts` with mode `PutMode::Update`".into(),
-                implementer: self.to_string(),
-            });
-        }
-
-        if !opts.attributes.is_empty() {
-            return Err(crate::Error::NotImplemented {
-                operation: "`put_opts` with `opts.attributes` specified".into(),
                 implementer: self.to_string(),
             });
         }
@@ -355,6 +456,11 @@ impl ObjectStore for LocalFileSystem {
                         path: path.to_string_lossy().to_string(),
                     })?;
                     e_tag = Some(get_etag(&metadata));
+
+                    if !opts.attributes.is_empty() {
+                        set_xattrs(&staging_path, &opts.attributes)?;
+                    }
+
                     match opts.mode {
                         PutMode::Overwrite => {
                             // For some fuse types of file systems, the file must be closed first
@@ -402,16 +508,9 @@ impl ObjectStore for LocalFileSystem {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
-        if !opts.attributes.is_empty() {
-            return Err(crate::Error::NotImplemented {
-                operation: "`put_multipart_opts` with `opts.attributes` specified".into(),
-                implementer: self.to_string(),
-            });
-        }
-
         let dest = self.path_to_filesystem(location)?;
         let (file, src) = new_staged_upload(&dest)?;
-        Ok(Box::new(LocalUpload::new(src, dest, file)))
+        Ok(Box::new(LocalUpload::new(src, dest, file, opts.attributes)))
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
@@ -429,9 +528,11 @@ impl ObjectStore for LocalFileSystem {
                 None => 0..meta.size,
             };
 
+            let attributes = get_xattrs(&path)?;
+
             Ok(GetResult {
                 payload: GetResultPayload::File(file, path),
-                attributes: Attributes::default(),
+                attributes,
                 range,
                 meta,
             })
@@ -829,6 +930,8 @@ struct LocalUpload {
     src: Option<PathBuf>,
     /// The next offset to write into the file
     offset: u64,
+    /// Attributes to set on the file
+    attributes: Attributes,
 }
 
 #[derive(Debug)]
@@ -838,7 +941,7 @@ struct UploadState {
 }
 
 impl LocalUpload {
-    pub(crate) fn new(src: PathBuf, dest: PathBuf, file: File) -> Self {
+    pub(crate) fn new(src: PathBuf, dest: PathBuf, file: File, attributes: Attributes) -> Self {
         Self {
             state: Arc::new(UploadState {
                 dest,
@@ -846,6 +949,7 @@ impl LocalUpload {
             }),
             src: Some(src),
             offset: 0,
+            attributes,
         }
     }
 }
@@ -876,9 +980,15 @@ impl MultipartUpload for LocalUpload {
     async fn complete(&mut self) -> Result<PutResult> {
         let src = self.src.take().ok_or(Error::Aborted)?;
         let s = Arc::clone(&self.state);
+        let attributes = std::mem::take(&mut self.attributes);
         maybe_spawn_blocking(move || {
             // Ensure no inflight writes
             let file = s.file.lock();
+
+            if !attributes.is_empty() {
+                set_xattrs(&src, &attributes)?;
+            }
+
             std::fs::rename(&src, &s.dest)
                 .map_err(|source| Error::UnableToRenameFile { source })?;
             let metadata = file.metadata().map_err(|e| Error::Metadata {
@@ -1177,6 +1287,7 @@ mod tests {
         copy_rename_nonexistent_object(&integration).await;
         stream_get(&integration).await;
         put_opts(&integration, false).await;
+        put_get_attributes(&integration).await;
     }
 
     #[test]
@@ -1790,7 +1901,7 @@ mod unix_test {
     use tempfile::TempDir;
 
     use crate::local::LocalFileSystem;
-    use crate::{ObjectStoreExt, Path};
+    use crate::{Attribute, Attributes, ObjectStore, ObjectStoreExt, Path, PutOptions};
 
     #[tokio::test]
     async fn test_fifo() {
@@ -1809,5 +1920,73 @@ mod unix_test {
         integration.get(&location).await.unwrap();
 
         spawned.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_put_get_attributes() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+
+        let location = Path::from("test_file");
+        let data = "test data";
+
+        let mut attributes = Attributes::new();
+        attributes.insert(Attribute::ContentType, "text/plain".into());
+        attributes.insert(Attribute::CacheControl, "max-age=3600".into());
+        attributes.insert(Attribute::ContentDisposition, "inline".into());
+        attributes.insert(Attribute::ContentEncoding, "gzip".into());
+        attributes.insert(Attribute::ContentLanguage, "en-US".into());
+        attributes.insert(Attribute::StorageClass, "STANDARD".into());
+        attributes.insert(
+            Attribute::Metadata("custom_key".into()),
+            "custom_value".into(),
+        );
+
+        let opts = PutOptions {
+            attributes: attributes.clone(),
+            ..Default::default()
+        };
+
+        integration
+            .put_opts(&location, data.into(), opts)
+            .await
+            .unwrap();
+
+        let result = integration.get(&location).await.unwrap();
+        assert_eq!(result.attributes, attributes);
+
+        let bytes = result.bytes().await.unwrap();
+        assert_eq!(bytes.as_ref(), data.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn test_multipart_attributes() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+
+        let location = Path::from("multipart_file");
+
+        let mut attributes = Attributes::new();
+        attributes.insert(Attribute::ContentType, "application/octet-stream".into());
+        attributes.insert(Attribute::Metadata("part_count".into()), "2".into());
+
+        let opts = crate::PutMultipartOptions {
+            attributes: attributes.clone(),
+            ..Default::default()
+        };
+
+        let mut upload = integration
+            .put_multipart_opts(&location, opts)
+            .await
+            .unwrap();
+        upload.put_part("part1".into()).await.unwrap();
+        upload.put_part("part2".into()).await.unwrap();
+        upload.complete().await.unwrap();
+
+        let result = integration.get(&location).await.unwrap();
+        assert_eq!(result.attributes, attributes);
+
+        let bytes = result.bytes().await.unwrap();
+        assert_eq!(bytes.as_ref(), b"part1part2");
     }
 }
