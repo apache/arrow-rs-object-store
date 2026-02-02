@@ -671,7 +671,7 @@ impl MicrosoftAzureBuilder {
                             self.container_name = Some(validate(parsed.username())?);
                         }
                         Some((a, "dfs.fabric.microsoft.com"))
-                        | Some((a, "blob.fabric.microsoft.net")) => {
+                        | Some((a, "blob.fabric.microsoft.com")) => {
                             self.account_name = Some(validate(a)?);
                             self.container_name = Some(validate(parsed.username())?);
                             self.use_fabric_endpoint = true.into();
@@ -1127,6 +1127,14 @@ mod tests {
         let mut builder = MicrosoftAzureBuilder::new();
         builder
             .parse_url("az://container@account.dfs.fabric.microsoft.com/path-part/file")
+            .unwrap();
+        assert_eq!(builder.account_name, Some("account".to_string()));
+        assert_eq!(builder.container_name, Some("container".to_string()));
+        assert!(builder.use_fabric_endpoint.get().unwrap());
+
+        let mut builder = MicrosoftAzureBuilder::new();
+        builder
+            .parse_url("az://container@account.blob.fabric.microsoft.com/path-part/file")
             .unwrap();
         assert_eq!(builder.account_name, Some("account".to_string()));
         assert_eq!(builder.container_name, Some("container".to_string()));
