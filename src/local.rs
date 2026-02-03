@@ -980,25 +980,18 @@ pub(crate) fn read_range(
     let requested = range.end - range.start;
     let mut buf = Vec::with_capacity(requested as usize);
     let read = file.take(requested).read_to_end(&mut buf).map_err(|err| {
-        if let Ok(m) = file.metadata() {
-            if m.is_dir() {
-                return super::Error::from(Error::NotFound {
-                    path: path.to_path_buf(),
-                    source: io::Error::new(ErrorKind::NotFound, "is directory"),
-                });
-            }
+        // try to read metadata to give a better error in case of directory
+        if let Err(e) = open_metadata(file, path) {
+            return e;
         }
-        super::Error::from(Error::UnableToReadBytes {
+        Error::UnableToReadBytes {
             source: err,
             path: path.to_path_buf(),
-        })
+        }
     })? as u64;
 
     if read != requested {
-        let metadata = file.metadata().map_err(|e| Error::Metadata {
-            source: e.into(),
-            path: path.to_string_lossy().to_string(),
-        })?;
+        let metadata = open_metadata(file, path)?;
         let file_len = metadata.len();
 
         if range.start >= file_len {
