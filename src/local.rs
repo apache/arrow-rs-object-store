@@ -975,7 +975,7 @@ pub(crate) fn read_range(
     range: Range<u64>,
 ) -> Result<Bytes> {
     file.seek(SeekFrom::Start(range.start))
-        .map_err(|err| map_seek_error(err, &file, &path, range.start))?;
+        .map_err(|err| map_seek_error(err, file, path, range.start))?;
 
     let requested = range.end - range.start;
     let mut buf = Vec::with_capacity(requested as usize);
@@ -1055,7 +1055,7 @@ fn map_seek_error(source: io::Error, file: &File, path: &std::path::Path, reques
     // if we can't seek, check if start is out of bounds to give
     // a better error. Don't read metadata before to avoid
     // an extra syscall in the common case
-    let m = match open_metadata(&file, &path) {
+    let m = match open_metadata(file, path) {
         Err(e) => return e,
         Ok(m) => m,
     };
