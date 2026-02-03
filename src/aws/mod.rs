@@ -531,30 +531,32 @@ mod tests {
         maybe_skip_integration!();
 
         let bucket = "test-bucket-for-checksum";
-        let store = AmazonS3Builder::from_env()
-            .with_bucket_name(bucket)
-            .with_checksum_algorithm(Checksum::SHA256)
-            .build()
-            .unwrap();
+        for checksum in [Checksum::SHA256, Checksum::CRC64NVME] {
+            let store = AmazonS3Builder::from_env()
+                .with_bucket_name(bucket)
+                .with_checksum_algorithm(checksum)
+                .build()
+                .unwrap();
 
-        let str = "test.bin";
-        let path = Path::parse(str).unwrap();
-        let opts = PutMultipartOptions::default();
-        let mut upload = store.put_multipart_opts(&path, opts).await.unwrap();
+            let str = "test.bin";
+            let path = Path::parse(str).unwrap();
+            let opts = PutMultipartOptions::default();
+            let mut upload = store.put_multipart_opts(&path, opts).await.unwrap();
 
-        upload
-            .put_part(PutPayload::from(vec![0u8; 10_000_000]))
-            .await
-            .unwrap();
-        upload
-            .put_part(PutPayload::from(vec![0u8; 5_000_000]))
-            .await
-            .unwrap();
+            upload
+                .put_part(PutPayload::from(vec![0u8; 10_000_000]))
+                .await
+                .unwrap();
+            upload
+                .put_part(PutPayload::from(vec![0u8; 5_000_000]))
+                .await
+                .unwrap();
 
-        let res = upload.complete().await.unwrap();
-        assert!(res.e_tag.is_some(), "Should have valid etag");
+            let res = upload.complete().await.unwrap();
+            assert!(res.e_tag.is_some(), "Should have valid etag");
 
-        store.delete(&path).await.unwrap();
+            store.delete(&path).await.unwrap();
+        }
     }
 
     #[tokio::test]
@@ -587,31 +589,33 @@ mod tests {
     async fn write_multipart_file_with_signature_object_lock() {
         maybe_skip_integration!();
 
-        let bucket = "test-object-lock";
-        let store = AmazonS3Builder::from_env()
-            .with_bucket_name(bucket)
-            .with_checksum_algorithm(Checksum::SHA256)
-            .build()
-            .unwrap();
+        for checksum in [Checksum::SHA256, Checksum::CRC64NVME] {
+            let bucket = "test-object-lock";
+            let store = AmazonS3Builder::from_env()
+                .with_bucket_name(bucket)
+                .with_checksum_algorithm(checksum)
+                .build()
+                .unwrap();
 
-        let str = "test.bin";
-        let path = Path::parse(str).unwrap();
-        let opts = PutMultipartOptions::default();
-        let mut upload = store.put_multipart_opts(&path, opts).await.unwrap();
+            let str = "test.bin";
+            let path = Path::parse(str).unwrap();
+            let opts = PutMultipartOptions::default();
+            let mut upload = store.put_multipart_opts(&path, opts).await.unwrap();
 
-        upload
-            .put_part(PutPayload::from(vec![0u8; 10_000_000]))
-            .await
-            .unwrap();
-        upload
-            .put_part(PutPayload::from(vec![0u8; 5_000_000]))
-            .await
-            .unwrap();
+            upload
+                .put_part(PutPayload::from(vec![0u8; 10_000_000]))
+                .await
+                .unwrap();
+            upload
+                .put_part(PutPayload::from(vec![0u8; 5_000_000]))
+                .await
+                .unwrap();
 
-        let res = upload.complete().await.unwrap();
-        assert!(res.e_tag.is_some(), "Should have valid etag");
+            let res = upload.complete().await.unwrap();
+            assert!(res.e_tag.is_some(), "Should have valid etag");
 
-        store.delete(&path).await.unwrap();
+            store.delete(&path).await.unwrap();
+        }
     }
 
     #[tokio::test]
@@ -667,6 +671,11 @@ mod tests {
 
         // run integration test with checksum set to sha256
         let builder = AmazonS3Builder::from_env().with_checksum_algorithm(Checksum::SHA256);
+        let integration = builder.build().unwrap();
+        put_get_delete_list(&integration).await;
+
+        // run integration test with checksum set to crc64nvme
+        let builder = AmazonS3Builder::from_env().with_checksum_algorithm(Checksum::CRC64NVME);
         let integration = builder.build().unwrap();
         put_get_delete_list(&integration).await;
     }
