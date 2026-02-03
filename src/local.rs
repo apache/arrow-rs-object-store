@@ -418,7 +418,8 @@ impl ObjectStore for LocalFileSystem {
         let location = location.clone();
         let path = self.path_to_filesystem(&location)?;
         maybe_spawn_blocking(move || {
-            let (file, metadata) = open_file(&path)?;
+            let file = open_file(&path)?;
+            let metadata = open_metadata(&file, &path)?;
             let meta = convert_metadata(metadata, location);
             options.check_preconditions(&meta)?;
 
@@ -445,16 +446,7 @@ impl ObjectStore for LocalFileSystem {
         maybe_spawn_blocking(move || {
             // Vectored IO might be faster
             // We do not read the metadata here, but error in `read_range` if necessary
-            let mut file = File::open(&path).map_err(|e| match e.kind() {
-                ErrorKind::NotFound => Error::NotFound {
-                    path: path.clone(),
-                    source: e,
-                },
-                _ => Error::UnableToOpenFile {
-                    path: path.clone(),
-                    source: e,
-                },
-            })?;
+            let mut file = File::open(&path).map_err(|e| map_open_error(e, &path))?;
             ranges
                 .into_iter()
                 .map(|r| read_range(&mut file, &path, r))
@@ -934,36 +926,17 @@ pub(crate) fn chunked_stream(
     chunk_size: usize,
 ) -> BoxStream<'static, Result<Bytes, super::Error>> {
     futures::stream::once(async move {
+        let requested = range.end - range.start;
+
         let (file, path) = maybe_spawn_blocking(move || {
             file.seek(SeekFrom::Start(range.start as _))
-                .map_err(|err| {
-                    if let Ok(m) = file.metadata() {
-                        if range.start >= m.len() {
-                            return Error::InvalidRange {
-                                source: InvalidGetRange::StartTooLarge {
-                                    requested: range.start,
-                                    length: m.len(),
-                                },
-                            };
-                        }
-                        if m.is_dir() {
-                            return Error::NotFound {
-                                path: path.clone(),
-                                source: io::Error::new(ErrorKind::NotFound, "is directory"),
-                            };
-                        }
-                    }
-                    Error::Seek {
-                        source: err,
-                        path: path.clone(),
-                    }
-                })?;
+                .map_err(|err| map_seek_error(err, &file, &path, range.start))?;
             Ok((file, path))
         })
         .await?;
 
         let stream = futures::stream::try_unfold(
-            (file, path, range.end - range.start),
+            (file, path, requested),
             move |(mut file, path, remaining)| {
                 maybe_spawn_blocking(move || {
                     if remaining == 0 {
@@ -1001,28 +974,8 @@ pub(crate) fn read_range(
     path: &std::path::Path,
     range: Range<u64>,
 ) -> Result<Bytes> {
-    file.seek(SeekFrom::Start(range.start)).map_err(|err| {
-        if let Ok(m) = file.metadata() {
-            if range.start >= m.len() {
-                return super::Error::from(Error::InvalidRange {
-                    source: InvalidGetRange::StartTooLarge {
-                        requested: range.start,
-                        length: m.len(),
-                    },
-                });
-            }
-            if m.is_dir() {
-                return super::Error::from(Error::NotFound {
-                    path: path.to_path_buf(),
-                    source: io::Error::new(ErrorKind::NotFound, "is directory"),
-                });
-            }
-        }
-        super::Error::from(Error::Seek {
-            source: err,
-            path: path.to_path_buf(),
-        })
-    })?;
+    file.seek(SeekFrom::Start(range.start))
+        .map_err(|err| map_seek_error(err, &file, &path, range.start))?;
 
     let requested = range.end - range.start;
     let mut buf = Vec::with_capacity(requested as usize);
@@ -1072,27 +1025,52 @@ pub(crate) fn read_range(
     Ok(buf.into())
 }
 
-fn open_file(path: &PathBuf) -> Result<(File, Metadata)> {
-    let ret = match File::open(path).and_then(|f| Ok((f.metadata()?, f))) {
-        Err(e) => Err(match e.kind() {
-            ErrorKind::NotFound => Error::NotFound {
-                path: path.clone(),
-                source: e,
+fn open_file(path: &std::path::Path) -> Result<File, Error> {
+    File::open(path).map_err(|e| map_open_error(e, path))
+}
+
+fn open_metadata(file: &File, path: &std::path::Path) -> Result<Metadata, Error> {
+    let metadata = file.metadata().map_err(|e| map_open_error(e, path))?;
+    if metadata.is_dir() {
+        Err(Error::NotFound {
+            path: PathBuf::from(path),
+            source: io::Error::new(ErrorKind::NotFound, "is directory"),
+        })
+    } else {
+        Ok(metadata)
+    }
+}
+
+/// Translates errors from opening a file into a more specific [`Error`] when possible
+fn map_open_error(source: io::Error, path: &std::path::Path) -> Error {
+    let path = PathBuf::from(path);
+    match source.kind() {
+        ErrorKind::NotFound => Error::NotFound { path, source },
+        _ => Error::UnableToOpenFile { path, source },
+    }
+}
+
+/// Translates errors from attempting to a file into a more specific [`Error`] when possible
+fn map_seek_error(source: io::Error, file: &File, path: &std::path::Path, requested: u64) -> Error {
+    // if we can't seek, check if start is out of bounds to give
+    // a better error. Don't read metadata before to avoid
+    // an extra syscall in the common case
+    let m = match open_metadata(&file, &path) {
+        Err(e) => return e,
+        Ok(m) => m,
+    };
+    if requested >= m.len() {
+        return Error::InvalidRange {
+            source: InvalidGetRange::StartTooLarge {
+                requested,
+                length: m.len(),
             },
-            _ => Error::UnableToOpenFile {
-                path: path.clone(),
-                source: e,
-            },
-        }),
-        Ok((metadata, file)) => match !metadata.is_dir() {
-            true => Ok((file, metadata)),
-            false => Err(Error::NotFound {
-                path: path.clone(),
-                source: io::Error::new(ErrorKind::NotFound, "is directory"),
-            }),
-        },
-    }?;
-    Ok(ret)
+        };
+    }
+    Error::Seek {
+        source,
+        path: PathBuf::from(path),
+    }
 }
 
 fn convert_entry(entry: DirEntry, location: Path) -> Result<Option<ObjectMeta>> {
