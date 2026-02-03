@@ -490,7 +490,7 @@ mod http_tests {
     use crate::{ClientOptions, ObjectStoreExt, RetryConfig};
     use bytes::Bytes;
     use futures::FutureExt;
-    use http::header::{CONTENT_LENGTH, CONTENT_RANGE, ETAG, RANGE};
+    use http::header::{CONNECTION, CONTENT_LENGTH, CONTENT_RANGE, ETAG, RANGE};
     use http::{Response, StatusCode};
     use hyper::body::Frame;
     use std::pin::Pin;
@@ -578,6 +578,83 @@ mod http_tests {
 
         let b = store.get(&path).await.unwrap().bytes().await.unwrap();
         assert_eq!(b.as_ref(), b"Hello World");
+
+        // Test basic with range
+        let resp = Response::builder()
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header(CONTENT_LENGTH, 4)
+            .header(ETAG, "123")
+            .header(CONTENT_RANGE, "bytes 1-4/11")
+            .body("ello".to_string())
+            .unwrap();
+
+        mock.push(resp);
+
+        let b = store.get_range(&path, 1..5).await.unwrap();
+        assert_eq!(b.as_ref(), b"ello");
+
+        // NOTE: if debug_assertions is true, hyper panics with response content length header
+        // value does not match the length of response body.
+        if !cfg!(debug_assertions) {
+            // Test retry if a response body is incomplete.
+            mock.push(
+                Response::builder()
+                    .header(CONTENT_LENGTH, 12)
+                    .header(ETAG, "123")
+                    // connection: close disables keep alive
+                    .header(CONNECTION, "close")
+                    .body("Hello".to_string())
+                    .unwrap(),
+            );
+
+            mock.push_fn(|req| {
+                assert_eq!(
+                    req.headers().get(RANGE).unwrap().to_str().unwrap(),
+                    "bytes=5-11"
+                );
+
+                Response::builder()
+                    .status(StatusCode::PARTIAL_CONTENT)
+                    .header(CONTENT_LENGTH, 7)
+                    .header(ETAG, "123")
+                    .header(CONTENT_RANGE, "bytes 5-11/12")
+                    .body(" World!".to_string())
+                    .unwrap()
+            });
+
+            let ret = store.get(&path).await.unwrap().bytes().await.unwrap();
+            assert_eq!(ret.as_ref(), b"Hello World!");
+
+            // Test retry if a get range response body is incomplete.
+            mock.push(
+                Response::builder()
+                    .status(StatusCode::PARTIAL_CONTENT)
+                    .header(CONTENT_LENGTH, 5)
+                    .header(CONNECTION, "close")
+                    .header(ETAG, "123")
+                    .header(CONTENT_RANGE, "bytes 6-10/12")
+                    .body("Wo".to_string())
+                    .unwrap(),
+            );
+
+            mock.push_fn(|req| {
+                assert_eq!(
+                    req.headers().get(RANGE).unwrap().to_str().unwrap(),
+                    "bytes=8-10"
+                );
+
+                Response::builder()
+                    .status(StatusCode::PARTIAL_CONTENT)
+                    .header(CONTENT_LENGTH, 3)
+                    .header(ETAG, "123")
+                    .header(CONTENT_RANGE, "bytes 8-10/12")
+                    .body("rld".to_string())
+                    .unwrap()
+            });
+
+            let ret = store.get_range(&path, 6..11).await.unwrap();
+            assert_eq!(ret.as_ref(), b"World");
+        }
 
         // Should retry with range
         mock.push(
