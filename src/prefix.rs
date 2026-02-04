@@ -23,8 +23,9 @@ use std::ops::Range;
 use crate::multipart::{MultipartStore, PartId};
 use crate::path::Path;
 use crate::{
-    CopyOptions, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result,
+    CopyOptions, DeleteOptions, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
+    ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
+    Result,
 };
 
 /// Store wrapper that applies a constant prefix to all paths handled by the store.
@@ -123,6 +124,11 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
     async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
         let full_path = self.full_path(location);
         self.inner.get_ranges(&full_path, ranges).await
+    }
+
+    async fn delete_opts(&self, location: &Path, opts: DeleteOptions) -> Result<()> {
+        let full_path = self.full_path(location);
+        self.inner.delete_opts(&full_path, opts).await
     }
 
     fn delete_stream(
