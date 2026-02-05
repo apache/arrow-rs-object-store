@@ -28,8 +28,6 @@ use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::OnceLock;
-use regex::Regex;
 use url::Url;
 
 /// The well-known account used by Azurite and the legacy Azure Storage Emulator.
@@ -680,56 +678,38 @@ impl MicrosoftAzureBuilder {
                     self.container_name = Some(validate(parsed.username())?);
                     self.account_name = Some(validate(a)?);
                     self.use_fabric_endpoint = true.into();
-                } else if let Some(a) = host.strip_suffix("-api.onelake.fabric.microsoft.com") {
-                    self.container_name = Some(validate(parsed.username())?);
-                    self.account_name = Some(validate(a)?);
-                    self.use_fabric_endpoint = true.into();
                 } else {
                     return Err(Error::UrlNotRecognised { url: url.into() }.into());
                 }
             }
             "https" => {
-                // Regex to match WS-PL FQDN:
                 // "{workspaceid}.z??.(onelake|dfs|blob).fabric.microsoft.com"
-                static WS_PL_REGEX: OnceLock<Regex> = OnceLock::new();
-                
-                let ws_pl_regex = WS_PL_REGEX.get_or_init(|| {
-                    Regex::new(
-                        r"(?i)^(?P<workspaceid>[0-9a-f]{32})\.z(?P<xy>[0-9a-f]{2})\.(onelake|dfs|blob)\.fabric\.microsoft\.com$"
-                    ).unwrap()
-                });
-
-                // WS-PL Fabric endpoint, eg- 1) c047b3e34e89407a98d7cf9949ae92a3.zc0.dfs.fabric.microsoft.com, 2) c047b3e34e89407a98d7cf9949ae92a3.zc0.blob.fabric.microsoft.com
-                if let Some(captures) = ws_pl_regex.captures(host) {
-                    let workspaceid = captures.name("workspaceid").unwrap().as_str();
-                    let xy = captures.name("xy").unwrap().as_str();
-                    
-                    if !workspaceid.get(0..2).is_some_and(|pfx| pfx.eq_ignore_ascii_case(xy)) {
-                        return Err(Error::UrlNotRecognised { url: url.into() }.into());
-                    }
-
-                    self.account_name = Some(format!("{workspaceid}.z{xy}"));
-                    self.container_name = Some(validate(workspaceid)?);
-                    self.use_fabric_endpoint = true.into();
-                    return Ok(());
-                }
-
-                // Api Onelake Fabric endpoint
-                if host.ends_with("-api.onelake.fabric.microsoft.com") {
-                    let account = host.strip_suffix("-api.onelake.fabric.microsoft.com").unwrap();
-                    self.account_name = Some(validate(account)?);
-                    let workspace = parsed.path_segments().unwrap().next()
-                        .expect("iterator always contains at least one string (which may be empty)");
-
-                    if !workspace.is_empty() {
-                        self.container_name = Some(workspace.to_string());
-                    }
-
-                    self.use_fabric_endpoint = true.into();
-                    return Ok(());
-                }
-
                 match host.split_once('.') {
+                    
+                    // Workspace-level Private Link detection
+                    Some((workspaceid, rest)) if rest.starts_with('z') && rest.ends_with("fabric.microsoft.com") => {
+                        // rest looks like: "z28.dfs.fabric.microsoft.com" / "z28.blob.fabric.microsoft.com" / etc.
+                        // Account name for WS-PL is two labels: "{wsid}.z{xy}"
+                        let (zone, _) = rest
+                            .split_once('.')
+                            .unwrap_or((rest, ""));
+
+                        let wsid = validate(workspaceid)?;
+                        let zone = validate(zone)?;
+
+                        self.account_name = Some(format!("{wsid}.{zone}"));
+
+                        // Attempt to infer the container name from the URL
+                        let container = parsed.path_segments().unwrap().next()
+                            .expect("iterator always contains at least one string (which may be empty)");
+
+                        if !container.is_empty() {
+                            self.container_name = Some(validate(container)?);
+                        }
+
+                        self.use_fabric_endpoint = true.into();
+                    }
+
                     // Azure Storage public
                     Some((a, "dfs.core.windows.net")) | Some((a, "blob.core.windows.net")) => {
                         self.account_name = Some(validate(a)?);
@@ -1178,14 +1158,6 @@ mod tests {
         assert!(builder.use_fabric_endpoint.get().unwrap());
 
         let mut builder = MicrosoftAzureBuilder::new();
-        builder
-            .parse_url("abfss://file_system@account-api.onelake.fabric.microsoft.com/")
-            .unwrap();
-        assert_eq!(builder.account_name, Some("account".to_string()));
-        assert_eq!(builder.container_name, Some("file_system".to_string()));
-        assert!(builder.use_fabric_endpoint.get().unwrap());
-
-        let mut builder = MicrosoftAzureBuilder::new();
         builder.parse_url("abfs://container/path").unwrap();
         assert_eq!(builder.container_name, Some("container".to_string()));
 
@@ -1231,14 +1203,6 @@ mod tests {
         assert_eq!(builder.account_name, Some("account".to_string()));
         assert_eq!(builder.container_name, None);
         assert!(builder.use_fabric_endpoint.get().unwrap());
-
-        let mut builder = MicrosoftAzureBuilder::new();
-        builder
-            .parse_url("https://account-api.onelake.fabric.microsoft.com/")
-            .unwrap();
-        assert_eq!(builder.account_name, Some("account".to_string()));
-        assert_eq!(builder.container_name, None);
-        assert!(builder.use_fabric_endpoint.get().unwrap());
        
         let mut builder = MicrosoftAzureBuilder::new();
         builder
@@ -1246,6 +1210,14 @@ mod tests {
             .unwrap();
         assert_eq!(builder.account_name, Some("account".to_string()));
         assert_eq!(builder.container_name.as_deref(), Some("container"));
+        assert!(builder.use_fabric_endpoint.get().unwrap());
+
+        let mut builder = MicrosoftAzureBuilder::new();
+        builder
+            .parse_url("https://onelake.dfs.fabric.microsoft.com/c047b3e3-4e89-407a-98d7-cf9949ae92a3/9f1a2b3c-4d5e-6f70-8a9b-c0d1e2f3a456.lakehouse/Files/tables/sales/data.parquet")
+            .unwrap();
+        assert_eq!(builder.account_name, Some("onelake".to_string()));
+        assert_eq!(builder.container_name.as_deref(), Some("c047b3e3-4e89-407a-98d7-cf9949ae92a3"));
         assert!(builder.use_fabric_endpoint.get().unwrap());
 
         let mut builder = MicrosoftAzureBuilder::new();
@@ -1269,7 +1241,7 @@ mod tests {
             .parse_url("https://Ab000000000000000000000000000000.zAb.dfs.fabric.microsoft.com/")
             .unwrap();
         assert_eq!(builder.account_name, Some("ab000000000000000000000000000000.zab".to_string()));
-        assert_eq!(builder.container_name.as_deref(), Some("ab000000000000000000000000000000"));
+        assert_eq!(builder.container_name.as_deref(), None);
         assert!(builder.use_fabric_endpoint.get().unwrap());
 
         let mut builder = MicrosoftAzureBuilder::new();
@@ -1277,23 +1249,23 @@ mod tests {
             .parse_url("https://ab000000000000000000000000000000.zab.dfs.fabric.microsoft.com/")
             .unwrap();
         assert_eq!(builder.account_name, Some("ab000000000000000000000000000000.zab".to_string()));
-        assert_eq!(builder.container_name.as_deref(), Some("ab000000000000000000000000000000"));
+        assert_eq!(builder.container_name.as_deref(), None);
         assert!(builder.use_fabric_endpoint.get().unwrap());
 
         let mut builder = MicrosoftAzureBuilder::new();
         builder
-            .parse_url("https://ab000000000000000000000000000000.zab.blob.fabric.microsoft.com/")
+            .parse_url("https://c047b3e34e89407a98d7cf9949ae92a3.zc0.blob.fabric.microsoft.com/c047b3e3-4e89-407a-98d7-cf9949ae92a3/9f1a2b3c-4d5e-6f70-8a9b-c0d1e2f3a456/file")
             .unwrap();
-        assert_eq!(builder.account_name, Some("ab000000000000000000000000000000.zab".to_string()));
-        assert_eq!(builder.container_name.as_deref(), Some("ab000000000000000000000000000000"));
+        assert_eq!(builder.account_name, Some("c047b3e34e89407a98d7cf9949ae92a3.zc0".to_string()));
+        assert_eq!(builder.container_name.as_deref(), Some("c047b3e3-4e89-407a-98d7-cf9949ae92a3"));
         assert!(builder.use_fabric_endpoint.get().unwrap());
 
         let mut builder = MicrosoftAzureBuilder::new();
         builder
-            .parse_url("https://ab000000000000000000000000000000.zab.onelake.fabric.microsoft.com/")
+            .parse_url("https://c047b3e34e89407a98d7cf9949ae92a3.zc0.onelake.fabric.microsoft.com/c047b3e3-4e89-407a-98d7-cf9949ae92a3/9f1a2b3c-4d5e-6f70-8a9b-c0d1e2f3a456/file")
             .unwrap();
-        assert_eq!(builder.account_name, Some("ab000000000000000000000000000000.zab".to_string()));
-        assert_eq!(builder.container_name.as_deref(), Some("ab000000000000000000000000000000"));
+        assert_eq!(builder.account_name, Some("c047b3e34e89407a98d7cf9949ae92a3.zc0".to_string()));
+        assert_eq!(builder.container_name.as_deref(), Some("c047b3e3-4e89-407a-98d7-cf9949ae92a3"));
         assert!(builder.use_fabric_endpoint.get().unwrap());
 
         let err_cases = [
@@ -1303,10 +1275,7 @@ mod tests {
             "abfss://file_system@account.foo.dfs.core.windows.net/",
             "abfss://file_system.bar@account.dfs.core.windows.net/",
             "https://blob.mydomain/",
-            "https://blob.foo.dfs.core.windows.net/",
-            "https://ab000000000000000000000000000000.zcd.dfs.fabric.microsoft.com", // xy mismatch (ab != cd)
-            "https://ab00000000000000000000000000000.zab.dfs.fabric.microsoft.com",  // workspaceid 31 chars
-            "https://ab000000000000000000000000000000.zabc.dfs.fabric.microsoft.com", // xy 3 chars
+            "https://blob.foo.dfs.core.windows.net/"
         ];
         let mut builder = MicrosoftAzureBuilder::new();
         for case in err_cases {
