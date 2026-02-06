@@ -54,8 +54,9 @@ hyper = { version = "1.2", default-features = false, optional = true }
 md-5 = { version = "0.10.6", default-features = false, optional = true }
 quick-xml = { version = "0.39.0", features = ["serialize", "overlapped-lists"], optional = true }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"], optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "http2"], optional = true }
+reqwest = { version = "0.13", default-features = false, features = ["http2", "rustls-no-provider"], optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
+aws-lc-rs = { version = "1.15", default-features = false, optional = true }
 rustls-pki-types = { version = "1.9", default-features = false, features = ["std"], optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
@@ -71,13 +72,26 @@ wasm-bindgen-futures = "0.4.18"
 
 [features]
 default = ["fs"]
-cloud = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/stream", "chrono/serde", "base64", "rand", "ring", "http-body-util", "form_urlencoded", "serde_urlencoded"]
-azure = ["cloud", "httparse"]
+cloud-no-crypto = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/stream", "chrono/serde", "base64", "rand","http-body-util", "form_urlencoded", "serde_urlencoded"]
+cloud = ["aws-lc-rs", "cloud-no-crypto"]
+
+aws-lc-rs = ["dep:aws-lc-rs", "reqwest/rustls", "rustls-pki-types"]
+ring = ["dep:ring", "rustls-pki-types"]
+
+azure-no-crypto = ["cloud-no-crypto", "httparse"]
+azure = ["cloud", "azure-no-crypto"]
+
 fs = ["walkdir"]
-gcp = ["cloud", "rustls-pki-types"]
-aws = ["cloud", "md-5"]
-http = ["cloud"]
-tls-webpki-roots = ["reqwest?/rustls-tls-webpki-roots"]
+
+gcp-no-crypto = ["cloud-no-crypto"]
+gcp = ["cloud", "gcp-no-crypto"]
+
+aws-no-crypto = ["cloud-no-crypto", "md-5"]
+aws = ["cloud", "aws-no-crypto"]
+
+http-no-crypto = ["cloud-no-crypto"]
+http = ["cloud", "http-no-crypto"]
+
 integration = ["rand"]
 
 [dev-dependencies] # In alphabetical order
@@ -86,8 +100,9 @@ hyper-util = "0.1"
 rand = "0.9"
 tempfile = "3.1.0"
 regex = "1.11.1"
+webpki-root-certs = "1"
 # The "gzip" feature for reqwest is enabled for an integration test.
-reqwest = { version = "0.12", default-features = false, features = ["gzip"] }
+reqwest = { version = "0.13", default-features = false, features = ["gzip"] }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
 wasm-bindgen-test = "0.3.50"

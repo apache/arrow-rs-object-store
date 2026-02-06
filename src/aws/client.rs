@@ -32,7 +32,10 @@ use crate::client::s3::{
     CompleteMultipartUpload, CompleteMultipartUploadResult, CopyPartResult,
     InitiateMultipartUploadResult, ListResponse, PartMetadata,
 };
-use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpResponse};
+use crate::client::{
+    CryptoProvider, DigestAlgorithm, GetOptionsExt, HttpClient, HttpError, HttpResponse,
+    crypto_provider,
+};
 use crate::list::{PaginatedListOptions, PaginatedListResult};
 use crate::multipart::PartId;
 use crate::{
@@ -52,8 +55,6 @@ use itertools::Itertools;
 use md5::{Digest, Md5};
 use percent_encoding::{PercentEncode, utf8_percent_encode};
 use quick_xml::events::{self as xml_events};
-use ring::digest;
-use ring::digest::Context;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -198,6 +199,7 @@ pub(crate) struct S3Config {
     pub bucket: String,
     pub bucket_endpoint: String,
     pub credentials: AwsCredentialProvider,
+    pub crypto: Option<Arc<dyn CryptoProvider>>,
     pub session_provider: Option<AwsCredentialProvider>,
     pub retry_config: RetryConfig,
     pub client_options: ClientOptions,
@@ -216,19 +218,18 @@ impl S3Config {
         format!("{}/{}", self.bucket_endpoint, encode_path(path))
     }
 
-    async fn get_session_credential(&self) -> Result<SessionCredential<'_>> {
-        let credential = match self.skip_signature {
+    async fn get_session_credential(&self) -> Result<Option<SessionCredential<'_>>> {
+        Ok(match self.skip_signature {
             false => {
                 let provider = self.session_provider.as_ref().unwrap_or(&self.credentials);
-                Some(provider.get_credential().await?)
+                let credential = provider.get_credential().await?;
+                Some(SessionCredential {
+                    credential,
+                    session_token: self.session_provider.is_some(),
+                    config: self,
+                })
             }
             true => None,
-        };
-
-        Ok(SessionCredential {
-            credential,
-            session_token: self.session_provider.is_some(),
-            config: self,
         })
     }
 
@@ -243,27 +244,32 @@ impl S3Config {
     pub(crate) fn is_s3_express(&self) -> bool {
         self.session_provider.is_some()
     }
+
+    pub(crate) fn crypto(&self) -> Result<&dyn CryptoProvider> {
+        crypto_provider(self.crypto.as_deref())
+    }
 }
 
 struct SessionCredential<'a> {
-    credential: Option<Arc<AwsCredential>>,
+    credential: Arc<AwsCredential>,
     session_token: bool,
     config: &'a S3Config,
 }
 
 impl SessionCredential<'_> {
-    fn authorizer(&self) -> Option<AwsAuthorizer<'_>> {
+    fn authorizer(&self) -> Result<AwsAuthorizer<'_>> {
         let mut authorizer =
-            AwsAuthorizer::new(self.credential.as_deref()?, "s3", &self.config.region)
+            AwsAuthorizer::new(self.credential.as_ref(), "s3", &self.config.region)
                 .with_sign_payload(self.config.sign_payload)
-                .with_request_payer(self.config.request_payer);
+                .with_request_payer(self.config.request_payer)
+                .with_crypto(self.config.crypto()?);
 
         if self.session_token {
             let token = HeaderName::from_static("x-amz-s3session-token");
             authorizer = authorizer.with_token_header(token)
         }
 
-        Some(authorizer)
+        Ok(authorizer)
     }
 }
 
@@ -296,7 +302,7 @@ pub(crate) struct Request<'a> {
     path: &'a Path,
     config: &'a S3Config,
     builder: HttpRequestBuilder,
-    payload_sha256: Option<digest::Digest>,
+    payload_sha256: Option<[u8; 32]>,
     payload: Option<PutPayload>,
     use_session_creds: bool,
     idempotent: bool,
@@ -397,13 +403,13 @@ impl Request<'_> {
         Self { builder, ..self }
     }
 
-    pub(crate) fn with_payload(mut self, payload: PutPayload) -> Self {
+    pub(crate) fn with_payload(mut self, payload: PutPayload) -> Result<Self> {
         if (!self.config.skip_signature && self.config.sign_payload)
             || self.config.checksum.is_some()
         {
-            let mut sha256 = Context::new(&digest::SHA256);
-            payload.iter().for_each(|x| sha256.update(x));
-            let payload_sha256 = sha256.finish();
+            let mut ctx = self.config.crypto()?.digest(DigestAlgorithm::Sha256)?;
+            payload.iter().for_each(|x| ctx.update(x));
+            let payload_sha256 = ctx.finish()?.try_into().unwrap();
 
             if let Some(Checksum::SHA256) = self.config.checksum {
                 self.builder = self
@@ -416,24 +422,28 @@ impl Request<'_> {
         let content_length = payload.content_length();
         self.builder = self.builder.header(CONTENT_LENGTH, content_length);
         self.payload = Some(payload);
-        self
+        Ok(self)
     }
 
     pub(crate) async fn send(self) -> Result<HttpResponse, RequestError> {
         let credential = match self.use_session_creds {
             true => self.config.get_session_credential().await?,
-            false => SessionCredential {
-                credential: self.config.get_credential().await?,
-                session_token: false,
-                config: self.config,
-            },
+            false => {
+                let credential = self.config.get_credential().await?;
+                credential.map(|credential| SessionCredential {
+                    credential,
+                    session_token: false,
+                    config: self.config,
+                })
+            }
         };
+        let authorizer = credential.as_ref().map(|x| x.authorizer()).transpose()?;
 
         let sha = self.payload_sha256.as_ref().map(|x| x.as_ref());
 
         let path = self.path.as_ref();
         self.builder
-            .with_aws_sigv4(credential.authorizer(), sha)
+            .with_aws_sigv4(authorizer, sha)?
             .retryable(&self.config.retry_config)
             .retry_on_conflict(self.retry_on_conflict)
             .idempotent(self.idempotent)
@@ -493,6 +503,7 @@ impl S3Client {
         }
 
         let credential = self.config.get_session_credential().await?;
+        let authorizer = credential.as_ref().map(|x| x.authorizer()).transpose()?;
         let url = format!("{}?delete", self.config.bucket_endpoint);
 
         let mut buffer = Vec::new();
@@ -536,7 +547,11 @@ impl S3Client {
 
         let mut builder = self.client.request(Method::POST, url);
 
-        let digest = digest::digest(&digest::SHA256, &body);
+        let crypto = self.config.crypto()?;
+        let mut ctx = crypto.digest(DigestAlgorithm::Sha256)?;
+        ctx.update(body.as_ref());
+        let digest = ctx.finish()?;
+
         builder = builder.header(SHA256_CHECKSUM, BASE64_STANDARD.encode(digest));
 
         // S3 *requires* DeleteObjects to include a Content-MD5 header:
@@ -550,7 +565,7 @@ impl S3Client {
         let response = builder
             .header(CONTENT_TYPE, "application/xml")
             .body(body)
-            .with_aws_sigv4(credential.authorizer(), Some(digest.as_ref()))
+            .with_aws_sigv4(authorizer, Some(digest))?
             .send_retry(&self.config.retry_config)
             .await
             .map_err(|source| Error::DeleteObjectsRequest {
@@ -690,7 +705,7 @@ impl S3Client {
             .idempotent(true);
 
         request = match data {
-            PutPartPayload::Part(payload) => request.with_payload(payload),
+            PutPartPayload::Part(payload) => request.with_payload(payload)?,
             PutPartPayload::Copy(path) => request.header(
                 "x-amz-copy-source",
                 &format!("{}/{}", self.config.bucket, encode_path(path)),
@@ -775,6 +790,7 @@ impl S3Client {
         let body = quick_xml::se::to_string(&request).unwrap();
 
         let credential = self.config.get_session_credential().await?;
+        let authorizer = credential.as_ref().map(|x| x.authorizer()).transpose()?;
         let url = self.config.path_url(location);
 
         let request = self
@@ -782,7 +798,7 @@ impl S3Client {
             .post(url)
             .query(&[("uploadId", upload_id)])
             .body(body)
-            .with_aws_sigv4(credential.authorizer(), None);
+            .with_aws_sigv4(authorizer, None)?;
 
         let request = match mode {
             CompleteMultipartMode::Overwrite => request,
@@ -821,11 +837,12 @@ impl S3Client {
     #[cfg(test)]
     pub(crate) async fn get_object_tagging(&self, path: &Path) -> Result<HttpResponse> {
         let credential = self.config.get_session_credential().await?;
+        let authorizer = credential.as_ref().map(|x| x.authorizer()).transpose()?;
         let url = format!("{}?tagging", self.config.path_url(path));
         let response = self
             .client
             .request(Method::GET, url)
-            .with_aws_sigv4(credential.authorizer(), None)
+            .with_aws_sigv4(authorizer, None)?
             .send_retry(&self.config.retry_config)
             .await
             .map_err(|e| e.error(STORE, path.to_string()))?;
@@ -856,6 +873,7 @@ impl GetClient for S3Client {
         options: GetOptions,
     ) -> Result<HttpResponse> {
         let credential = self.config.get_session_credential().await?;
+        let authorizer = credential.as_ref().map(|x| x.authorizer()).transpose()?;
         let url = self.config.path_url(path);
         let method = match options.head {
             true => Method::HEAD,
@@ -878,7 +896,7 @@ impl GetClient for S3Client {
 
         let response = builder
             .with_get_options(options)
-            .with_aws_sigv4(credential.authorizer(), None)
+            .with_aws_sigv4(authorizer, None)?
             .retryable_request()
             .send(ctx)
             .await
@@ -897,6 +915,7 @@ impl ListClient for Arc<S3Client> {
         opts: PaginatedListOptions,
     ) -> Result<PaginatedListResult> {
         let credential = self.config.get_session_credential().await?;
+        let authorizer = credential.as_ref().map(|x| x.authorizer()).transpose()?;
         let url = self.config.bucket_endpoint.clone();
 
         let mut query = Vec::with_capacity(4);
@@ -930,7 +949,7 @@ impl ListClient for Arc<S3Client> {
             .request(Method::GET, &url)
             .extensions(opts.extensions)
             .query(&query)
-            .with_aws_sigv4(credential.authorizer(), None)
+            .with_aws_sigv4(authorizer, None)?
             .send_retry(&self.config.retry_config)
             .await
             .map_err(|source| Error::ListRequest { source })?
@@ -1000,6 +1019,7 @@ mod tests {
             conditional_put: Default::default(),
             encryption_headers: Default::default(),
             request_payer: false,
+            crypto: None,
         };
 
         let client = S3Client::new(config, HttpClient::new(reqwest::Client::new()));

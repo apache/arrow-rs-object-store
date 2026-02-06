@@ -481,7 +481,7 @@ mod tests {
         );
     }
 }
-#[cfg(all(test, feature = "http", not(target_arch = "wasm32")))]
+#[cfg(all(test, feature = "http-no-crypto", not(target_arch = "wasm32")))]
 mod http_tests {
     use crate::client::mock_server::MockServer;
     use crate::client::{HttpError, HttpErrorKind, HttpResponseBody};
