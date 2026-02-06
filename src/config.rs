@@ -131,6 +131,7 @@ pub(crate) fn fmt_duration(duration: &ConfigValue<Duration>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_macros::test;
     use std::time::Duration;
 
     #[test]

@@ -182,10 +182,11 @@ mod tests {
     use crate::local::LocalFileSystem;
     use crate::memory::InMemory;
     use crate::path::Path;
+    use crate::test_macros::*;
 
     use super::*;
 
-    #[tokio::test]
+    #[async_test]
     async fn test_chunked_basic() {
         let location = Path::parse("test").unwrap();
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());

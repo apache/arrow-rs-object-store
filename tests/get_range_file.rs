@@ -16,6 +16,7 @@
 // under the License.
 
 //! Tests the default implementation of get_range handles GetResult::File correctly (#4350)
+#![cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 
 use async_trait::async_trait;
 use bytes::Bytes;

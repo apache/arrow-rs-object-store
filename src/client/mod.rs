@@ -989,6 +989,7 @@ pub(crate) use cloud::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_macros::test;
     use std::collections::HashMap;
 
     #[test]

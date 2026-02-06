@@ -16,8 +16,8 @@
 // under the License.
 
 use std::future::Future;
-use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
+use web_time::{Duration, Instant};
 
 /// A temporary authentication token with an associated expiry
 #[derive(Debug, Clone)]
@@ -91,6 +91,7 @@ impl<T: Clone + Send> TokenCache<T> {
 #[cfg(test)]
 mod test {
     use crate::client::token::{TemporaryToken, TokenCache};
+    use crate::test_macros::async_test;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::{Duration, Instant};
 
@@ -102,7 +103,7 @@ mod test {
         }
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_expired_token_is_refreshed() {
         let cache = TokenCache::default();
         static COUNTER: AtomicU32 = AtomicU32::new(0);
@@ -116,14 +117,14 @@ mod test {
         let _ = cache.get_or_insert_with(get_token).await.unwrap();
         assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
 
-        tokio::time::sleep(Duration::from_millis(2)).await;
+        crate::util::sleep(Duration::from_millis(2)).await;
 
         // Token is expired, so should fetch again
         let _ = cache.get_or_insert_with(get_token).await.unwrap();
         assert_eq!(COUNTER.load(Ordering::SeqCst), 2);
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_min_ttl_causes_refresh() {
         let cache = TokenCache {
             cache: Default::default(),
@@ -146,7 +147,7 @@ mod test {
         let _ = cache.get_or_insert_with(get_token).await.unwrap();
         assert_eq!(COUNTER.load(Ordering::SeqCst), 1);
 
-        tokio::time::sleep(Duration::from_millis(2)).await;
+        crate::util::sleep(Duration::from_millis(2)).await;
 
         // Should fetch, since we've passed fetch_backoff
         let _ = cache.get_or_insert_with(get_token).await.unwrap();

@@ -44,6 +44,7 @@ thiserror = "2.0.2"
 tracing = { version = "0.1" }
 url = "2.2"
 walkdir = { version = "2", optional = true }
+web-time = { version = "1.1.0" }
 
 # Cloud storage support
 base64 = { version = "0.22", default-features = false, features = ["std"], optional = true }
@@ -61,13 +62,19 @@ serde = { version = "1.0", default-features = false, features = ["derive"], opti
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
 serde_urlencoded = { version = "0.7", optional = true }
 tokio = { version = "1.29.0", features = ["sync", "macros", "rt", "time", "io-util"] }
+n0-future = "0.3.2"
 
 [target.'cfg(target_family="unix")'.dev-dependencies]
 nix = { version = "0.31.1", features = ["fs"] }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
-web-time = { version = "1.1.0" }
+
 wasm-bindgen-futures = "0.4.18"
+send_wrapper = { version = "0.6", features = ["futures"] }
+gloo-timers = { version = "0.3", features = ["futures"] }
+chrono = { version = "0.4.34", default-features = false, features = ["clock", "wasmbind"] }
+
+
 
 [features]
 default = ["fs"]
@@ -89,7 +96,7 @@ regex = "1.11.1"
 # The "gzip" feature for reqwest is enabled for an integration test.
 reqwest = { version = "0.12", default-features = false, features = ["gzip"] }
 
-[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3.50"
 
 [dev-dependencies.getrandom_v03]
