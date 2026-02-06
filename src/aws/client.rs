@@ -43,6 +43,7 @@ use async_trait::async_trait;
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use bytes::{Buf, Bytes};
+use crc_fast;
 use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH,
     CONTENT_TYPE,
@@ -59,6 +60,7 @@ use std::sync::Arc;
 
 const VERSION_HEADER: &str = "x-amz-version-id";
 const SHA256_CHECKSUM: &str = "x-amz-checksum-sha256";
+const CRC64NVME_CHECKSUM: &str = "x-amz-checksum-crc64nvme";
 const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-amz-meta-";
 const ALGORITHM: &str = "x-amz-checksum-algorithm";
 const STORAGE_CLASS: &str = "x-amz-storage-class";
@@ -398,19 +400,40 @@ impl Request<'_> {
     }
 
     pub(crate) fn with_payload(mut self, payload: PutPayload) -> Self {
-        if (!self.config.skip_signature && self.config.sign_payload)
-            || self.config.checksum.is_some()
-        {
+        let needs_sha256_for_signing = !self.config.skip_signature && self.config.sign_payload;
+        let needs_sha256_for_checksum = matches!(self.config.checksum, Some(Checksum::SHA256));
+
+        let sha256_digest = if needs_sha256_for_signing || needs_sha256_for_checksum {
             let mut sha256 = Context::new(&digest::SHA256);
             payload.iter().for_each(|x| sha256.update(x));
-            let payload_sha256 = sha256.finish();
+            Some(sha256.finish())
+        } else {
+            None
+        };
 
-            if let Some(Checksum::SHA256) = self.config.checksum {
-                self.builder = self
-                    .builder
-                    .header(SHA256_CHECKSUM, BASE64_STANDARD.encode(payload_sha256));
+        if needs_sha256_for_signing {
+            self.payload_sha256 = sha256_digest;
+        }
+
+        match self.config.checksum {
+            Some(Checksum::SHA256) => {
+                self.builder = self.builder.header(
+                    SHA256_CHECKSUM,
+                    BASE64_STANDARD.encode(sha256_digest.unwrap()),
+                );
             }
-            self.payload_sha256 = Some(payload_sha256);
+            Some(Checksum::CRC64NVME) => {
+                let crc_algo = crc_fast::CrcAlgorithm::Crc64Nvme;
+                let mut digest = crc_fast::Digest::new(crc_algo);
+                payload.iter().for_each(|x| digest.update(x));
+                let checksum = digest.finalize();
+
+                self.builder = self.builder.header(
+                    CRC64NVME_CHECKSUM,
+                    BASE64_STANDARD.encode(checksum.to_be_bytes()),
+                )
+            }
+            None => {}
         }
 
         let content_length = payload.content_length();
@@ -651,6 +674,9 @@ impl S3Client {
                 Checksum::SHA256 => {
                     request = request.header(ALGORITHM, "SHA256");
                 }
+                Checksum::CRC64NVME => {
+                    request = request.header(ALGORITHM, "CRC64NVME");
+                }
             }
         }
         let response = request
@@ -708,14 +734,18 @@ impl S3Client {
         }
 
         let (parts, body) = request.send().await?.into_parts();
-        let (e_tag, checksum_sha256) = if is_copy {
+        let (e_tag, checksum_sha256, checksum_crc64nvme) = if is_copy {
             let response = body
                 .bytes()
                 .await
                 .map_err(|source| Error::CreateMultipartResponseBody { source })?;
             let response: CopyPartResult = quick_xml::de::from_reader(response.reader())
                 .map_err(|source| Error::InvalidMultipartResponse { source })?;
-            (response.e_tag, response.checksum_sha256)
+            (
+                response.e_tag,
+                response.checksum_sha256,
+                response.checksum_crc64nvme,
+            )
         } else {
             let e_tag = get_etag(&parts.headers).map_err(|source| Error::Metadata { source })?;
             let checksum_sha256 = parts
@@ -723,15 +753,33 @@ impl S3Client {
                 .get(SHA256_CHECKSUM)
                 .and_then(|v| v.to_str().ok())
                 .map(|v| v.to_string());
-            (e_tag, checksum_sha256)
+            let checksum_crc64nvme = parts
+                .headers
+                .get(CRC64NVME_CHECKSUM)
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.to_string());
+            (e_tag, checksum_sha256, checksum_crc64nvme)
         };
 
-        let content_id = if self.config.checksum == Some(Checksum::SHA256) {
-            let meta = PartMetadata {
-                e_tag,
-                checksum_sha256,
-            };
-            quick_xml::se::to_string(&meta).unwrap()
+        let content_id = if let Some(checksum) = self.config.checksum {
+            match checksum {
+                Checksum::SHA256 => {
+                    let meta = PartMetadata {
+                        e_tag,
+                        checksum_sha256,
+                        checksum_crc64nvme: None,
+                    };
+                    quick_xml::se::to_string(&meta).unwrap()
+                }
+                Checksum::CRC64NVME => {
+                    let meta = PartMetadata {
+                        e_tag,
+                        checksum_sha256: None,
+                        checksum_crc64nvme,
+                    };
+                    quick_xml::se::to_string(&meta).unwrap()
+                }
+            }
         } else {
             e_tag
         };

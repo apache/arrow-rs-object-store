@@ -24,12 +24,15 @@ use std::str::FromStr;
 pub enum Checksum {
     /// SHA-256 algorithm.
     SHA256,
+    /// CRC64-NVME algorithm.
+    CRC64NVME,
 }
 
 impl std::fmt::Display for Checksum {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
             Self::SHA256 => write!(f, "sha256"),
+            Self::CRC64NVME => write!(f, "crc64nvme"),
         }
     }
 }
@@ -40,6 +43,7 @@ impl FromStr for Checksum {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "sha256" => Ok(Self::SHA256),
+            "crc64nvme" => Ok(Self::CRC64NVME),
             _ => Err(()),
         }
     }
