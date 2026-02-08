@@ -116,6 +116,8 @@
 //!
 //! [`BufReader`]: buffered::BufReader
 //! [`BufWriter`]: buffered::BufWriter
+//! [`Read`]: std::io::Read
+//! [`Seek`]: std::io::Seek
 //!
 //! # Adapters
 //!
@@ -607,8 +609,6 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{StreamExt, TryStreamExt, stream::BoxStream};
 use std::fmt::{Debug, Formatter};
-#[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
-use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -1204,7 +1204,7 @@ as_ref_impl!(Box<T>);
 
 /// Extension trait for [`ObjectStore`] with convenience functions.
 ///
-/// See the [module-level documentation](crate) for a high leve overview and
+/// See the [module-level documentation](crate) for a high level overview and
 /// examples. See "contract" section within the [`ObjectStore`] documentation
 /// for more reasoning.
 ///
@@ -1652,22 +1652,11 @@ impl GetResult {
             #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
             GetResultPayload::File(mut file, path) => {
                 maybe_spawn_blocking(move || {
-                    file.seek(SeekFrom::Start(self.range.start as _))
-                        .map_err(|source| local::Error::Seek {
-                            source,
-                            path: path.clone(),
-                        })?;
+                    use crate::local::read_range;
 
-                    let mut buffer = if let Ok(len) = len.try_into() {
-                        Vec::with_capacity(len)
-                    } else {
-                        Vec::new()
-                    };
-                    file.take(len as _)
-                        .read_to_end(&mut buffer)
-                        .map_err(|source| local::Error::UnableToReadBytes { source, path })?;
+                    let buffer = read_range(&mut file, &path, self.range)?;
 
-                    Ok(buffer.into())
+                    Ok(buffer)
                 })
                 .await
             }
