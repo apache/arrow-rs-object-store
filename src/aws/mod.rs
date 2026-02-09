@@ -564,15 +564,47 @@ mod tests {
         maybe_skip_integration!();
 
         let bucket = "test-bucket-for-copy-if-not-exists";
-        let store = AmazonS3Builder::from_env()
-            .with_bucket_name(bucket)
-            .with_checksum_algorithm(Checksum::SHA256)
-            .with_copy_if_not_exists(S3CopyIfNotExists::Multipart)
-            .build()
-            .unwrap();
+        for checksum in [Checksum::SHA256, Checksum::CRC64NVME] {
+            let store = AmazonS3Builder::from_env()
+                .with_bucket_name(bucket)
+                .with_checksum_algorithm(checksum)
+                .with_copy_if_not_exists(S3CopyIfNotExists::Multipart)
+                .build()
+                .unwrap();
+
+            let src = Path::parse("src.bin").unwrap();
+            let dst = Path::parse("dst.bin").unwrap();
+            store
+                .put(&src, PutPayload::from(vec![0u8; 100_000]))
+                .await
+                .unwrap();
+            if store.head(&dst).await.is_ok() {
+                store.delete(&dst).await.unwrap();
+            }
+            store.copy_if_not_exists(&src, &dst).await.unwrap();
+            store.delete(&src).await.unwrap();
+            store.delete(&dst).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn copy_multipart_file_with_signature_change_checksum() {
+        maybe_skip_integration!();
+
+        let bucket = "test-bucket-for-copy-if-not-exists";
+        let bucket = "kdn-bkt1"; //kdn
+        let checksum_src = Checksum::SHA256;
+        let checksum_dst = Checksum::CRC64NVME;
 
         let src = Path::parse("src.bin").unwrap();
         let dst = Path::parse("dst.bin").unwrap();
+
+        let store = AmazonS3Builder::from_env()
+            .with_bucket_name(bucket)
+            .with_checksum_algorithm(checksum_src)
+            .build()
+            .unwrap();
+
         store
             .put(&src, PutPayload::from(vec![0u8; 100_000]))
             .await
@@ -580,6 +612,14 @@ mod tests {
         if store.head(&dst).await.is_ok() {
             store.delete(&dst).await.unwrap();
         }
+
+        let store = AmazonS3Builder::from_env()
+            .with_bucket_name(bucket)
+            .with_checksum_algorithm(checksum_dst)
+            .with_copy_if_not_exists(S3CopyIfNotExists::Multipart)
+            .build()
+            .unwrap();
+
         store.copy_if_not_exists(&src, &dst).await.unwrap();
         store.delete(&src).await.unwrap();
         store.delete(&dst).await.unwrap();
