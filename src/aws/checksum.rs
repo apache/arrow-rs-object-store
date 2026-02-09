@@ -20,6 +20,7 @@ use std::str::FromStr;
 
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 /// Enum representing checksum algorithm supported by S3.
 pub enum Checksum {
     /// SHA-256 algorithm.
