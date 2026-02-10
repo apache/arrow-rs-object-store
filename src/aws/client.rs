@@ -968,10 +968,15 @@ fn encode_path(path: &Path) -> PercentEncode<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::GetOptions;
     use crate::client::HttpClient;
+    use crate::client::get::GetClient;
     use crate::client::mock_server::MockServer;
+    use crate::client::retry::RetryContext;
     use http::Response;
     use http::header::{AUTHORIZATION, CONTENT_LENGTH};
+    use hyper::Request;
+    use hyper::body::Incoming;
 
     #[tokio::test]
     async fn test_create_multipart_has_content_length() {
@@ -1021,33 +1026,22 @@ mod tests {
         mock.shutdown().await;
     }
 
-    #[tokio::test]
-    async fn test_default_headers_signed() {
-        let mock = MockServer::new().await;
+    fn assert_default_headers_signed(req: &Request<Incoming>) {
+        assert_eq!(req.headers().get("x-amz-meta-test").unwrap(), "test-value");
+        assert_eq!(req.headers().get("x-amz-tagging").unwrap(), "key=value");
 
-        mock.push_fn(|req| {
-            // Verify default headers are present
-            assert_eq!(req.headers().get("x-amz-meta-test").unwrap(), "test-value");
-            assert_eq!(req.headers().get("x-amz-tagging").unwrap(), "key=value");
+        let auth = req.headers().get(AUTHORIZATION).unwrap().to_str().unwrap();
+        assert!(
+            auth.contains("x-amz-meta-test"),
+            "x-amz-meta-test not in SignedHeaders: {auth}"
+        );
+        assert!(
+            auth.contains("x-amz-tagging"),
+            "x-amz-tagging not in SignedHeaders: {auth}"
+        );
+    }
 
-            // Verify headers are included in signature
-            let auth = req.headers().get(AUTHORIZATION).unwrap().to_str().unwrap();
-            assert!(
-                auth.contains("x-amz-meta-test"),
-                "x-amz-meta-test not in SignedHeaders: {auth}"
-            );
-            assert!(
-                auth.contains("x-amz-tagging"),
-                "x-amz-tagging not in SignedHeaders: {auth}"
-            );
-
-            Response::builder()
-                .status(200)
-                .header("etag", "\"test-etag\"")
-                .body(String::new())
-                .unwrap()
-        });
-
+    fn default_headers_config(mock: &MockServer) -> S3Config {
         let credential = AwsCredential {
             key_id: "AKIAIOSFODNN7EXAMPLE".to_string(),
             secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string(),
@@ -1058,7 +1052,7 @@ mod tests {
         default_headers.insert("x-amz-meta-test", "test-value".parse().unwrap());
         default_headers.insert("x-amz-tagging", "key=value".parse().unwrap());
 
-        let config = S3Config {
+        S3Config {
             bucket_endpoint: mock.url().to_string(),
             bucket: "test-bucket".to_string(),
             region: "us-east-1".to_string(),
@@ -1076,13 +1070,70 @@ mod tests {
             conditional_put: Default::default(),
             encryption_headers: Default::default(),
             request_payer: false,
-        };
+        }
+    }
 
+    #[tokio::test]
+    async fn test_default_headers_signed_request() {
+        let mock = MockServer::new().await;
+        mock.push_fn(|req| {
+            assert_default_headers_signed(&req);
+            Response::builder()
+                .status(200)
+                .header("etag", "\"test-etag\"")
+                .body(String::new())
+                .unwrap()
+        });
+
+        let config = default_headers_config(&mock);
         let client = S3Client::new(config, HttpClient::new(reqwest::Client::new()));
         let result = client
             .request(Method::PUT, &Path::from("test"))
             .with_payload(PutPayload::default())
             .do_put()
+            .await;
+
+        assert!(result.is_ok());
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_default_headers_signed_bulk_delete() {
+        let mock = MockServer::new().await;
+        mock.push_fn(|req| {
+            assert_default_headers_signed(&req);
+            Response::builder()
+                .status(200)
+                .body("<DeleteResult><Deleted><Key>test</Key></Deleted></DeleteResult>".to_string())
+                .unwrap()
+        });
+
+        let config = default_headers_config(&mock);
+        let client = S3Client::new(config, HttpClient::new(reqwest::Client::new()));
+        let result = client
+            .bulk_delete_request(vec![Path::from("test")])
+            .await;
+
+        assert!(result.is_ok());
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_default_headers_signed_get_request() {
+        let mock = MockServer::new().await;
+        mock.push_fn(|req| {
+            assert_default_headers_signed(&req);
+            Response::builder()
+                .status(200)
+                .body("test-body".to_string())
+                .unwrap()
+        });
+
+        let config = default_headers_config(&mock);
+        let client = S3Client::new(config, HttpClient::new(reqwest::Client::new()));
+        let mut ctx = RetryContext::new(&client.config.retry_config);
+        let result = client
+            .get_request(&mut ctx, &Path::from("test"), GetOptions::default())
             .await;
 
         assert!(result.is_ok());
