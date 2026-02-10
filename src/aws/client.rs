@@ -1110,9 +1110,7 @@ mod tests {
 
         let config = default_headers_config(&mock);
         let client = S3Client::new(config, HttpClient::new(reqwest::Client::new()));
-        let result = client
-            .bulk_delete_request(vec![Path::from("test")])
-            .await;
+        let result = client.bulk_delete_request(vec![Path::from("test")]).await;
 
         assert!(result.is_ok());
         mock.shutdown().await;
