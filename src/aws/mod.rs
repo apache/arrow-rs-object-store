@@ -625,6 +625,7 @@ mod tests {
         let test_conditional_put = config.conditional_put != S3ConditionalPut::Disabled;
 
         put_get_delete_list(&integration).await;
+        list_with_offset_exclusivity(&integration).await;
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
