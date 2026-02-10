@@ -34,7 +34,7 @@ use crate::{
 use bytes::Bytes;
 use futures::stream::FuturesUnordered;
 use futures::{StreamExt, TryStreamExt};
-use rand::{Rng, rng};
+use rand::{RngExt, rng};
 use std::collections::HashSet;
 use std::slice;
 

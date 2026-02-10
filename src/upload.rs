@@ -246,7 +246,7 @@ mod tests {
     use futures::FutureExt;
     use parking_lot::Mutex;
     use rand::prelude::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     use crate::ObjectStoreExt;
     use crate::memory::InMemory;
