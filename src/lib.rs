@@ -517,6 +517,35 @@
 //! [Apache Iceberg]: https://iceberg.apache.org/
 //! [Delta Lake]: https://delta.io/
 //!
+//! # Conditional Delete
+//!
+//! Deletes can be guarded with [`DeleteOptions::if_match`] to ensure the object hasn't changed
+//! since it was last observed.
+//!
+//! ```
+//! # use object_store::{DeleteOptions, Error, ObjectStore, ObjectStoreExt};
+//! # use std::sync::Arc;
+//! # use object_store::memory::InMemory;
+//! # use object_store::path::Path;
+//! # fn get_object_store() -> Arc<dyn ObjectStore> {
+//! #   Arc::new(InMemory::new())
+//! # }
+//! # async fn conditional_delete() {
+//! let store = get_object_store();
+//! let path = Path::from("test");
+//!
+//! // Fetch version information for the object
+//! let meta = store.head(&path).await.unwrap();
+//! let opts = DeleteOptions::new().with_if_match(meta.e_tag);
+//!
+//! match store.delete_opts(&path, opts).await {
+//!     Ok(_) => {} // Successfully deleted
+//!     Err(Error::Precondition { .. }) => {} // Object has changed, retry
+//!     Err(e) => panic!("{e}"),
+//! }
+//! # }
+//! ```
+//!
 //! # TLS Certificates
 //!
 //! Stores that use HTTPS/TLS (this is true for most cloud stores) can choose the source of their [CA]
@@ -894,6 +923,37 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
         .await
     }
 
+    /// Delete the object at the specified location with options
+    ///
+    /// The default implementation supports only unconditional deletes and will
+    /// return [`Error::NotImplemented`] if conditional options are provided.
+    async fn delete_opts(&self, location: &Path, opts: DeleteOptions) -> Result<()> {
+        if opts.if_match.is_some() {
+            return Err(Error::NotImplemented {
+                operation: "`delete_opts` with `if_match`".into(),
+                implementer: self.to_string(),
+            });
+        }
+
+        let location = location.clone();
+        let mut stream =
+            self.delete_stream(futures::stream::once(async move { Ok(location) }).boxed());
+        let _path = stream.try_next().await?.ok_or_else(|| Error::Generic {
+            store: "ext",
+            source: "`delete_stream` with one location should yield once but didn't".into(),
+        })?;
+        if stream.next().await.is_some() {
+            Err(Error::Generic {
+                store: "ext",
+                source:
+                    "`delete_stream` with one location expected to yield exactly once, but yielded more than once"
+                        .into(),
+            })
+        } else {
+            Ok(())
+        }
+    }
+
     /// Delete all the objects at the specified locations
     ///
     /// When supported, this method will use bulk operations that delete more
@@ -1160,6 +1220,10 @@ macro_rules! as_ref_impl {
                 self.as_ref().get_ranges(location, ranges).await
             }
 
+            async fn delete_opts(&self, location: &Path, opts: DeleteOptions) -> Result<()> {
+                self.as_ref().delete_opts(location, opts).await
+            }
+
             fn delete_stream(
                 &self,
                 locations: BoxStream<'static, Result<Path>>,
@@ -1359,21 +1423,7 @@ where
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
-        let location = location.clone();
-        let mut stream =
-            self.delete_stream(futures::stream::once(async move { Ok(location) }).boxed());
-        let _path = stream.try_next().await?.ok_or_else(|| Error::Generic {
-            store: "ext",
-            source: "`delete_stream` with one location should yield once but didn't".into(),
-        })?;
-        if stream.next().await.is_some() {
-            Err(Error::Generic {
-                store: "ext",
-                source: "`delete_stream` with one location expected to yield exactly once, but yielded more than once".into(),
-            })
-        } else {
-            Ok(())
-        }
+        self.delete_opts(location, DeleteOptions::default()).await
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
@@ -1867,6 +1917,88 @@ pub struct PutResult {
     /// A version indicator for the newly created object
     pub version: Option<String>,
 }
+
+/// Options for a delete request
+#[derive(Debug, Clone, Default)]
+pub struct DeleteOptions {
+    /// Delete will succeed if the `ObjectMeta::e_tag` matches
+    /// otherwise returning [`Error::Precondition`]
+    ///
+    /// See <https://datatracker.ietf.org/doc/html/rfc9110#name-if-match>
+    ///
+    /// Examples:
+    ///
+    /// ```text
+    /// If-Match: "xyzzy"
+    /// If-Match: "xyzzy", "r2d2xxxx", "c3piozzzz"
+    /// If-Match: *
+    /// ```
+    pub if_match: Option<String>,
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to pass context-specific information (like tracing spans) via trait methods.
+    ///
+    /// These extensions are ignored entirely by backends offered through this crate.
+    ///
+    /// They are also excluded from [`PartialEq`] and [`Eq`].
+    pub extensions: Extensions,
+}
+
+impl DeleteOptions {
+    /// Returns an error if the preconditions on this request are not satisfied
+    pub fn check_preconditions(&self, meta: &ObjectMeta) -> Result<()> {
+        // The use of the invalid etag "*" means no ETag is equivalent to never matching
+        let etag = meta.e_tag.as_deref().unwrap_or("*");
+
+        if let Some(m) = &self.if_match {
+            if m != "*" && m.split(',').map(str::trim).all(|x| x != etag) {
+                return Err(Error::Precondition {
+                    path: meta.location.to_string(),
+                    source: format!("{etag} does not match {m}").into(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Create a new [`DeleteOptions`]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the `if_match` condition.
+    ///
+    /// See [`DeleteOptions::if_match`]
+    #[must_use]
+    pub fn with_if_match(mut self, etag: Option<impl Into<String>>) -> Self {
+        self.if_match = etag.map(Into::into);
+        self
+    }
+
+    /// Sets the `extensions`.
+    ///
+    /// See [`DeleteOptions::extensions`].
+    #[must_use]
+    pub fn with_extensions(mut self, extensions: Extensions) -> Self {
+        self.extensions = extensions;
+        self
+    }
+}
+
+impl PartialEq<Self> for DeleteOptions {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            if_match,
+            extensions: _,
+        } = self;
+        let Self {
+            if_match: other_if_match,
+            extensions: _,
+        } = other;
+        if_match == other_if_match
+    }
+}
+
+impl Eq for DeleteOptions {}
 
 /// Configure preconditions for the copy operation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -2412,6 +2544,22 @@ mod tests {
         assert_eq!(options.range, Some(GetRange::Bounded(0..100)));
         assert_eq!(options.version, Some("version-1".to_string()));
         assert!(options.head);
+        assert_eq!(options.extensions.get::<&str>(), extensions.get::<&str>());
+    }
+
+    #[test]
+    fn test_delete_options_builder() {
+        let extensions = Extensions::new();
+
+        let options = DeleteOptions::new();
+        assert_eq!(options.if_match, None);
+        assert!(options.extensions.get::<&str>().is_none());
+
+        let options = options
+            .with_if_match(Some("etag-match"))
+            .with_extensions(extensions.clone());
+
+        assert_eq!(options.if_match, Some("etag-match".to_string()));
         assert_eq!(options.extensions.get::<&str>(), extensions.get::<&str>());
     }
 

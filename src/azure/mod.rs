@@ -24,9 +24,9 @@
 //! Unused blocks will automatically be dropped after 7 days.
 //!
 use crate::{
-    CopyMode, CopyOptions, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
-    UploadPart,
+    CopyMode, CopyOptions, DeleteOptions, GetOptions, GetResult, ListResult, MultipartId,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload,
+    PutResult, Result, UploadPart,
     multipart::{MultipartStore, PartId},
     path::Path,
     signer::Signer,
@@ -116,6 +116,10 @@ impl ObjectStore for MicrosoftAzure {
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         self.client.get_opts(location, options).await
+    }
+
+    async fn delete_opts(&self, location: &Path, opts: DeleteOptions) -> Result<()> {
+        self.client.delete_request(location, opts).await
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
@@ -352,6 +356,8 @@ mod tests {
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;
         put_opts(&integration, true).await;
+        delete_opts(&integration, true).await;
+        delete_opts_race_condition(&integration, true).await;
         multipart(&integration, &integration).await;
         multipart_race_condition(&integration, false).await;
         multipart_out_of_order(&integration).await;
