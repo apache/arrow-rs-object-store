@@ -44,6 +44,7 @@ thiserror = "2.0.2"
 tracing = { version = "0.1" }
 url = "2.2"
 walkdir = { version = "2", optional = true }
+arc-swap = "1.7.1"
 
 # Cloud storage support
 base64 = { version = "0.22", default-features = false, features = ["std"], optional = true }
@@ -60,7 +61,7 @@ rustls-pki-types = { version = "1.9", default-features = false, features = ["std
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
 serde_urlencoded = { version = "0.7", optional = true }
-tokio = { version = "1.29.0", features = ["sync", "macros", "rt", "time", "io-util"] }
+tokio = { version = "1.29.0", features = ["sync", "macros", "rt", "rt-multi-thread", "time", "io-util"] }
 
 [target.'cfg(target_family="unix")'.dev-dependencies]
 nix = { version = "0.31.1", features = ["fs"] }
@@ -106,3 +107,8 @@ features = ["js"]
 name = "get_range_file"
 path = "tests/get_range_file.rs"
 required-features = ["fs"]
+
+[[bench]]
+name = "cache_benchmark"
+harness = false
+required-features = []
