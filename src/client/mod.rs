@@ -700,6 +700,11 @@ impl ClientOptions {
         self
     }
 
+    /// Get the default headers defined through `ClientOptions::with_default_headers`
+    pub fn get_default_headers(&self) -> Option<&HeaderMap> {
+        self.default_headers.as_ref()
+    }
+
     /// Get the mime type for the file in `path` to be uploaded
     ///
     /// Gets the file extension from `path`, and returns the
