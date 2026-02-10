@@ -127,7 +127,16 @@ impl ObjectStore for MicrosoftAzure {
         prefix: Option<&Path>,
         offset: &Path,
     ) -> BoxStream<'static, Result<ObjectMeta>> {
-        self.client.list_with_offset(prefix, offset)
+        if self.client.config().is_emulator {
+            // Azurite doesn't support the startFrom query parameter,
+            // fall back to client-side filtering
+            let offset = offset.clone();
+            self.list(prefix)
+                .try_filter(move |f| futures::future::ready(f.location > offset))
+                .boxed()
+        } else {
+            self.client.list_with_offset(prefix, offset)
+        }
     }
 
     fn delete_stream(
@@ -333,10 +342,7 @@ mod tests {
         let integration = MicrosoftAzureBuilder::from_env().build().unwrap();
 
         put_get_delete_list(&integration).await;
-        // Azurite doesn't support startFrom
-        if !integration.client.config().is_emulator {
-            list_with_offset_exclusivity(&integration).await;
-        }
+        list_with_offset_exclusivity(&integration).await;
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
