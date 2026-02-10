@@ -130,6 +130,8 @@ impl ObjectStore for MicrosoftAzure {
         if self.client.config().is_emulator {
             // Azurite doesn't support the startFrom query parameter,
             // fall back to client-side filtering
+            //
+            // See https://github.com/Azure/Azurite/issues/2619#issuecomment-3660701055
             let offset = offset.clone();
             self.list(prefix)
                 .try_filter(move |f| futures::future::ready(f.location > offset))
