@@ -371,7 +371,12 @@ impl ClientOptions {
         Default::default()
     }
 
-    /// Set an option by key
+    #[doc = concat!(
+      "Set an option by key - value pair\n",
+      "\n",
+      "These are the available options:\n",
+      include_str!("../client/config.md")
+    )]
     pub fn with_config(mut self, key: ClientConfigKey, value: impl Into<String>) -> Self {
         match key {
             ClientConfigKey::AllowHttp => self.allow_http.parse(value),

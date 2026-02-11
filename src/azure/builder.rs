@@ -561,7 +561,18 @@ impl MicrosoftAzureBuilder {
         self
     }
 
-    /// Set an option on the builder via a key - value pair.
+    #[doc = concat!(
+      "Set an option by key - value pair\n",
+      "\n",
+      "These are the available options:\n",
+      include_str!("config.md"),
+      "\n",
+      "**TIP:**\n",
+      "below settings are also available under the `aws_` prefix.\n",
+      "This can be useful if you want to have different cloud providers.\n",
+      "\n",
+      include_str!("../client/config.md")
+    )]
     pub fn with_config(mut self, key: AzureConfigKey, value: impl Into<String>) -> Self {
         match key {
             AzureConfigKey::AccessKey => self.access_key = Some(value.into()),
