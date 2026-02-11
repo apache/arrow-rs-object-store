@@ -184,6 +184,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::test_macros::{async_test, test};
     use futures::stream::{BoxStream, TryStreamExt};
 
     use super::*;
@@ -228,7 +229,7 @@ mod tests {
         assert!(delimiter.next().is_none());
     }
 
-    #[tokio::test]
+    #[async_test]
     async fn test_delimiter_stream() {
         let input = vec!["hello\nworld\nbin", "go\ncup", "cakes"];
         let input_stream = futures::stream::iter(input.into_iter().map(|s| Ok(Bytes::from(s))));
@@ -244,7 +245,7 @@ mod tests {
             ]
         )
     }
-    #[tokio::test]
+    #[async_test]
     async fn test_delimiter_unfold_stream() {
         let input_stream: BoxStream<'static, Result<Bytes>> = futures::stream::unfold(
             VecDeque::from(["hello\nworld\nbin", "go\ncup", "cakes"]),

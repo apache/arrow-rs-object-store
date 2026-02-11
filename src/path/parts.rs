@@ -168,6 +168,7 @@ impl<'a> DoubleEndedIterator for PathParts<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_macros::test;
 
     #[test]
     fn path_part_delimiter_gets_encoded() {
