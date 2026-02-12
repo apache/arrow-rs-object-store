@@ -53,7 +53,7 @@ httparse = { version = "1.8.0", default-features = false, features = ["std"], op
 hyper = { version = "1.2", default-features = false, optional = true }
 md-5 = { version = "0.10.6", default-features = false, optional = true }
 quick-xml = { version = "0.39.0", features = ["serialize", "overlapped-lists"], optional = true }
-rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"], optional = true }
+rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"], optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "http2"], optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 rustls-pki-types = { version = "1.9", default-features = false, features = ["std"], optional = true }
@@ -83,7 +83,7 @@ integration = ["rand"]
 [dev-dependencies] # In alphabetical order
 hyper = { version = "1.2", features = ["server"] }
 hyper-util = "0.1"
-rand = "0.9"
+rand = "0.10"
 tempfile = "3.1.0"
 regex = "1.11.1"
 # The "gzip" feature for reqwest is enabled for an integration test.
@@ -91,6 +91,11 @@ reqwest = { version = "0.12", default-features = false, features = ["gzip"] }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
 wasm-bindgen-test = "0.3.50"
+
+[dev-dependencies.getrandom_v04]
+package = "getrandom"
+version = "0.4"
+features = ["wasm_js"]
 
 [dev-dependencies.getrandom_v03]
 package = "getrandom"

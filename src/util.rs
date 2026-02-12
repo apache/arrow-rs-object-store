@@ -331,7 +331,7 @@ mod tests {
     use crate::Error;
 
     use super::*;
-    use rand::{Rng, rng};
+    use rand::{RngExt, rng};
     use std::ops::Range;
 
     /// Calls coalesce_ranges and validates the returned data is correct
