@@ -80,19 +80,19 @@
     doc = "* Local filesystem: [`LocalFileSystem`](local::LocalFileSystem)"
 )]
 #![cfg_attr(
-    feature = "gcp",
+    feature = "gcp-no-crypto",
     doc = "* [`gcp`]: [Google Cloud Storage](https://cloud.google.com/storage/) support. See [`GoogleCloudStorageBuilder`](gcp::GoogleCloudStorageBuilder)"
 )]
 #![cfg_attr(
-    feature = "aws",
+    feature = "aws-no-crypto",
     doc = "* [`aws`]: [Amazon S3](https://aws.amazon.com/s3/). See [`AmazonS3Builder`](aws::AmazonS3Builder)"
 )]
 #![cfg_attr(
-    feature = "azure",
+    feature = "azure-no-crypto",
     doc = "* [`azure`]: [Azure Blob Storage](https://azure.microsoft.com/en-gb/services/storage/blobs/). See [`MicrosoftAzureBuilder`](azure::MicrosoftAzureBuilder)"
 )]
 #![cfg_attr(
-    feature = "http",
+    feature = "http-no-crypto",
     doc = "* [`http`]: [HTTP/WebDAV Storage](https://datatracker.ietf.org/doc/html/rfc2518). See [`HttpBuilder`](http::HttpBuilder)"
 )]
 //!
@@ -136,7 +136,7 @@
 //! application complexity.
 //!
 //! ```no_run,ignore-wasm32
-//! # #[cfg(feature = "aws")] {
+//! # #[cfg(feature = "aws-no-crypto")] {
 //! # use url::Url;
 //! # use object_store::{parse_url, parse_url_opts};
 //! # use object_store::aws::{AmazonS3, AmazonS3Builder};
@@ -517,15 +517,43 @@
 //! [Apache Iceberg]: https://iceberg.apache.org/
 //! [Delta Lake]: https://delta.io/
 //!
+//! # Cryptography
+//!
+//! When using the non `*-no-crypto` features, i.e. `aws`, `gcp`, `azure`, etc... this crate makes use
+//! of [`aws-lc-rs`] for cryptography.
+//!
+//! Alternatively if you wish to use [`ring`], e.g. to support WASM targets, you should instead use the
+//! `*-no-crypto` feature flags, e.g. `aws-no-crypto`, and then enable the `ring` feature.
+//!
+//! Note: for TLS to work you will additionally need to register ring as the default rustls cryptography
+//! provider, e.g. `rustls::crypto::ring::default_provider().install_default()` in your main function.
+//!
+//! Alternatively the various builders can also accept custom [`client::CryptoProvider`] for maximum flexibility.
+//!
+//! [`aws-lc-rs`]: https://crates.io/crates/aws-lc-rs/
+//!
 //! # TLS Certificates
 //!
-//! Stores that use HTTPS/TLS (this is true for most cloud stores) can choose the source of their [CA]
-//! certificates. By default the system-bundled certificates are used (see
-//! [`rustls-native-certs`]). The `tls-webpki-roots` feature switch can be used to also bundle Mozilla's
-//! root certificates with the library/application (see [`webpki-roots`]).
+//! Stores that use HTTPS/TLS (this is true for most cloud stores) can choose how certificates are validated.
+//!
+//! By default [`rustls-platform-verifier`] is used to verify certificates using the system's certificate
+//! facilities. Alternatively, this functionality can be disabled using
+//! [`ClientOptions::with_no_system_certificates`] and certificates manually registered using
+//! [`ClientOptions::with_root_certificate].
+//!
+//! These could be a custom CA chain, or alternatively an alternative trust store, e.g. [`webpki-roots`].
+//!
+//! ```ignore-wasm32
+//! use object_store::{ClientOptions, Certificate};
+//!
+//! let mut options = ClientOptions::default().with_no_system_certificates(true);
+//! for root_cert in webpki_root_certs::TLS_SERVER_ROOT_CERTS {
+//!     options = options.with_root_certificate(Certificate::from_der(root_cert.as_ref()).unwrap());
+//! }
+//! ```
 //!
 //! [CA]: https://en.wikipedia.org/wiki/Certificate_authority
-//! [`rustls-native-certs`]: https://crates.io/crates/rustls-native-certs/
+//! [`rustls-platform-verifier`]: https://crates.io/crates/rustls-platform-verifier/
 //! [`webpki-roots`]: https://crates.io/crates/webpki-roots
 //!
 //! # Customizing HTTP Clients
@@ -537,17 +565,17 @@
 //!
 //! [`HttpConnector`]: client::HttpConnector
 
-#[cfg(feature = "aws")]
+#[cfg(feature = "aws-no-crypto")]
 pub mod aws;
-#[cfg(feature = "azure")]
+#[cfg(feature = "azure-no-crypto")]
 pub mod azure;
 pub mod buffered;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod chunked;
 pub mod delimited;
-#[cfg(feature = "gcp")]
+#[cfg(feature = "gcp-no-crypto")]
 pub mod gcp;
-#[cfg(feature = "http")]
+#[cfg(feature = "http-no-crypto")]
 pub mod http;
 pub mod limit;
 #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
@@ -556,23 +584,23 @@ pub mod memory;
 pub mod path;
 pub mod prefix;
 pub mod registry;
-#[cfg(feature = "cloud")]
+#[cfg(feature = "cloud-no-crypto")]
 pub mod signer;
 pub mod throttle;
 
-#[cfg(feature = "cloud")]
+#[cfg(feature = "cloud-no-crypto")]
 pub mod client;
 
-#[cfg(feature = "cloud")]
+#[cfg(feature = "cloud-no-crypto")]
 pub use client::{
     ClientConfigKey, ClientOptions, CredentialProvider, StaticCredentialProvider,
     backoff::BackoffConfig, retry::RetryConfig,
 };
 
-#[cfg(all(feature = "cloud", not(target_arch = "wasm32")))]
+#[cfg(all(feature = "cloud-no-crypto", not(target_arch = "wasm32")))]
 pub use client::Certificate;
 
-#[cfg(feature = "cloud")]
+#[cfg(feature = "cloud-no-crypto")]
 mod config;
 
 mod tags;
@@ -2165,7 +2193,7 @@ mod tests {
         store.list(Some(&path))
     }
 
-    #[cfg(any(feature = "azure", feature = "aws"))]
+    #[cfg(any(feature = "azure-no-crypto", feature = "aws-no-crypto"))]
     pub(crate) async fn signing<T>(integration: &T)
     where
         T: ObjectStore + signer::Signer,
@@ -2188,7 +2216,7 @@ mod tests {
         assert_eq!(data, loaded);
     }
 
-    #[cfg(any(feature = "aws", feature = "azure"))]
+    #[cfg(any(feature = "aws-no-crypto", feature = "azure-no-crypto"))]
     pub(crate) async fn tagging<F, Fut>(storage: Arc<dyn ObjectStore>, validate: bool, get_tags: F)
     where
         F: Fn(Path) -> Fut + Send + Sync,
@@ -2361,7 +2389,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "http")]
+    #[cfg(feature = "http-no-crypto")]
     fn test_reexported_types() {
         // Test HeaderMap
         let mut headers = HeaderMap::new();

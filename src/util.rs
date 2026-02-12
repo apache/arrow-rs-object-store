@@ -25,11 +25,11 @@ use super::Result;
 use bytes::Bytes;
 use futures::{Stream, TryStreamExt, stream::StreamExt};
 
-#[cfg(any(feature = "azure", feature = "http"))]
+#[cfg(any(feature = "azure-no-crypto", feature = "http-no-crypto"))]
 pub(crate) static RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
 
 // deserialize dates according to rfc1123
-#[cfg(any(feature = "azure", feature = "http"))]
+#[cfg(any(feature = "azure-no-crypto", feature = "http-no-crypto"))]
 pub(crate) fn deserialize_rfc1123<'de, D>(
     deserializer: D,
 ) -> Result<chrono::DateTime<chrono::Utc>, D::Error>
@@ -40,12 +40,6 @@ where
     let naive =
         chrono::NaiveDateTime::parse_from_str(&s, RFC1123_FMT).map_err(serde::de::Error::custom)?;
     Ok(chrono::TimeZone::from_utc_datetime(&chrono::Utc, &naive))
-}
-
-#[cfg(any(feature = "aws", feature = "azure"))]
-pub(crate) fn hmac_sha256(secret: impl AsRef<[u8]>, bytes: impl AsRef<[u8]>) -> ring::hmac::Tag {
-    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_ref());
-    ring::hmac::sign(&key, bytes.as_ref())
 }
 
 /// Collect a stream into [`Bytes`] avoiding copying in the event of a single chunk
@@ -300,7 +294,7 @@ impl<T: RangeBounds<u64>> From<T> for GetRange {
 //
 // Do not URI-encode any of the unreserved characters that RFC 3986 defines:
 // A-Z, a-z, 0-9, hyphen ( - ), underscore ( _ ), period ( . ), and tilde ( ~ ).
-#[cfg(any(feature = "aws", feature = "gcp"))]
+#[cfg(any(feature = "aws-no-crypto", feature = "gcp-no-crypto"))]
 pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet = percent_encoding::NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'.')
@@ -308,14 +302,18 @@ pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet = percent_encodin
     .remove(b'~');
 
 /// Computes the SHA256 digest of `body` returned as a hex encoded string
-#[cfg(any(feature = "aws", feature = "gcp"))]
-pub(crate) fn hex_digest(bytes: &[u8]) -> String {
-    let digest = ring::digest::digest(&ring::digest::SHA256, bytes);
-    hex_encode(digest.as_ref())
+#[cfg(any(feature = "aws-no-crypto", feature = "gcp-no-crypto"))]
+pub(crate) fn hex_digest(
+    crypto: &dyn crate::client::CryptoProvider,
+    bytes: &[u8],
+) -> Result<String> {
+    let mut ctx = crypto.digest(crate::client::DigestAlgorithm::Sha256)?;
+    ctx.update(bytes);
+    Ok(hex_encode(ctx.finish()?))
 }
 
 /// Returns `bytes` as a lower-case hex encoded string
-#[cfg(any(feature = "aws", feature = "gcp"))]
+#[cfg(any(feature = "aws-no-crypto", feature = "gcp-no-crypto"))]
 pub(crate) fn hex_encode(bytes: &[u8]) -> String {
     use std::fmt::Write;
     let mut out = String::with_capacity(bytes.len() * 2);
