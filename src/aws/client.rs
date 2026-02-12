@@ -43,7 +43,6 @@ use async_trait::async_trait;
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use bytes::{Buf, Bytes};
-use crc_fast;
 use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH,
     CONTENT_TYPE,

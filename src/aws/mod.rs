@@ -592,7 +592,6 @@ mod tests {
         maybe_skip_integration!();
 
         let bucket = "test-bucket-for-copy-if-not-exists";
-        let bucket = "kdn-bkt1"; //kdn
         let checksum_src = Checksum::SHA256;
         let checksum_dst = Checksum::CRC64NVME;
 
