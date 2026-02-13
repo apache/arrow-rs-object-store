@@ -1252,7 +1252,7 @@ mod tests {
             fabric_workload_host: "fake".to_string(),
             fabric_session_token: "session-token".to_string(),
             fabric_cluster_identifier: "cluster-id".to_string(),
-            storage_access_token: Some(expired_token.clone()),
+            storage_access_token: Some(expired_token),
             token_expiry: Some(expired_timestamp),
         };
 
