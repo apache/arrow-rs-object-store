@@ -1233,6 +1233,7 @@ mod tests {
         let fresh_claims = format!(r#"{{"exp":{fresh_timestamp}}}"#);
         let fresh_encoded = BASE64_URL_SAFE_NO_PAD.encode(fresh_claims.as_bytes());
         let fresh_token = format!("header.{fresh_encoded}.signature");
+        let expected_token = fresh_token.clone();
 
         // Mock the Fabric token service to return a fresh token
         server.push_fn(move |req| {
@@ -1243,7 +1244,7 @@ mod tests {
             );
             assert_eq!(req.headers().get(&PROXY_HOST).unwrap(), "fake");
 
-            Response::new(fresh_token.clone())
+            Response::new(fresh_token)
         });
 
         let provider = FabricTokenOAuthProvider {
@@ -1269,8 +1270,8 @@ mod tests {
 
         // Verify we got a fresh token from the API (not the expired cached one)
         if let AzureCredential::BearerToken(token) = temp_token.token.as_ref() {
-            assert_ne!(
-                token, &expired_token,
+            assert_eq!(
+                token, &expected_token,
                 "Should have fetched fresh token from API, not returned expired cached token"
             );
         }
