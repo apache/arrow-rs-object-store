@@ -114,6 +114,9 @@ pub(crate) enum Error {
     #[error("Filenames containing trailing '/#\\d+/' are not supported: {}", path)]
     InvalidPath { path: String },
 
+    #[error("Unable to sync data to file {}: {}", path.display(), source)]
+    UnableToSyncFile { source: io::Error, path: PathBuf },
+
     #[error("Upload aborted")]
     Aborted,
 }
@@ -361,17 +364,30 @@ impl ObjectStore for LocalFileSystem {
                     e_tag = Some(get_etag(&metadata));
                     match opts.mode {
                         PutMode::Overwrite => {
+                            file.sync_all().map_err(|source| Error::UnableToSyncFile {
+                                source,
+                                path: staging_path.clone(),
+                            })?;
                             // For some fuse types of file systems, the file must be closed first
                             // to trigger the upload operation, and then renamed, such as Blobfuse
                             std::mem::drop(file);
                             match std::fs::rename(&staging_path, &path) {
-                                Ok(_) => None,
+                                Ok(_) => {
+                                    fsync_parent_dir(&path)?;
+                                    None
+                                }
                                 Err(source) => Some(Error::UnableToRenameFile { source }),
                             }
                         }
-                        PutMode::Create => match std::fs::hard_link(&staging_path, &path) {
+                        PutMode::Create => {
+                            file.sync_all().map_err(|source| Error::UnableToSyncFile {
+                                source,
+                                path: staging_path.clone(),
+                            })?;
+                            match std::fs::hard_link(&staging_path, &path) {
                             Ok(_) => {
                                 let _ = std::fs::remove_file(&staging_path); // Attempt to cleanup
+                                fsync_parent_dir(&path)?;
                                 None
                             }
                             Err(source) => match source.kind() {
@@ -381,7 +397,8 @@ impl ObjectStore for LocalFileSystem {
                                 }),
                                 _ => Some(Error::UnableToRenameFile { source }),
                             },
-                        },
+                        }
+                        }
                         PutMode::Update(_) => unreachable!(),
                     }
                 }
@@ -564,10 +581,16 @@ impl ObjectStore for LocalFileSystem {
                         let staged = staged_upload_path(&to, &id.to_string());
                         match std::fs::hard_link(&from, &staged) {
                             Ok(_) => {
-                                return std::fs::rename(&staged, &to).map_err(|source| {
-                                    let _ = std::fs::remove_file(&staged); // Attempt to clean up
-                                    Error::UnableToCopyFile { from, to, source }.into()
-                                });
+                                match std::fs::rename(&staged, &to) {
+                                    Ok(_) => {
+                                        fsync_parent_dir(&to)?;
+                                        return Ok(());
+                                    }
+                                    Err(source) => {
+                                        let _ = std::fs::remove_file(&staged); // Attempt to clean up
+                                        return Err(Error::UnableToCopyFile { from, to, source }.into());
+                                    }
+                                }
                             }
                             Err(source) => match source.kind() {
                                 ErrorKind::AlreadyExists => id += 1,
@@ -590,7 +613,10 @@ impl ObjectStore for LocalFileSystem {
                 maybe_spawn_blocking(move || {
                     loop {
                         match std::fs::hard_link(&from, &to) {
-                            Ok(_) => return Ok(()),
+                            Ok(_) => {
+                                fsync_parent_dir(&to)?;
+                                return Ok(());
+                            }
                             Err(source) => match source.kind() {
                                 ErrorKind::AlreadyExists => {
                                     return Err(Error::AlreadyExists {
@@ -631,7 +657,13 @@ impl ObjectStore for LocalFileSystem {
                 maybe_spawn_blocking(move || {
                     loop {
                         match std::fs::rename(&from, &to) {
-                            Ok(_) => return Ok(()),
+                            Ok(_) => {
+                                fsync_parent_dir(&to)?;
+                                if from.parent() != to.parent() {
+                                    fsync_parent_dir(&from)?;
+                                }
+                                return Ok(());
+                            }
                             Err(source) => match source.kind() {
                                 ErrorKind::NotFound => match from.exists() {
                                     true => create_parent_dirs(&to, source)?,
@@ -799,6 +831,20 @@ fn create_parent_dirs(path: &std::path::Path, source: io::Error) -> Result<()> {
     Ok(())
 }
 
+/// Fsyncs the parent directory of `path` to ensure directory entry durability
+fn fsync_parent_dir(path: &std::path::Path) -> Result<()> {
+    let parent = path.parent().unwrap_or(path);
+    let dir = File::open(parent).map_err(|source| Error::UnableToOpenFile {
+        source,
+        path: parent.into(),
+    })?;
+    dir.sync_all().map_err(|source| Error::UnableToSyncFile {
+        source,
+        path: parent.into(),
+    })?;
+    Ok(())
+}
+
 /// Generates a unique file path `{base}#{suffix}`, returning the opened `File` and `path`
 ///
 /// Creates any directories if necessary
@@ -885,8 +931,13 @@ impl MultipartUpload for LocalUpload {
         maybe_spawn_blocking(move || {
             // Ensure no inflight writes
             let file = s.file.lock();
+            file.sync_all().map_err(|source| Error::UnableToSyncFile {
+                source,
+                path: src.clone(),
+            })?;
             std::fs::rename(&src, &s.dest)
                 .map_err(|source| Error::UnableToRenameFile { source })?;
+            fsync_parent_dir(&s.dest)?;
             let metadata = file.metadata().map_err(|e| Error::Metadata {
                 source: e.into(),
                 path: src.to_string_lossy().to_string(),
