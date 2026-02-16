@@ -15,13 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(feature = "tokio")]
 use std::task::{Context, Poll};
 
-use crate::{PutPayload, PutPayloadMut, PutResult, Result};
+#[cfg(feature = "tokio")]
+use crate::PutPayloadMut;
+use crate::{PutPayload, PutResult, Result};
 use async_trait::async_trait;
-use bytes::Bytes;
 use futures::future::BoxFuture;
-use futures::ready;
+#[cfg(feature = "tokio")]
 use tokio::task::JoinSet;
 
 /// An upload part request
@@ -116,6 +118,7 @@ impl<W: MultipartUpload + ?Sized> MultipartUpload for Box<W> {
 /// [`Sink`] this back pressure is optional, allowing integration with synchronous producers
 ///
 /// [`Sink`]: futures::sink::Sink
+#[cfg(feature = "tokio")]
 #[derive(Debug)]
 pub struct WriteMultipart {
     upload: Box<dyn MultipartUpload>,
@@ -127,6 +130,7 @@ pub struct WriteMultipart {
     tasks: JoinSet<Result<()>>,
 }
 
+#[cfg(feature = "tokio")]
 impl WriteMultipart {
     /// Create a new [`WriteMultipart`] that will upload using 5MB chunks
     pub fn new(upload: Box<dyn MultipartUpload>) -> Self {
@@ -152,7 +156,7 @@ impl WriteMultipart {
         max_concurrency: usize,
     ) -> Poll<Result<()>> {
         while !self.tasks.is_empty() && self.tasks.len() >= max_concurrency {
-            ready!(self.tasks.poll_join_next(cx)).unwrap()??
+            futures::ready!(self.tasks.poll_join_next(cx)).unwrap()??
         }
         Poll::Ready(Ok(()))
     }
@@ -195,7 +199,7 @@ impl WriteMultipart {
     /// will allow multiple calls to share the same underlying allocation.
     ///
     /// See [`Self::write`] for information on backpressure
-    pub fn put(&mut self, mut bytes: Bytes) {
+    pub fn put(&mut self, mut bytes: bytes::Bytes) {
         while !bytes.is_empty() {
             let remaining = self.chunk_size - self.buffer.content_length();
             if bytes.len() < remaining {
