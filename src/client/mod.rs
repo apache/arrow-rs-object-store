@@ -174,6 +174,14 @@ pub enum ClientConfigKey {
     ///
     /// This will spread the connections across more servers.
     ///
+    /// <div class="warning">
+    ///
+    /// **Warning**
+    ///
+    /// This will override the DNS resolver configured by [`reqwest`].
+    ///
+    /// </div>
+    ///
     /// Supported keys:
     /// - `randomize_addresses`
     RandomizeAddresses,

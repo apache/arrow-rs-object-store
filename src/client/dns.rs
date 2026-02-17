@@ -29,7 +29,7 @@ pub(crate) struct ShuffleResolver;
 impl Resolve for ShuffleResolver {
     fn resolve(&self, name: Name) -> Resolving {
         Box::pin(async move {
-            // use `JoinSet` to propagate cancelation
+            // use `JoinSet` to propagate cancelation to tasks that haven't started running yet.
             let mut tasks = JoinSet::new();
             tasks.spawn_blocking(move || {
                 let it = (name.as_str(), 0).to_socket_addrs()?;
