@@ -22,7 +22,7 @@ use std::task::{Context, Poll};
 use crate::PutPayloadMut;
 use crate::{PutPayload, PutResult, Result};
 use async_trait::async_trait;
-use futures::future::BoxFuture;
+use futures_util::future::BoxFuture;
 #[cfg(feature = "tokio")]
 use tokio::task::JoinSet;
 
@@ -52,7 +52,7 @@ pub trait MultipartUpload: Send + std::fmt::Debug {
     /// returned futures in parallel
     ///
     /// ```no_run
-    /// # use futures::StreamExt;
+    /// # use futures_util::StreamExt;
     /// # use object_store::MultipartUpload;
     /// #
     /// # async fn test() {
@@ -60,7 +60,7 @@ pub trait MultipartUpload: Send + std::fmt::Debug {
     /// let mut upload: Box<&dyn MultipartUpload> = todo!();
     /// let p1 = upload.put_part(vec![0; 10 * 1024 * 1024].into());
     /// let p2 = upload.put_part(vec![1; 10 * 1024 * 1024].into());
-    /// futures::future::try_join(p1, p2).await.unwrap();
+    /// futures_util::future::try_join(p1, p2).await.unwrap();
     /// upload.complete().await.unwrap();
     /// # }
     /// ```
@@ -117,7 +117,7 @@ impl<W: MultipartUpload + ?Sized> MultipartUpload for Box<W> {
 /// allowing back pressure on producers, prior to buffering the next part. However, unlike
 /// [`Sink`] this back pressure is optional, allowing integration with synchronous producers
 ///
-/// [`Sink`]: futures::sink::Sink
+/// [`Sink`]: futures_util::sink::Sink
 #[cfg(feature = "tokio")]
 #[derive(Debug)]
 pub struct WriteMultipart {
@@ -156,7 +156,7 @@ impl WriteMultipart {
         max_concurrency: usize,
     ) -> Poll<Result<()>> {
         while !self.tasks.is_empty() && self.tasks.len() >= max_concurrency {
-            futures::ready!(self.tasks.poll_join_next(cx)).unwrap()??
+            futures_core::ready!(self.tasks.poll_join_next(cx)).unwrap()??
         }
         Poll::Ready(Ok(()))
     }
@@ -165,7 +165,7 @@ impl WriteMultipart {
     ///
     /// See [`Self::poll_for_capacity`] for a [`Poll`] version of this function
     pub async fn wait_for_capacity(&mut self, max_concurrency: usize) -> Result<()> {
-        futures::future::poll_fn(|cx| self.poll_for_capacity(cx, max_concurrency)).await
+        futures_util::future::poll_fn(|cx| self.poll_for_capacity(cx, max_concurrency)).await
     }
 
     /// Write data to this [`WriteMultipart`]
@@ -247,7 +247,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use futures::FutureExt;
+    use futures_util::FutureExt;
     use parking_lot::Mutex;
     use rand::prelude::StdRng;
     use rand::{RngExt, SeedableRng};
@@ -287,7 +287,7 @@ mod tests {
     impl MultipartUpload for InstrumentedUpload {
         fn put_part(&mut self, data: PutPayload) -> UploadPart {
             self.chunks.lock().push(data);
-            futures::future::ready(Ok(())).boxed()
+            futures_util::future::ready(Ok(())).boxed()
         }
 
         async fn complete(&mut self) -> Result<PutResult> {

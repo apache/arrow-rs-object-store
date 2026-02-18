@@ -142,7 +142,7 @@ mod tests {
 
         let url = mock.url().to_string();
         let thread = std::thread::spawn(|| {
-            futures::executor::block_on(async move {
+            futures_executor::block_on(async move {
                 let retry = RetryConfig::default();
                 let ret = client.get(url).send_retry(&retry).await.unwrap();
                 let payload = ret.into_body().bytes().await.unwrap();

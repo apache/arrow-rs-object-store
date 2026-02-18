@@ -32,8 +32,8 @@ use crate::{
     ObjectStore, ObjectStoreExt, PutMode, PutPayload, UpdateVersion, WriteMultipart,
 };
 use bytes::Bytes;
-use futures::stream::FuturesUnordered;
-use futures::{StreamExt, TryStreamExt};
+use futures_util::stream::FuturesUnordered;
+use futures_util::{StreamExt, TryStreamExt};
 use rand::{RngExt, rng};
 use std::collections::HashSet;
 use std::slice;
@@ -411,7 +411,7 @@ pub async fn put_get_delete_list(storage: &DynObjectStore) {
     storage.put(&paths[4], "foo".into()).await.unwrap();
 
     let out_paths = storage
-        .delete_stream(futures::stream::iter(paths.clone()).map(Ok).boxed())
+        .delete_stream(futures_util::stream::iter(paths.clone()).map(Ok).boxed())
         .collect::<Vec<_>>()
         .await;
 
@@ -713,7 +713,7 @@ pub async fn stream_get(storage: &DynObjectStore) {
     let bytes_expected = data.concat();
     let mut upload = storage.put_multipart(&location).await.unwrap();
     let uploads = data.into_iter().map(|x| upload.put_part(x.into()));
-    futures::future::try_join_all(uploads).await.unwrap();
+    futures_util::future::try_join_all(uploads).await.unwrap();
 
     // Object should not yet exist in store
     let meta_res = storage.head(&location).await;
@@ -1020,7 +1020,7 @@ pub async fn multipart(storage: &dyn ObjectStore, multipart: &dyn MultipartStore
 
     let id = multipart.create_multipart(&path).await.unwrap();
 
-    let parts: Vec<_> = futures::stream::iter(chunks)
+    let parts: Vec<_> = futures_util::stream::iter(chunks)
         .enumerate()
         .map(|(idx, b)| multipart.put_part(&path, &id, idx, b.into()))
         .buffered(2)

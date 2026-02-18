@@ -20,7 +20,7 @@
 use std::collections::VecDeque;
 
 use bytes::Bytes;
-use futures::{Stream, StreamExt};
+use futures_util::{Stream, StreamExt};
 
 use super::Result;
 
@@ -155,7 +155,7 @@ where
 {
     let delimiter = LineDelimiter::new();
 
-    futures::stream::unfold(
+    futures_util::stream::unfold(
         (s, delimiter, false),
         |(mut s, mut delimiter, mut exhausted)| async move {
             loop {
@@ -184,7 +184,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use futures::stream::{BoxStream, TryStreamExt};
+    use futures_util::stream::{BoxStream, TryStreamExt};
 
     use super::*;
 
@@ -231,7 +231,8 @@ mod tests {
     #[tokio::test]
     async fn test_delimiter_stream() {
         let input = vec!["hello\nworld\nbin", "go\ncup", "cakes"];
-        let input_stream = futures::stream::iter(input.into_iter().map(|s| Ok(Bytes::from(s))));
+        let input_stream =
+            futures_util::stream::iter(input.into_iter().map(|s| Ok(Bytes::from(s))));
         let stream = newline_delimited_stream(input_stream);
 
         let results: Vec<_> = stream.try_collect().await.unwrap();
@@ -246,7 +247,7 @@ mod tests {
     }
     #[tokio::test]
     async fn test_delimiter_unfold_stream() {
-        let input_stream: BoxStream<'static, Result<Bytes>> = futures::stream::unfold(
+        let input_stream: BoxStream<'static, Result<Bytes>> = futures_util::stream::unfold(
             VecDeque::from(["hello\nworld\nbin", "go\ncup", "cakes"]),
             |mut input| async move {
                 if !input.is_empty() {

@@ -231,10 +231,8 @@ impl HttpService for reqwest::Client {
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 impl HttpService for reqwest::Client {
     async fn call(&self, req: HttpRequest) -> Result<HttpResponse, HttpError> {
-        use futures::{
-            SinkExt, StreamExt, TryStreamExt,
-            channel::{mpsc, oneshot},
-        };
+        use futures_channel::{mpsc, oneshot};
+        use futures_util::{SinkExt, StreamExt, TryStreamExt};
         use http_body_util::{Empty, StreamBody};
         use wasm_bindgen_futures::spawn_local;
 

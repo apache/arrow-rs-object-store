@@ -31,8 +31,8 @@ use std::{collections::VecDeque, path::PathBuf};
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{FutureExt, TryStreamExt};
-use futures::{StreamExt, stream::BoxStream};
+use futures_util::{FutureExt, TryStreamExt};
+use futures_util::{StreamExt, stream::BoxStream};
 use parking_lot::Mutex;
 use url::Url;
 use walkdir::{DirEntry, WalkDir};
@@ -709,7 +709,7 @@ impl LocalFileSystem {
         let root_path = match prefix {
             Some(prefix) => match config.prefix_to_filesystem(prefix) {
                 Ok(path) => path,
-                Err(e) => return futures::future::ready(Err(e)).into_stream().boxed(),
+                Err(e) => return futures_util::future::ready(Err(e)).into_stream().boxed(),
             },
             None => config.root.to_file_path().unwrap(),
         };
@@ -754,14 +754,14 @@ impl LocalFileSystem {
         // If no tokio context, return iterator directly as no
         // need to perform chunked spawn_blocking reads
         if tokio::runtime::Handle::try_current().is_err() {
-            return futures::stream::iter(s).boxed();
+            return futures_util::stream::iter(s).boxed();
         }
 
         // Otherwise list in batches of CHUNK_SIZE
         const CHUNK_SIZE: usize = 1024;
 
         let buffer = VecDeque::with_capacity(CHUNK_SIZE);
-        futures::stream::try_unfold((s, buffer), |(mut s, mut buffer)| async move {
+        futures_util::stream::try_unfold((s, buffer), |(mut s, mut buffer)| async move {
             if buffer.is_empty() {
                 (s, buffer) = tokio::task::spawn_blocking(move || {
                     for _ in 0..CHUNK_SIZE {
@@ -929,7 +929,7 @@ pub(crate) fn chunked_stream(
     range: Range<u64>,
     chunk_size: usize,
 ) -> BoxStream<'static, Result<Bytes, super::Error>> {
-    futures::stream::once(async move {
+    futures_util::stream::once(async move {
         let requested = range.end - range.start;
 
         let (file, path) = maybe_spawn_blocking(move || {
@@ -939,7 +939,7 @@ pub(crate) fn chunked_stream(
         })
         .await?;
 
-        let stream = futures::stream::try_unfold(
+        let stream = futures_util::stream::try_unfold(
             (file, path, requested),
             move |(mut file, path, remaining)| {
                 maybe_spawn_blocking(move || {
@@ -1254,7 +1254,7 @@ fn convert_walkdir_result(
 mod tests {
     use std::fs;
 
-    use futures::TryStreamExt;
+    use futures_util::TryStreamExt;
     use tempfile::TempDir;
 
     #[cfg(target_family = "unix")]
@@ -1287,7 +1287,7 @@ mod tests {
     fn test_non_tokio() {
         let root = TempDir::new().unwrap();
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
-        futures::executor::block_on(async move {
+        futures_executor::block_on(async move {
             put_get_delete_list(&integration).await;
             list_uses_directories_correctly(&integration).await;
             list_with_delimiter(&integration).await;

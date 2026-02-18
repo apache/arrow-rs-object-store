@@ -34,8 +34,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::stream::BoxStream;
-use futures::{StreamExt, TryStreamExt};
+use futures_util::stream::BoxStream;
+use futures_util::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use url::Url;
 
@@ -160,7 +160,7 @@ impl ObjectStore for HttpStore {
         let prefix_len = prefix.map(|p| p.as_ref().len()).unwrap_or_default();
         let prefix = prefix.cloned();
         let client = Arc::clone(&self.client);
-        futures::stream::once(async move {
+        futures_util::stream::once(async move {
             let status = client.list(prefix.as_ref(), "infinity").await?;
 
             let iter = status
@@ -174,7 +174,7 @@ impl ObjectStore for HttpStore {
                 // Filter out exact prefix matches
                 .filter_ok(move |r| r.location.as_ref().len() > prefix_len);
 
-            Ok::<_, crate::Error>(futures::stream::iter(iter))
+            Ok::<_, crate::Error>(futures_util::stream::iter(iter))
         })
         .try_flatten()
         .boxed()

@@ -24,7 +24,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{FutureExt, Stream};
+use futures_util::{FutureExt, Stream};
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -245,7 +245,7 @@ mod tests {
     use crate::integration::*;
     use crate::limit::LimitStore;
     use crate::memory::InMemory;
-    use futures::stream::StreamExt;
+    use futures_util::stream::StreamExt;
     use std::pin::Pin;
     use std::time::Duration;
     use tokio::time::timeout;

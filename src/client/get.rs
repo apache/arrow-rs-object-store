@@ -25,8 +25,8 @@ use crate::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::StreamExt;
-use futures::stream::BoxStream;
+use futures_util::StreamExt;
+use futures_util::stream::BoxStream;
 use http::StatusCode;
 use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_RANGE,
@@ -201,7 +201,7 @@ impl<T: GetClient> GetContext<T> {
         etag: Option<String>,
         range: Range<u64>,
     ) -> BoxStream<'static, Result<Bytes>> {
-        futures::stream::try_unfold(
+        futures_util::stream::try_unfold(
             (self, body, etag, range),
             |(mut ctx, mut body, etag, mut range)| async move {
                 while let Some(ret) = body.frame().await {
@@ -489,7 +489,7 @@ mod http_tests {
     use crate::path::Path;
     use crate::{ClientOptions, ObjectStoreExt, RetryConfig};
     use bytes::Bytes;
-    use futures::FutureExt;
+    use futures_util::FutureExt;
     use http::header::{CONNECTION, CONTENT_LENGTH, CONTENT_RANGE, ETAG, RANGE};
     use http::{Response, StatusCode};
     use hyper::body::Frame;
