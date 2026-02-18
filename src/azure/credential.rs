@@ -1016,7 +1016,7 @@ impl TokenProvider for FabricTokenOAuthProvider {
     ) -> crate::Result<TemporaryToken<Arc<AzureCredential>>> {
         if let Some(storage_access_token) = &self.storage_access_token {
             if let Some(expiry) = self.token_expiry {
-                let exp_in = expiry - Self::get_current_timestamp();
+                let exp_in = expiry.saturating_sub(Self::get_current_timestamp());
                 if exp_in > TOKEN_MIN_TTL {
                     return Ok(TemporaryToken {
                         token: Arc::new(AzureCredential::BearerToken(storage_access_token.clone())),
@@ -1043,8 +1043,9 @@ impl TokenProvider for FabricTokenOAuthProvider {
             .text()
             .await
             .map_err(|source| Error::TokenResponseBody { source })?;
-        let exp_in = Self::validate_and_get_expiry(&access_token)
-            .map_or(3600, |expiry| expiry - Self::get_current_timestamp());
+        let exp_in = Self::validate_and_get_expiry(&access_token).map_or(3600, |expiry| {
+            expiry.saturating_sub(Self::get_current_timestamp())
+        });
         Ok(TemporaryToken {
             token: Arc::new(AzureCredential::BearerToken(access_token)),
             expiry: Some(Instant::now() + Duration::from_secs(exp_in)),
@@ -1214,6 +1215,65 @@ mod tests {
             _ => {
                 panic!("unexpected response");
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_fabric_refresh_expired_token() {
+        let server = MockServer::new().await;
+
+        // Create an expired initial token (1 hour in the past)
+        let expired_timestamp = FabricTokenOAuthProvider::get_current_timestamp() - 3600;
+        let claims = format!(r#"{{"exp":{expired_timestamp}}}"#);
+        let encoded_claims = BASE64_URL_SAFE_NO_PAD.encode(claims.as_bytes());
+        let expired_token = format!("header.{encoded_claims}.signature");
+
+        // Create a fresh token that the mock API will return (1 hour in the future)
+        let fresh_timestamp = FabricTokenOAuthProvider::get_current_timestamp() + 3600;
+        let fresh_claims = format!(r#"{{"exp":{fresh_timestamp}}}"#);
+        let fresh_encoded = BASE64_URL_SAFE_NO_PAD.encode(fresh_claims.as_bytes());
+        let fresh_token = format!("header.{fresh_encoded}.signature");
+        let expected_token = fresh_token.clone();
+
+        // Mock the Fabric token service to return a fresh token
+        server.push_fn(move |req| {
+            assert_eq!(req.headers().get(&PARTNER_TOKEN).unwrap(), "session-token");
+            assert_eq!(
+                req.headers().get(&CLUSTER_IDENTIFIER).unwrap(),
+                "cluster-id"
+            );
+            assert_eq!(req.headers().get(&PROXY_HOST).unwrap(), "fake");
+
+            Response::new(fresh_token)
+        });
+
+        let provider = FabricTokenOAuthProvider {
+            fabric_token_service_url: server.url().to_string(),
+            fabric_workload_host: "fake".to_string(),
+            fabric_session_token: "session-token".to_string(),
+            fabric_cluster_identifier: "cluster-id".to_string(),
+            storage_access_token: Some(expired_token),
+            token_expiry: Some(expired_timestamp),
+        };
+
+        let client = HttpClient::new(Client::new());
+        let retry = RetryConfig::default();
+
+        let result = provider.fetch_token(&client, &retry).await;
+
+        assert!(
+            result.is_ok(),
+            "fetch_token should handle expired cached token gracefully"
+        );
+
+        let temp_token = result.unwrap();
+
+        // Verify we got a fresh token from the API (not the expired cached one)
+        if let AzureCredential::BearerToken(token) = temp_token.token.as_ref() {
+            assert_eq!(
+                token, &expected_token,
+                "Should have fetched fresh token from API, not returned expired cached token"
+            );
         }
     }
 }
