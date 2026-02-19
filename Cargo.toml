@@ -35,7 +35,7 @@ async-trait = "0.1.53"
 bytes = "1.0"
 chrono = { version = "0.4.34", default-features = false, features = ["clock"] }
 futures-core = "0.3"
-futures-util = "0.3"
+futures-util = { version = "0.3", features = ["sink"] }
 http = "1.2.0"
 humantime = "2.1"
 itertools = "0.14.0"
