@@ -21,7 +21,7 @@ use crate::PutPayload;
 use crate::client::backoff::{Backoff, BackoffConfig};
 use crate::client::builder::HttpRequestBuilder;
 use crate::client::{HttpClient, HttpError, HttpErrorKind, HttpRequest, HttpResponse};
-use futures::future::BoxFuture;
+use futures_util::future::BoxFuture;
 use http::{Method, Uri};
 use reqwest::StatusCode;
 use reqwest::header::LOCATION;

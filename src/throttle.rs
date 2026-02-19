@@ -28,7 +28,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{FutureExt, StreamExt, stream::BoxStream};
+use futures_util::{FutureExt, StreamExt, stream::BoxStream};
 use std::time::Duration;
 
 /// Configuration settings for throttled store
@@ -212,7 +212,7 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         let stream = self.inner.list(prefix);
         let config = Arc::clone(&self.config);
-        futures::stream::once(async move {
+        futures_util::stream::once(async move {
             let config = *config.lock();
             let wait_list_per_entry = config.wait_list_per_entry;
             sleep(config.wait_list_per_call).await;
@@ -229,7 +229,7 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
     ) -> BoxStream<'static, Result<ObjectMeta>> {
         let stream = self.inner.list_with_offset(prefix, offset);
         let config = Arc::clone(&self.config);
-        futures::stream::once(async move {
+        futures_util::stream::once(async move {
             let config = *config.lock();
             let wait_list_per_entry = config.wait_list_per_entry;
             sleep(config.wait_list_per_call).await;
@@ -299,7 +299,7 @@ where
     stream
         .then(move |result| {
             let delay = result.as_ref().ok().map(&delay).unwrap_or_default();
-            sleep(delay).then(|_| futures::future::ready(result))
+            sleep(delay).then(|_| futures_util::future::ready(result))
         })
         .boxed()
 }
@@ -368,7 +368,7 @@ mod tests {
     use crate::GetResultPayload;
     use crate::ObjectStoreExt;
     use crate::{integration::*, memory::InMemory};
-    use futures::TryStreamExt;
+    use futures_util::TryStreamExt;
     use tokio::time::Duration;
     use tokio::time::Instant;
 
@@ -580,7 +580,7 @@ mod tests {
 
         // materialize the paths so that the throttle time for listing is not counted
         let paths = store.list(Some(&prefix)).collect::<Vec<_>>().await;
-        let paths = futures::stream::iter(paths)
+        let paths = futures_util::stream::iter(paths)
             .map(|x| x.map(|m| m.location))
             .boxed();
 

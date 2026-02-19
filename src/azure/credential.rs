@@ -1064,7 +1064,7 @@ impl CredentialProvider for AzureCliCredential {
 
 #[cfg(test)]
 mod tests {
-    use futures::executor::block_on;
+    use futures_executor::block_on;
     use http::{Response, StatusCode};
     use http_body_util::BodyExt;
     use reqwest::{Client, Method};

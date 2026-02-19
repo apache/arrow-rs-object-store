@@ -32,7 +32,7 @@ use crate::{
     signer::Signer,
 };
 use async_trait::async_trait;
-use futures::stream::{BoxStream, StreamExt, TryStreamExt};
+use futures_util::stream::{BoxStream, StreamExt, TryStreamExt};
 use reqwest::Method;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -134,7 +134,7 @@ impl ObjectStore for MicrosoftAzure {
             // See https://github.com/Azure/Azurite/issues/2619#issuecomment-3660701055
             let offset = offset.clone();
             self.list(prefix)
-                .try_filter(move |f| futures::future::ready(f.location > offset))
+                .try_filter(move |f| futures_util::future::ready(f.location > offset))
                 .boxed()
         } else {
             self.client.list_with_offset(prefix, offset)
@@ -157,7 +157,7 @@ impl ObjectStore for MicrosoftAzure {
                     client
                         .bulk_delete_request(locations)
                         .await
-                        .map(futures::stream::iter)
+                        .map(futures_util::stream::iter)
                 }
             })
             .buffered(20)

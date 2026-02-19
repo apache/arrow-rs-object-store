@@ -23,8 +23,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::{BufMut, Bytes, BytesMut};
-use futures::StreamExt;
-use futures::stream::BoxStream;
+use futures_util::StreamExt;
+use futures_util::stream::BoxStream;
 
 use crate::path::Path;
 use crate::{
@@ -89,7 +89,7 @@ impl ObjectStore for ChunkedStore {
             }
             GetResultPayload::Stream(stream) => {
                 let buffer = BytesMut::new();
-                futures::stream::unfold(
+                futures_util::stream::unfold(
                     (stream, buffer, false, self.chunk_size),
                     |(mut stream, mut buffer, mut exhausted, chunk_size)| async move {
                         // Keep accumulating bytes until we reach capacity as long as
@@ -173,7 +173,7 @@ impl ObjectStore for ChunkedStore {
 
 #[cfg(test)]
 mod tests {
-    use futures::StreamExt;
+    use futures_util::StreamExt;
 
     use crate::ObjectStoreExt;
     #[cfg(feature = "fs")]

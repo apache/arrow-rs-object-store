@@ -17,7 +17,7 @@
 
 //! An object store wrapper handling a constant path prefix
 use bytes::Bytes;
-use futures::{StreamExt, TryStreamExt, stream::BoxStream};
+use futures_util::{StreamExt, TryStreamExt, stream::BoxStream};
 use std::ops::Range;
 
 use crate::multipart::{MultipartStore, PartId};

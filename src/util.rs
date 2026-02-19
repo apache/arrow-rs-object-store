@@ -23,7 +23,7 @@ use std::{
 
 use super::Result;
 use bytes::Bytes;
-use futures::{Stream, TryStreamExt, stream::StreamExt};
+use futures_util::{Stream, TryStreamExt, stream::StreamExt};
 
 #[cfg(any(feature = "azure", feature = "http"))]
 pub(crate) static RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
@@ -114,7 +114,7 @@ where
 {
     let fetch_ranges = merge_ranges(ranges, coalesce);
 
-    let fetched: Vec<_> = futures::stream::iter(fetch_ranges.iter().cloned())
+    let fetched: Vec<_> = futures_util::stream::iter(fetch_ranges.iter().cloned())
         .map(fetch)
         .buffered(OBJECT_STORE_COALESCE_PARALLEL)
         .try_collect()
@@ -348,7 +348,7 @@ mod tests {
                 fetches.push(range.clone());
                 let start = usize::try_from(range.start).unwrap();
                 let end = usize::try_from(range.end).unwrap();
-                futures::future::ready(Ok(Bytes::from(src[start..end].to_vec())))
+                futures_util::future::ready(Ok(Bytes::from(src[start..end].to_vec())))
             },
             coalesce,
         )

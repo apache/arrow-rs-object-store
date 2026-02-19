@@ -23,8 +23,8 @@ use crate::{
     PutOptions, PutPayloadMut, TagSet, WriteMultipart,
 };
 use bytes::Bytes;
-use futures::future::{BoxFuture, FutureExt};
-use futures::ready;
+use futures_util::future::{BoxFuture, FutureExt};
+use futures_util::ready;
 use std::cmp::Ordering;
 use std::io::{Error, ErrorKind, SeekFrom};
 use std::pin::Pin;

@@ -23,7 +23,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{StreamExt, stream::BoxStream};
+use futures_util::{StreamExt, stream::BoxStream};
 use parking_lot::RwLock;
 
 use crate::multipart::{MultipartStore, PartId};
@@ -259,7 +259,7 @@ impl ObjectStore for InMemory {
             }
             None => (0..entry.data.len() as u64, entry.data),
         };
-        let stream = futures::stream::once(futures::future::ready(Ok(data)));
+        let stream = futures_util::stream::once(futures_util::future::ready(Ok(data)));
 
         Ok(GetResult {
             payload: GetResultPayload::Stream(stream.boxed()),
@@ -334,7 +334,7 @@ impl ObjectStore for InMemory {
             })
             .collect();
 
-        futures::stream::iter(values).boxed()
+        futures_util::stream::iter(values).boxed()
     }
 
     /// The memory implementation returns all results, as opposed to the cloud
@@ -512,7 +512,7 @@ struct InMemoryUpload {
 impl MultipartUpload for InMemoryUpload {
     fn put_part(&mut self, payload: PutPayload) -> UploadPart {
         self.parts.push(payload);
-        Box::pin(futures::future::ready(Ok(())))
+        Box::pin(futures_util::future::ready(Ok(())))
     }
 
     async fn complete(&mut self) -> Result<PutResult> {

@@ -174,7 +174,7 @@
 //! # use object_store::local::LocalFileSystem;
 //! # use std::sync::Arc;
 //! # use object_store::{path::Path, ObjectStore};
-//! # use futures::stream::StreamExt;
+//! # use futures_util::stream::StreamExt;
 //! # // use LocalFileSystem for example
 //! # fn get_object_store() -> Arc<dyn ObjectStore> {
 //! #   Arc::new(LocalFileSystem::new())
@@ -215,7 +215,7 @@
 //! from remote storage or files in the local filesystem as a stream.
 //!
 //! ```ignore-wasm32
-//! # use futures::TryStreamExt;
+//! # use futures_util::TryStreamExt;
 //! # use object_store::local::LocalFileSystem;
 //! # use std::sync::Arc;
 //! #  use bytes::Bytes;
@@ -610,7 +610,7 @@ use crate::util::maybe_spawn_blocking;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{StreamExt, TryStreamExt, stream::BoxStream};
+use futures_util::{StreamExt, TryStreamExt, stream::BoxStream};
 use std::fmt::{Debug, Formatter};
 use std::ops::Range;
 use std::sync::Arc;
@@ -931,14 +931,14 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// return Ok. If it is an error, it will be [`Error::NotFound`].
     ///
     /// ```ignore-wasm32
-    /// # use futures::{StreamExt, TryStreamExt};
+    /// # use futures_util::{StreamExt, TryStreamExt};
     /// # use object_store::local::LocalFileSystem;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # let root = tempfile::TempDir::new().unwrap();
     /// # let store = LocalFileSystem::new_with_prefix(root.path()).unwrap();
     /// # use object_store::{ObjectStore, ObjectStoreExt, ObjectMeta};
     /// # use object_store::path::Path;
-    /// # use futures::{StreamExt, TryStreamExt};
+    /// # use futures_util::{StreamExt, TryStreamExt};
     /// #
     /// // Create two objects
     /// store.put(&Path::from("foo"), "foo".into()).await?;
@@ -964,7 +964,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ///
     /// ```
     /// # use async_trait::async_trait;
-    /// # use futures::stream::{BoxStream, StreamExt};
+    /// # use futures_util::stream::{BoxStream, StreamExt};
     /// # use object_store::path::Path;
     /// # use object_store::{
     /// #     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
@@ -1049,7 +1049,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// #
     /// # async fn example() {
     /// #     let store = ExampleStore { client: Arc::new(ExampleClient) };
-    /// #     let paths = futures::stream::iter(vec![Ok(Path::from("foo")), Ok(Path::from("bar"))]).boxed();
+    /// #     let paths = futures_util::stream::iter(vec![Ok(Path::from("foo")), Ok(Path::from("bar"))]).boxed();
     /// #     let results = store.delete_stream(paths).collect::<Vec<_>>().await;
     /// #     assert_eq!(results.len(), 2);
     /// #     assert_eq!(results[0].as_ref().unwrap(), &Path::from("foo"));
@@ -1091,7 +1091,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ) -> BoxStream<'static, Result<ObjectMeta>> {
         let offset = offset.clone();
         self.list(prefix)
-            .try_filter(move |f| futures::future::ready(f.location > offset))
+            .try_filter(move |f| futures_util::future::ready(f.location > offset))
             .boxed()
     }
 
@@ -1364,7 +1364,7 @@ where
     async fn delete(&self, location: &Path) -> Result<()> {
         let location = location.clone();
         let mut stream =
-            self.delete_stream(futures::stream::once(async move { Ok(location) }).boxed());
+            self.delete_stream(futures_util::stream::once(async move { Ok(location) }).boxed());
         let _path = stream.try_next().await?.ok_or_else(|| Error::Generic {
             store: "ext",
             source: "`delete_stream` with one location should yield once but didn't".into(),
