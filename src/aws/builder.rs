@@ -135,6 +135,8 @@ pub struct AmazonS3Builder {
     bucket_name: Option<String>,
     /// Endpoint for communicating with AWS S3
     endpoint: Option<String>,
+    /// Service-specific S3 endpoint URL (takes precedence over endpoint)
+    s3_endpoint: Option<String>,
     /// Token to use for requests
     token: Option<String>,
     /// Url
@@ -259,10 +261,17 @@ pub enum AmazonS3ConfigKey {
     /// Supported keys:
     /// - `aws_endpoint`
     /// - `aws_endpoint_url`
-    /// - `aws_endpoint_url_s3`
     /// - `endpoint`
     /// - `endpoint_url`
     Endpoint,
+
+    /// Service-specific S3 endpoint URL
+    ///
+    /// When set, takes precedence over [`Endpoint`](Self::Endpoint) in the build method.
+    ///
+    /// Supported keys:
+    /// - `aws_endpoint_url_s3`
+    S3Endpoint,
 
     /// Token to use for requests (passed to underlying provider)
     ///
@@ -434,6 +443,7 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::Region => "aws_region",
             Self::Bucket => "aws_bucket",
             Self::Endpoint => "aws_endpoint",
+            Self::S3Endpoint => "aws_endpoint_url_s3",
             Self::Token => "aws_session_token",
             Self::ImdsV1Fallback => "aws_imdsv1_fallback",
             Self::VirtualHostedStyleRequest => "aws_virtual_hosted_style_request",
@@ -470,11 +480,8 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_default_region" | "default_region" => Ok(Self::DefaultRegion),
             "aws_region" | "region" => Ok(Self::Region),
             "aws_bucket" | "aws_bucket_name" | "bucket_name" | "bucket" => Ok(Self::Bucket),
-            "aws_endpoint_url_s3"
-            | "aws_endpoint_url"
-            | "aws_endpoint"
-            | "endpoint_url"
-            | "endpoint" => Ok(Self::Endpoint),
+            "aws_endpoint_url" | "aws_endpoint" | "endpoint_url" | "endpoint" => Ok(Self::Endpoint),
+            "aws_endpoint_url_s3" => Ok(Self::S3Endpoint),
             "aws_session_token" | "aws_token" | "session_token" | "token" => Ok(Self::Token),
             "aws_virtual_hosted_style_request" | "virtual_hosted_style_request" => {
                 Ok(Self::VirtualHostedStyleRequest)
@@ -543,7 +550,7 @@ impl AmazonS3Builder {
     /// * `AWS_SECRET_ACCESS_KEY` -> secret_access_key
     /// * `AWS_DEFAULT_REGION` -> region
     /// * `AWS_ENDPOINT` -> endpoint
-    /// * `AWS_ENDPOINT_URL_S3` -> endpoint (takes precedence over `AWS_ENDPOINT` and `AWS_ENDPOINT_URL`)
+    /// * `AWS_ENDPOINT_URL_S3` -> s3_endpoint (takes precedence over endpoint in build)
     /// * `AWS_SESSION_TOKEN` -> token
     /// * `AWS_WEB_IDENTITY_TOKEN_FILE` -> path to file containing web identity token for AssumeRoleWithWebIdentity
     /// * `AWS_ROLE_ARN` -> ARN of the role to assume when using web identity token
@@ -564,27 +571,15 @@ impl AmazonS3Builder {
     /// ```
     pub fn from_env() -> Self {
         let mut builder: Self = Default::default();
-
-        // Collect and sort environment variables to ensure deterministic precedence.
-        // Service-specific endpoint URLs (e.g., AWS_ENDPOINT_URL_S3) should override
-        // generic ones (e.g., AWS_ENDPOINT_URL). Sorting alphabetically achieves this
-        // since "AWS_ENDPOINT_URL_S3" > "AWS_ENDPOINT_URL", so it will be processed last.
-        let mut vars: Vec<_> = std::env::vars_os()
-            .filter_map(|(k, v)| {
-                let key = k.to_str()?;
-                let value = v.to_str()?;
-                key.starts_with("AWS_")
-                    .then(|| (key.to_string(), value.to_string()))
-            })
-            .collect();
-        vars.sort_by(|a, b| a.0.cmp(&b.0));
-
-        for (key, value) in vars {
-            if let Ok(config_key) = key.to_ascii_lowercase().parse() {
-                builder = builder.with_config(config_key, value);
+        for (os_key, os_value) in std::env::vars_os() {
+            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
+                if key.starts_with("AWS_") {
+                    if let Ok(config_key) = key.to_ascii_lowercase().parse() {
+                        builder = builder.with_config(config_key, value);
+                    }
+                }
             }
         }
-
         builder
     }
 
@@ -621,6 +616,7 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::Region => self.region = Some(value.into()),
             AmazonS3ConfigKey::Bucket => self.bucket_name = Some(value.into()),
             AmazonS3ConfigKey::Endpoint => self.endpoint = Some(value.into()),
+            AmazonS3ConfigKey::S3Endpoint => self.s3_endpoint = Some(value.into()),
             AmazonS3ConfigKey::Token => self.token = Some(value.into()),
             AmazonS3ConfigKey::ImdsV1Fallback => self.imdsv1_fallback.parse(value),
             AmazonS3ConfigKey::VirtualHostedStyleRequest => {
@@ -704,6 +700,7 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::Region | AmazonS3ConfigKey::DefaultRegion => self.region.clone(),
             AmazonS3ConfigKey::Bucket => self.bucket_name.clone(),
             AmazonS3ConfigKey::Endpoint => self.endpoint.clone(),
+            AmazonS3ConfigKey::S3Endpoint => self.s3_endpoint.clone(),
             AmazonS3ConfigKey::Token => self.token.clone(),
             AmazonS3ConfigKey::ImdsV1Fallback => Some(self.imdsv1_fallback.to_string()),
             AmazonS3ConfigKey::VirtualHostedStyleRequest => {
@@ -1177,10 +1174,13 @@ impl AmazonS3Builder {
             false => (None, None),
         };
 
+        // S3-specific endpoint takes precedence over generic endpoint
+        let endpoint = self.s3_endpoint.or(self.endpoint);
+
         // If `endpoint` is provided it's assumed to be consistent with `virtual_hosted_style_request` or `s3_express`.
         // For example, if `virtual_hosted_style_request` is true then `endpoint` should have bucket name included.
         let virtual_hosted = self.virtual_hosted_style_request.get()?;
-        let bucket_endpoint = match (&self.endpoint, zonal_endpoint, virtual_hosted) {
+        let bucket_endpoint = match (&endpoint, zonal_endpoint, virtual_hosted) {
             (Some(endpoint), _, true) => endpoint.clone(),
             (Some(endpoint), _, false) => format!("{}/{}", endpoint.trim_end_matches("/"), bucket),
             (None, Some(endpoint), _) => endpoint,
@@ -1472,18 +1472,33 @@ mod tests {
 
     #[test]
     fn s3_test_endpoint_url_s3_config() {
-        // Verify aws_endpoint_url_s3 parses to Endpoint config key
+        // Verify aws_endpoint_url_s3 parses to S3Endpoint config key
         let key: AmazonS3ConfigKey = "aws_endpoint_url_s3".parse().unwrap();
-        assert!(matches!(key, AmazonS3ConfigKey::Endpoint));
+        assert!(matches!(key, AmazonS3ConfigKey::S3Endpoint));
 
-        // Verify service-specific endpoint takes precedence when applied after generic
-        let builder = AmazonS3Builder::new()
+        // Verify S3Endpoint takes precedence over Endpoint in build, regardless of order
+        let s3 = AmazonS3Builder::new()
             .with_config(AmazonS3ConfigKey::Endpoint, "http://generic-endpoint")
-            .with_config(
-                "aws_endpoint_url_s3".parse().unwrap(),
-                "http://s3-specific-endpoint",
-            );
-        assert_eq!(builder.endpoint.unwrap(), "http://s3-specific-endpoint");
+            .with_config(AmazonS3ConfigKey::S3Endpoint, "http://s3-specific-endpoint")
+            .with_bucket_name("test-bucket")
+            .build()
+            .unwrap();
+        assert_eq!(
+            s3.client.config.bucket_endpoint,
+            "http://s3-specific-endpoint/test-bucket"
+        );
+
+        // Verify precedence works even when S3Endpoint is set first
+        let s3 = AmazonS3Builder::new()
+            .with_config(AmazonS3ConfigKey::S3Endpoint, "http://s3-specific-endpoint")
+            .with_config(AmazonS3ConfigKey::Endpoint, "http://generic-endpoint")
+            .with_bucket_name("test-bucket")
+            .build()
+            .unwrap();
+        assert_eq!(
+            s3.client.config.bucket_endpoint,
+            "http://s3-specific-endpoint/test-bucket"
+        );
     }
 
     #[test]
