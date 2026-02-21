@@ -56,7 +56,7 @@ impl<T> Default for TokenCache<T> {
     }
 }
 
-impl<T: Clone + Send> TokenCache<T> {
+impl<T: Clone + Send + Sync> TokenCache<T> {
     /// Override the minimum remaining TTL for a cached token to be used
     #[cfg(any(feature = "aws", feature = "gcp"))]
     pub(crate) fn with_min_ttl(self, min_ttl: Duration) -> Self {
