@@ -17,7 +17,7 @@
 
 use std::future::Future;
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 
 /// A temporary authentication token with an associated expiry
 #[derive(Debug, Clone)]
@@ -33,9 +33,15 @@ pub(crate) struct TemporaryToken<T> {
 /// [`TemporaryToken`] based on its expiry
 #[derive(Debug)]
 pub(crate) struct TokenCache<T> {
-    cache: Mutex<Option<(TemporaryToken<T>, Instant)>>,
+    cache: RwLock<Option<CacheEntry<T>>>,
     min_ttl: Duration,
     fetch_backoff: Duration,
+}
+
+#[derive(Debug)]
+struct CacheEntry<T> {
+    token: TemporaryToken<T>,
+    fetched_at: Instant,
 }
 
 impl<T> Default for TokenCache<T> {
@@ -63,26 +69,35 @@ impl<T: Clone + Send> TokenCache<T> {
         Fut: Future<Output = Result<TemporaryToken<T>, E>> + Send,
     {
         let now = Instant::now();
-        let mut locked = self.cache.lock().await;
+        let is_token_valid = |entry: &CacheEntry<T>| {
+            entry.token.expiry.is_none_or(|ttl| {
+                ttl.checked_duration_since(now).unwrap_or_default() > self.min_ttl ||
+                // if we've recently attempted to fetch this token and it's not actually
+                // expired, we'll wait to re-fetch it and return the cached one
+                (entry.fetched_at.elapsed() < self.fetch_backoff && ttl > now)
+            })
+        };
 
-        if let Some((cached, fetched_at)) = locked.as_ref() {
-            match cached.expiry {
-                Some(ttl) => {
-                    if ttl.checked_duration_since(now).unwrap_or_default() > self.min_ttl ||
-                        // if we've recently attempted to fetch this token and it's not actually
-                        // expired, we'll wait to re-fetch it and return the cached one
-                        (fetched_at.elapsed() < self.fetch_backoff && ttl.checked_duration_since(now).is_some())
-                    {
-                        return Ok(cached.token.clone());
-                    }
-                }
-                None => return Ok(cached.token.clone()),
-            }
+        if let Some(cache) = self.cache.read().await.as_ref()
+            && is_token_valid(cache)
+        {
+            return Ok(cache.token.token.clone());
+        }
+
+        let mut guard = self.cache.write().await;
+        if let Some(cache) = guard.as_ref()
+            && is_token_valid(cache)
+        {
+            // Refresh race
+            return Ok(cache.token.token.clone());
         }
 
         let cached = f().await?;
         let token = cached.token.clone();
-        *locked = Some((cached, Instant::now()));
+        *guard = Some(CacheEntry {
+            token: cached,
+            fetched_at: Instant::now(),
+        });
 
         Ok(token)
     }
