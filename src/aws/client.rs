@@ -399,27 +399,25 @@ impl Request<'_> {
     }
 
     pub(crate) fn with_payload(mut self, payload: PutPayload) -> Self {
-        let needs_sha256_for_signing = !self.config.skip_signature && self.config.sign_payload;
-        let needs_sha256_for_checksum = matches!(self.config.checksum, Some(Checksum::SHA256));
+        use std::cell::LazyCell;
 
-        let sha256_digest = if needs_sha256_for_signing || needs_sha256_for_checksum {
+        let sha256_digest = LazyCell::new(|| {
             let mut sha256 = Context::new(&digest::SHA256);
-            payload.iter().for_each(|x| sha256.update(x));
-            Some(sha256.finish())
-        } else {
-            None
-        };
+            for part in &payload {
+                sha256.update(part);
+            }
+            sha256.finish()
+        });
 
-        if needs_sha256_for_signing {
-            self.payload_sha256 = sha256_digest;
+        if !self.config.skip_signature && self.config.sign_payload {
+            self.payload_sha256 = Some(*sha256_digest);
         }
 
         match self.config.checksum {
             Some(Checksum::SHA256) => {
-                self.builder = self.builder.header(
-                    SHA256_CHECKSUM,
-                    BASE64_STANDARD.encode(sha256_digest.unwrap()),
-                );
+                self.builder = self
+                    .builder
+                    .header(SHA256_CHECKSUM, BASE64_STANDARD.encode(*sha256_digest));
             }
             Some(Checksum::CRC64NVME) => {
                 let crc_algo = crc_fast::CrcAlgorithm::Crc64Nvme;
