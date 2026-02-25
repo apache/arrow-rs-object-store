@@ -303,7 +303,7 @@ pub enum AmazonS3ConfigKey {
 
     /// Set the checksum algorithm for this client
     ///
-    /// See [`AmazonS3Builder::with_checksum_algorithm`]
+    /// See [`AmazonS3Builder::with_checksum_algorithm`] for details.
     Checksum,
 
     /// Set the instance metadata endpoint
@@ -322,6 +322,8 @@ pub enum AmazonS3ConfigKey {
     /// Supported keys:
     /// - `aws_container_credentials_relative_uri`
     /// - `container_credentials_relative_uri`
+    ///
+    /// Example: `/v2/credentials/abc123`
     ContainerCredentialsRelativeUri,
 
     /// Set the container credentials full URI when used in EKS
@@ -331,6 +333,8 @@ pub enum AmazonS3ConfigKey {
     /// Supported keys:
     /// - `aws_container_credentials_full_uri`
     /// - `container_credentials_full_uri`
+    ///
+    /// Example: `http://169.254.170.2/v2/credentials/abc123`
     ContainerCredentialsFullUri,
 
     /// Set the authorization token in plain text when used in EKS to authenticate with ContainerCredentialsFullUri
@@ -340,6 +344,8 @@ pub enum AmazonS3ConfigKey {
     /// Supported keys:
     /// - `aws_container_authorization_token_file`
     /// - `container_authorization_token_file`
+    /// 
+    /// Example: `/var/run/secrets/eks.amazonaws.com/serviceaccount/token`
     ContainerAuthorizationTokenFile,
 
     /// Web identity token file path for AssumeRoleWithWebIdentity
@@ -347,6 +353,8 @@ pub enum AmazonS3ConfigKey {
     /// Supported keys:
     /// - `aws_web_identity_token_file`
     /// - `web_identity_token_file`
+    ///
+    /// Example: `/var/run/secrets/eks.amazonaws.com/serviceaccount/token`
     WebIdentityTokenFile,
 
     /// Role ARN to assume when using web identity token
@@ -354,6 +362,8 @@ pub enum AmazonS3ConfigKey {
     /// Supported keys:
     /// - `aws_role_arn`
     /// - `role_arn`
+    ///
+    /// Example: `arn:aws:iam::123456789012:role/MyWebIdentityRole`
     RoleArn,
 
     /// Session name for web identity role assumption
@@ -365,6 +375,8 @@ pub enum AmazonS3ConfigKey {
 
     /// Custom STS endpoint for web identity token exchange
     ///
+    /// Defaults to `https://sts.{region}.amazonaws.com`
+    ///
     /// Supported keys:
     /// - `aws_endpoint_url_sts`
     /// - `endpoint_url_sts`
@@ -372,7 +384,7 @@ pub enum AmazonS3ConfigKey {
 
     /// Configure how to provide `copy_if_not_exists`
     ///
-    /// See [`S3CopyIfNotExists`]
+    /// See [`S3CopyIfNotExists`] for details.
     ///
     /// Supported keys:
     /// - `aws_copy_if_not_exists`
@@ -381,7 +393,7 @@ pub enum AmazonS3ConfigKey {
 
     /// Configure how to provide conditional put operations
     ///
-    /// See [`S3ConditionalPut`]
+    /// See [`S3ConditionalPut`] for details.
     ///
     /// Supported keys:
     /// - `aws_conditional_put`
@@ -390,6 +402,8 @@ pub enum AmazonS3ConfigKey {
 
     /// Skip signing request
     ///
+    /// See [`Self::with_skip_signature`] for details.
+    ///
     /// Supported keys:
     /// - `aws_skip_signature`
     /// - `skip_signature`
@@ -397,6 +411,7 @@ pub enum AmazonS3ConfigKey {
 
     /// Disable tagging objects
     ///
+    /// If set to `true` will ignore any tags provided to [`put_opts`](crate::ObjectStore::put_opts).
     /// This can be desirable if not supported by the backing store
     ///
     /// Supported keys:
@@ -529,9 +544,9 @@ impl AmazonS3Builder {
 
     /// Fill the [`AmazonS3Builder`] with regular AWS environment variables
     ///
-    /// All environment variables starting with `AWS_` will be evaluated. Names must
-    /// match acceptable input to [`AmazonS3ConfigKey::from_str`]. Only upper-case environment
-    /// variables are accepted.
+    /// All environment variables starting with `AWS_` will be evaluated.
+    /// Names must match acceptable input to [`AmazonS3ConfigKey::from_str`].
+    /// Only upper-case environment variables are accepted.
     ///
     /// Some examples of variables extracted from environment:
     /// * `AWS_ACCESS_KEY_ID` -> access_key_id
@@ -548,6 +563,7 @@ impl AmazonS3Builder {
     /// * `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE` -> <https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html>
     /// * `AWS_ALLOW_HTTP` -> set to "true" to permit HTTP connections without TLS
     /// * `AWS_REQUEST_PAYER` -> set to "true" to permit operations on requester-pays buckets.
+    ///
     /// # Example
     /// ```
     /// use object_store::aws::AmazonS3Builder;
@@ -790,6 +806,8 @@ impl AmazonS3Builder {
     }
 
     /// Set the AWS Access Key
+    ///
+    /// Examples: `AKIAIOSFODNN7EXAMPLE`, `ASIA4ZP5EXAMPLETOKEN`
     pub fn with_access_key_id(mut self, access_key_id: impl Into<String>) -> Self {
         self.access_key_id = Some(access_key_id.into());
         self
@@ -802,6 +820,8 @@ impl AmazonS3Builder {
     }
 
     /// Set the AWS Session Token to use for requests
+    ///
+    /// Should not be used in combination with [`Self::with_allow_http`].
     pub fn with_token(mut self, token: impl Into<String>) -> Self {
         self.token = Some(token.into());
         self
@@ -819,17 +839,19 @@ impl AmazonS3Builder {
         self
     }
 
-    /// Sets the endpoint for communicating with AWS S3, defaults to the [region endpoint]
+    /// Sets the endpoint for communicating with AWS S3.
+    ///
+    /// Defaults to the [region endpoint]. See  [`Self::with_region`] for further details.
     ///
     /// For example, this might be set to `"http://localhost:4566:`
     /// for testing against a localstack instance.
     ///
-    /// The `endpoint` field should be consistent with [`Self::with_virtual_hosted_style_request`],
-    /// i.e. if `virtual_hosted_style_request` is set to true then `endpoint`
+    /// The `endpoint` field should be consistent with [`Self::with_virtual_hosted_style_request`].
+    /// I.e. if `virtual_hosted_style_request` is set to true then `endpoint`
     /// should have the bucket name included.
     ///
-    /// By default, only HTTPS schemes are enabled. To connect to an HTTP endpoint, enable
-    /// [`Self::with_allow_http`].
+    /// By default, only HTTPS schemes are enabled.
+    /// To connect to an HTTP endpoint, enable [`Self::with_allow_http`].
     ///
     /// [region endpoint]: https://docs.aws.amazon.com/general/latest/gr/s3.html
     pub fn with_endpoint(mut self, endpoint: impl Into<String>) -> Self {
@@ -843,9 +865,19 @@ impl AmazonS3Builder {
         self
     }
 
-    /// Sets what protocol is allowed. If `allow_http` is :
+    /// Sets what protocol is allowed.
+    /// 
+    /// If `allow_http` is :
     /// * false (default):  Only HTTPS are allowed
     /// * true:  HTTP and HTTPS are allowed
+    ///
+    /// <div class="warning">
+    ///
+    /// **Warning**
+    ///
+    /// If you enable this option, attackers may be able to read the data you request.
+    ///
+    /// </div>
     pub fn with_allow_http(mut self, allow_http: bool) -> Self {
         self.client_options = self.client_options.with_allow_http(allow_http);
         self
@@ -859,7 +891,7 @@ impl AmazonS3Builder {
     ///
     /// If the `endpoint` is provided then it should be
     /// consistent with `virtual_hosted_style_request`.
-    /// i.e. if `virtual_hosted_style_request` is set to true
+    /// I.e. if `virtual_hosted_style_request` is set to true
     /// then `endpoint` should have bucket name included.
     pub fn with_virtual_hosted_style_request(mut self, virtual_hosted_style_request: bool) -> Self {
         self.virtual_hosted_style_request = virtual_hosted_style_request.into();
@@ -889,13 +921,13 @@ impl AmazonS3Builder {
     ///
     /// [IMDSv2]: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/configuring-instance-metadata-service.html
     /// [SSRF attack]: https://aws.amazon.com/blogs/security/defense-in-depth-open-firewalls-reverse-proxies-ssrf-vulnerabilities-ec2-instance-metadata-service/
-    ///
     pub fn with_imdsv1_fallback(mut self) -> Self {
         self.imdsv1_fallback = true.into();
         self
     }
 
     /// Sets if unsigned payload option has to be used.
+    ///
     /// See [unsigned payload option](https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-header-based-auth.html)
     /// * false (default): Signed payload option is used, where the checksum for the request body is computed and included when constructing a canonical request.
     /// * true: Unsigned payload option is used. `UNSIGNED-PAYLOAD` literal is included when constructing a canonical request,
@@ -924,8 +956,8 @@ impl AmazonS3Builder {
     /// Set the [instance metadata endpoint](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html),
     /// used primarily within AWS EC2.
     ///
-    /// This defaults to the IPv4 endpoint: http://169.254.169.254. One can alternatively use the IPv6
-    /// endpoint http://fd00:ec2::254.
+    /// This defaults to the IPv4 endpoint: http://169.254.169.254.
+    /// One can alternatively use the IPv6 endpoint http://fd00:ec2::254.
     pub fn with_metadata_endpoint(mut self, endpoint: impl Into<String>) -> Self {
         self.metadata_endpoint = Some(endpoint.into());
         self
@@ -970,7 +1002,7 @@ impl AmazonS3Builder {
         self
     }
 
-    /// If set to `true` will ignore any tags provided to put_opts
+    /// If set to `true` will ignore any tags provided to [`put_opts`](crate::ObjectStore::put_opts)
     pub fn with_disable_tagging(mut self, ignore: bool) -> Self {
         self.disable_tagging = ignore.into();
         self
@@ -1248,6 +1280,8 @@ pub enum S3EncryptionConfigKey {
     /// Supported keys:
     /// - `aws_sse_kms_key_id`
     /// - `sse_kms_key_id`
+    ///
+    /// Example: `arn:aws:kms:us-east-1:123456789012:key/abcd-1234-efgh-5678`
     KmsKeyId,
     /// If set to true, will use the bucket's default KMS key for server-side encryption.
     /// If set to false, will disable the use of the bucket's default KMS key for server-side encryption.
