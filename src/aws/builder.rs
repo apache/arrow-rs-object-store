@@ -344,7 +344,7 @@ pub enum AmazonS3ConfigKey {
     /// Supported keys:
     /// - `aws_container_authorization_token_file`
     /// - `container_authorization_token_file`
-    /// 
+    ///
     /// Example: `/var/run/secrets/eks.amazonaws.com/serviceaccount/token`
     ContainerAuthorizationTokenFile,
 
@@ -402,7 +402,7 @@ pub enum AmazonS3ConfigKey {
 
     /// Skip signing request
     ///
-    /// See [`Self::with_skip_signature`] for details.
+    /// See [`AmazonS3Builder::with_skip_signature`] for details.
     ///
     /// Supported keys:
     /// - `aws_skip_signature`
@@ -866,7 +866,7 @@ impl AmazonS3Builder {
     }
 
     /// Sets what protocol is allowed.
-    /// 
+    ///
     /// If `allow_http` is :
     /// * false (default):  Only HTTPS are allowed
     /// * true:  HTTP and HTTPS are allowed
