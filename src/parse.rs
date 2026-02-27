@@ -144,7 +144,7 @@ macro_rules! builder_opts {
     ($builder:ty, $url:expr, $options:expr) => {{
         let builder = $options.into_iter().fold(
             <$builder>::new().with_url($url.to_string()),
-            |builder, (key, value)| match key.as_ref().parse() {
+            |builder, (key, value)| match key.as_ref().to_ascii_lowercase().parse() {
                 Ok(k) => builder.with_config(k, value),
                 Err(_) => builder,
             },
