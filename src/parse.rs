@@ -144,7 +144,7 @@ macro_rules! builder_opts {
     ($builder:ty, $url:expr, $options:expr) => {{
         let builder = $options.into_iter().fold(
             <$builder>::new().with_url($url.to_string()),
-            |builder, (key, value)| match key.as_ref().parse() {
+            |builder, (key, value)| match key.as_ref().to_ascii_lowercase().parse() {
                 Ok(k) => builder.with_config(k, value),
                 Err(_) => builder,
             },
@@ -178,8 +178,6 @@ pub fn parse_url(url: &Url) -> Result<(Box<dyn ObjectStore>, Path), super::Error
 ///   Note different object stores accept different configuration options, so
 ///   the options that are read depends on the `url` value. One common pattern
 ///   is to pass configuration information via process variables using
-///   [`std::env::vars`]. Keys must be lower-case and match the list of supported
-///   keys to apply successfully.
 ///
 /// Returns
 /// - An [`ObjectStore`] of the corresponding type
