@@ -42,6 +42,16 @@ use url::Url;
 /// Default metadata endpoint
 static DEFAULT_METADATA_ENDPOINT: &str = "http://169.254.169.254";
 
+/// AWS S3 does not support copy operations larger than 5 GiB in a single request. See
+/// [CopyObject](https://docs.aws.amazon.com/AmazonS3/latest/userguide/copy-object.html) for more
+/// details.
+const MAX_SINGLE_REQUEST_COPY_SIZE: u64 = 5 * 1024 * 1024 * 1024;
+/// AWS S3 rejects multipart upload parts smaller than 5 MiB, unless they are the last part of the
+/// upload. See
+/// [CompleteMultipartUpload](https://docs.aws.amazon.com/AmazonS3/latest/API/API_CompleteMultipartUpload.html)
+/// for more details.
+const MIN_PART_SIZE_BYTES: u64 = 5 * 1024 * 1024;
+
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, thiserror::Error)]
 enum Error {
@@ -189,6 +199,11 @@ pub struct AmazonS3Builder {
     request_payer: ConfigValue<bool>,
     /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
+    /// Threshold (bytes) above which copy uses multipart copy. If not set, all copies are performed
+    /// as single requests.
+    multipart_copy_threshold: Option<ConfigValue<u64>>,
+    /// Preferred multipart copy part size (bytes). If not set, defaults to 5 GiB.
+    multipart_copy_part_size: Option<ConfigValue<u64>>,
 }
 
 /// Configuration keys for [`AmazonS3Builder`]
@@ -438,6 +453,10 @@ pub enum AmazonS3ConfigKey {
 
     /// Encryption options
     Encryption(S3EncryptionConfigKey),
+    /// Threshold (bytes) to switch to multipart copy
+    MultipartCopyThreshold,
+    /// Preferred multipart copy part size (bytes)
+    MultipartCopyPartSize,
 }
 
 impl AsRef<str> for AmazonS3ConfigKey {
@@ -470,6 +489,8 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::RequestPayer => "aws_request_payer",
             Self::Client(opt) => opt.as_ref(),
             Self::Encryption(opt) => opt.as_ref(),
+            Self::MultipartCopyThreshold => "aws_multipart_copy_threshold",
+            Self::MultipartCopyPartSize => "aws_multipart_copy_part_size",
         }
     }
 }
@@ -514,6 +535,12 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_conditional_put" | "conditional_put" => Ok(Self::ConditionalPut),
             "aws_disable_tagging" | "disable_tagging" => Ok(Self::DisableTagging),
             "aws_request_payer" | "request_payer" => Ok(Self::RequestPayer),
+            "aws_multipart_copy_threshold" | "multipart_copy_threshold" => {
+                Ok(Self::MultipartCopyThreshold)
+            }
+            "aws_multipart_copy_part_size" | "multipart_copy_part_size" => {
+                Ok(Self::MultipartCopyPartSize)
+            }
             // Backwards compatibility
             "aws_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
             "aws_server_side_encryption" | "server_side_encryption" => Ok(Self::Encryption(
@@ -682,6 +709,12 @@ impl AmazonS3Builder {
                     self.encryption_customer_key_base64 = Some(value.into())
                 }
             },
+            AmazonS3ConfigKey::MultipartCopyThreshold => {
+                self.multipart_copy_threshold = Some(ConfigValue::Deferred(value.into()))
+            }
+            AmazonS3ConfigKey::MultipartCopyPartSize => {
+                self.multipart_copy_part_size = Some(ConfigValue::Deferred(value.into()))
+            }
         };
         self
     }
@@ -749,6 +782,14 @@ impl AmazonS3Builder {
                     self.encryption_customer_key_base64.clone()
                 }
             },
+            AmazonS3ConfigKey::MultipartCopyThreshold => self
+                .multipart_copy_threshold
+                .as_ref()
+                .map(|x| x.to_string()),
+            AmazonS3ConfigKey::MultipartCopyPartSize => self
+                .multipart_copy_part_size
+                .as_ref()
+                .map(|x| x.to_string()),
         }
     }
 
@@ -1061,6 +1102,18 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Set threshold (bytes) above which copy uses multipart copy
+    pub fn with_multipart_copy_threshold(mut self, threshold_bytes: u64) -> Self {
+        self.multipart_copy_threshold = Some(ConfigValue::Parsed(threshold_bytes));
+        self
+    }
+
+    /// Set preferred multipart copy part size (bytes)
+    pub fn with_multipart_copy_part_size(mut self, part_size_bytes: u64) -> Self {
+        self.multipart_copy_part_size = Some(ConfigValue::Parsed(part_size_bytes));
+        self
+    }
+
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
     pub fn build(mut self) -> Result<AmazonS3> {
@@ -1217,6 +1270,23 @@ impl AmazonS3Builder {
             S3EncryptionHeaders::default()
         };
 
+        let multipart_copy_threshold = self
+            .multipart_copy_threshold
+            .map(|val| val.get())
+            .transpose()?;
+        let multipart_copy_part_size = self
+            .multipart_copy_part_size
+            .map(|val| val.get())
+            .transpose()?
+            .unwrap_or(MAX_SINGLE_REQUEST_COPY_SIZE);
+
+        if multipart_copy_part_size < MIN_PART_SIZE_BYTES {
+            return Err(crate::Error::Generic {
+                source: "Multipart copy part size must be >= 5MB".into(),
+                store: STORE,
+            });
+        }
+
         let config = S3Config {
             region,
             bucket,
@@ -1233,6 +1303,8 @@ impl AmazonS3Builder {
             conditional_put: self.conditional_put.get()?,
             encryption_headers,
             request_payer: self.request_payer.get()?,
+            multipart_copy_threshold,
+            multipart_copy_part_size,
         };
 
         let http_client = http.connect(&config.client_options)?;
