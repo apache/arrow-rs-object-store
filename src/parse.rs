@@ -177,7 +177,7 @@ pub fn parse_url(url: &Url) -> Result<(Box<dyn ObjectStore>, Path), super::Error
 /// * `options`: A list of key-value pairs to pass to the [`ObjectStore`] builder.
 ///   Note different object stores accept different configuration options, so
 ///   the options that are read depends on the `url` value. One common pattern
-///   is to pass configuration information via process variables using
+///   is to pass configuration information via process variables using [`std::env::vars`].
 ///
 /// Returns
 /// - An [`ObjectStore`] of the corresponding type
