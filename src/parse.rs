@@ -433,15 +433,19 @@ mod tests {
         server.push_fn(|r| {
             assert_eq!(r.uri().path(), "/foo/bar");
             assert_eq!(r.headers().get(USER_AGENT).unwrap(), "test_url");
-            Response::new(String::new())
+            Response::new(String::from("result"))
         });
 
         let test = format!("{}/foo/bar", server.url());
-        let opts = [("user_agent", "test_url"), ("allow_http", "true")];
+        let opts = [("USER_AGENT", "test_url"), ("allow_http", "true")];
         let url = test.parse().unwrap();
         let (store, path) = parse_url_opts(&url, opts).unwrap();
         assert_eq!(path.as_ref(), "foo/bar");
-        store.get(&path).await.unwrap();
+
+        let res = store.get(&path).await.unwrap();
+        let body = res.bytes().await.unwrap();
+        let body = str::from_utf8(&body).unwrap();
+        assert_eq!(body, "result");
 
         server.shutdown().await;
     }
