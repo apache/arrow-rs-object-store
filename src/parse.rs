@@ -144,7 +144,7 @@ macro_rules! builder_opts {
     ($builder:ty, $url:expr, $options:expr) => {{
         let builder = $options.into_iter().fold(
             <$builder>::new().with_url($url.to_string()),
-            |builder, (key, value)| match key.as_ref().parse() {
+            |builder, (key, value)| match key.as_ref().to_ascii_lowercase().parse() {
                 Ok(k) => builder.with_config(k, value),
                 Err(_) => builder,
             },
@@ -177,9 +177,7 @@ pub fn parse_url(url: &Url) -> Result<(Box<dyn ObjectStore>, Path), super::Error
 /// * `options`: A list of key-value pairs to pass to the [`ObjectStore`] builder.
 ///   Note different object stores accept different configuration options, so
 ///   the options that are read depends on the `url` value. One common pattern
-///   is to pass configuration information via process variables using
-///   [`std::env::vars`]. Keys must be lower-case and match the list of supported
-///   keys to apply successfully.
+///   is to pass configuration information via process variables using [`std::env::vars`].
 ///
 /// Returns
 /// - An [`ObjectStore`] of the corresponding type
@@ -435,15 +433,19 @@ mod tests {
         server.push_fn(|r| {
             assert_eq!(r.uri().path(), "/foo/bar");
             assert_eq!(r.headers().get(USER_AGENT).unwrap(), "test_url");
-            Response::new(String::new())
+            Response::new(String::from("result"))
         });
 
         let test = format!("{}/foo/bar", server.url());
-        let opts = [("user_agent", "test_url"), ("allow_http", "true")];
+        let opts = [("USER_AGENT", "test_url"), ("allow_http", "true")];
         let url = test.parse().unwrap();
         let (store, path) = parse_url_opts(&url, opts).unwrap();
         assert_eq!(path.as_ref(), "foo/bar");
-        store.get(&path).await.unwrap();
+
+        let res = store.get(&path).await.unwrap();
+        let body = res.bytes().await.unwrap();
+        let body = str::from_utf8(&body).unwrap();
+        assert_eq!(body, "result");
 
         server.shutdown().await;
     }
