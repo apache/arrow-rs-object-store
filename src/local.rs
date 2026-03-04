@@ -197,7 +197,7 @@ impl From<Error> for super::Error {
 /// [`LocalFileSystem::copy_opts`] is implemented using [`std::fs::hard_link`], and therefore
 /// does not support copying across filesystem boundaries.
 ///
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct LocalFileSystem {
     config: Arc<Config>,
     // if you want to delete empty directories when deleting files
