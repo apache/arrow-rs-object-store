@@ -635,6 +635,10 @@ pub type MultipartId = String;
 /// the store _users_ and provides additional methods that may be simpler to use
 /// but overlap in functionality with [`ObjectStore`].
 ///
+/// # Clone
+/// If a store implements [`Clone`], that will only clone the handle to the underlying data. It will NOT clone/fork the
+/// actual key-value data. Hence, the cloned instance and the original instance share the same state.
+///
 /// # Minimal Default Implementations
 /// There are only a few default implementations for methods in this trait by
 /// design. This was different from versions prior to `0.13.0`, which had many
