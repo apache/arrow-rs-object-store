@@ -78,7 +78,7 @@ impl From<Error> for super::Error {
 
 /// In-memory storage suitable for testing or for opting out of using a cloud
 /// storage provider.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct InMemory {
     storage: SharedStorage,
 }
