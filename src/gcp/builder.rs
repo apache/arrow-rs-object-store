@@ -771,12 +771,12 @@ mod tests {
 
         let explicit_override = GoogleCloudStorageBuilder::new()
             .with_bucket_name("foo")
-            .with_base_url("https://explicitly-overriden:4443")
+            .with_base_url("https://explicitly-overridden:4443")
             .build()
             .unwrap();
         assert_eq!(
             explicit_override.client.config().base_url,
-            "https://explicitly-overriden:4443"
+            "https://explicitly-overridden:4443"
         );
 
         let url_in_credentials = GoogleCloudStorageBuilder::new()
@@ -791,13 +791,13 @@ mod tests {
 
         let explicit_override_and_credentials = GoogleCloudStorageBuilder::new()
             .with_bucket_name("foo")
-            .with_base_url("https://explicitly-overriden:4443") // this should take precedence
+            .with_base_url("https://explicitly-overridden:4443") // this should take precedence
             .with_service_account_key(FAKE_KEY_WITH_BASE_URL)
             .build()
             .unwrap();
         assert_eq!(
             explicit_override_and_credentials.client.config().base_url,
-            "https://explicitly-overriden:4443"
+            "https://explicitly-overridden:4443"
         );
     }
 

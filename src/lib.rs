@@ -116,6 +116,8 @@
 //!
 //! [`BufReader`]: buffered::BufReader
 //! [`BufWriter`]: buffered::BufWriter
+//! [`Read`]: std::io::Read
+//! [`Seek`]: std::io::Seek
 //!
 //! # Adapters
 //!
@@ -172,7 +174,7 @@
 //! # use object_store::local::LocalFileSystem;
 //! # use std::sync::Arc;
 //! # use object_store::{path::Path, ObjectStore};
-//! # use futures::stream::StreamExt;
+//! # use futures_util::stream::StreamExt;
 //! # // use LocalFileSystem for example
 //! # fn get_object_store() -> Arc<dyn ObjectStore> {
 //! #   Arc::new(LocalFileSystem::new())
@@ -213,7 +215,7 @@
 //! from remote storage or files in the local filesystem as a stream.
 //!
 //! ```ignore-wasm32
-//! # use futures::TryStreamExt;
+//! # use futures_util::TryStreamExt;
 //! # use object_store::local::LocalFileSystem;
 //! # use std::sync::Arc;
 //! #  use bytes::Bytes;
@@ -539,6 +541,7 @@
 pub mod aws;
 #[cfg(feature = "azure")]
 pub mod azure;
+#[cfg(feature = "tokio")]
 pub mod buffered;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod chunked;
@@ -547,6 +550,7 @@ pub mod delimited;
 pub mod gcp;
 #[cfg(feature = "http")]
 pub mod http;
+#[cfg(feature = "tokio")]
 pub mod limit;
 #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 pub mod local;
@@ -556,6 +560,7 @@ pub mod prefix;
 pub mod registry;
 #[cfg(feature = "cloud")]
 pub mod signer;
+#[cfg(feature = "tokio")]
 pub mod throttle;
 
 #[cfg(feature = "cloud")]
@@ -605,10 +610,8 @@ use crate::util::maybe_spawn_blocking;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{StreamExt, TryStreamExt, stream::BoxStream};
+use futures_util::{StreamExt, TryStreamExt, stream::BoxStream};
 use std::fmt::{Debug, Formatter};
-#[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
-use std::io::{Read, Seek, SeekFrom};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -631,6 +634,10 @@ pub type MultipartId = String;
 /// The [`ObjectStoreExt`] acts as an API/contract between `object_store` and
 /// the store _users_ and provides additional methods that may be simpler to use
 /// but overlap in functionality with [`ObjectStore`].
+///
+/// # Clone
+/// If a store implements [`Clone`], that will only clone the handle to the underlying data. It will NOT clone/fork the
+/// actual key-value data. Hence, the cloned instance and the original instance share the same state.
 ///
 /// # Minimal Default Implementations
 /// There are only a few default implementations for methods in this trait by
@@ -928,14 +935,14 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// return Ok. If it is an error, it will be [`Error::NotFound`].
     ///
     /// ```ignore-wasm32
-    /// # use futures::{StreamExt, TryStreamExt};
+    /// # use futures_util::{StreamExt, TryStreamExt};
     /// # use object_store::local::LocalFileSystem;
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # let root = tempfile::TempDir::new().unwrap();
     /// # let store = LocalFileSystem::new_with_prefix(root.path()).unwrap();
     /// # use object_store::{ObjectStore, ObjectStoreExt, ObjectMeta};
     /// # use object_store::path::Path;
-    /// # use futures::{StreamExt, TryStreamExt};
+    /// # use futures_util::{StreamExt, TryStreamExt};
     /// #
     /// // Create two objects
     /// store.put(&Path::from("foo"), "foo".into()).await?;
@@ -961,7 +968,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ///
     /// ```
     /// # use async_trait::async_trait;
-    /// # use futures::stream::{BoxStream, StreamExt};
+    /// # use futures_util::stream::{BoxStream, StreamExt};
     /// # use object_store::path::Path;
     /// # use object_store::{
     /// #     CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
@@ -1046,7 +1053,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// #
     /// # async fn example() {
     /// #     let store = ExampleStore { client: Arc::new(ExampleClient) };
-    /// #     let paths = futures::stream::iter(vec![Ok(Path::from("foo")), Ok(Path::from("bar"))]).boxed();
+    /// #     let paths = futures_util::stream::iter(vec![Ok(Path::from("foo")), Ok(Path::from("bar"))]).boxed();
     /// #     let results = store.delete_stream(paths).collect::<Vec<_>>().await;
     /// #     assert_eq!(results.len(), 2);
     /// #     assert_eq!(results[0].as_ref().unwrap(), &Path::from("foo"));
@@ -1074,7 +1081,9 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// List all the objects with the given prefix and a location greater than `offset`
     ///
     /// Some stores, such as S3 and GCS, may be able to push `offset` down to reduce
-    /// the number of network requests required
+    /// the number of network requests required.
+    ///
+    /// This returns an exclusive offset, i.e. objects at exactly `offset` will not be included.
     ///
     /// Note: the order of returned [`ObjectMeta`] is not guaranteed
     ///
@@ -1086,7 +1095,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ) -> BoxStream<'static, Result<ObjectMeta>> {
         let offset = offset.clone();
         self.list(prefix)
-            .try_filter(move |f| futures::future::ready(f.location > offset))
+            .try_filter(move |f| futures_util::future::ready(f.location > offset))
             .boxed()
     }
 
@@ -1202,7 +1211,7 @@ as_ref_impl!(Box<T>);
 
 /// Extension trait for [`ObjectStore`] with convenience functions.
 ///
-/// See the [module-level documentation](crate) for a high leve overview and
+/// See the [module-level documentation](crate) for a high level overview and
 /// examples. See "contract" section within the [`ObjectStore`] documentation
 /// for more reasoning.
 ///
@@ -1359,7 +1368,7 @@ where
     async fn delete(&self, location: &Path) -> Result<()> {
         let location = location.clone();
         let mut stream =
-            self.delete_stream(futures::stream::once(async move { Ok(location) }).boxed());
+            self.delete_stream(futures_util::stream::once(async move { Ok(location) }).boxed());
         let _path = stream.try_next().await?.ok_or_else(|| Error::Generic {
             store: "ext",
             source: "`delete_stream` with one location should yield once but didn't".into(),
@@ -1650,22 +1659,11 @@ impl GetResult {
             #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
             GetResultPayload::File(mut file, path) => {
                 maybe_spawn_blocking(move || {
-                    file.seek(SeekFrom::Start(self.range.start as _))
-                        .map_err(|source| local::Error::Seek {
-                            source,
-                            path: path.clone(),
-                        })?;
+                    use crate::local::read_range;
 
-                    let mut buffer = if let Ok(len) = len.try_into() {
-                        Vec::with_capacity(len)
-                    } else {
-                        Vec::new()
-                    };
-                    file.take(len as _)
-                        .read_to_end(&mut buffer)
-                        .map_err(|source| local::Error::UnableToReadBytes { source, path })?;
+                    let buffer = read_range(&mut file, &path, self.range)?;
 
-                    Ok(buffer.into())
+                    Ok(buffer)
                 })
                 .await
             }
@@ -2048,6 +2046,7 @@ pub enum Error {
     },
 
     /// Error when `tokio::spawn` failed
+    #[cfg(feature = "tokio")]
     #[error("Error joining spawned task: {}", source)]
     JoinError {
         /// The wrapped error

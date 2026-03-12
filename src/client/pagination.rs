@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::Result;
-use futures::Stream;
+use futures_util::Stream;
 use std::future::Future;
 
 /// Takes a paginated operation `op` that when called with:
@@ -51,7 +51,7 @@ where
         Done,
     }
 
-    futures::stream::unfold(PaginationState::Start(state), move |state| {
+    futures_util::stream::unfold(PaginationState::Start(state), move |state| {
         let client = client.clone();
         async move {
             let (s, page_token) = match state {

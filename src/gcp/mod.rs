@@ -48,7 +48,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use client::GoogleCloudStorageClient;
-use futures::stream::{BoxStream, StreamExt};
+use futures_util::stream::{BoxStream, StreamExt};
 use http::Method;
 use url::Url;
 
@@ -317,6 +317,7 @@ mod test {
         let integration = GoogleCloudStorageBuilder::from_env().build().unwrap();
 
         put_get_delete_list(&integration).await;
+        list_with_offset_exclusivity(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;

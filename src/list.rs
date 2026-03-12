@@ -28,6 +28,9 @@ pub struct PaginatedListOptions {
     /// Path to start listing from
     ///
     /// Note: Not all stores support this
+    ///
+    /// For stores that do support this, the returned
+    /// result should not include the object with this key.
     pub offset: Option<String>,
 
     /// A delimiter use to group keys with a common prefix

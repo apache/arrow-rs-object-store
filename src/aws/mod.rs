@@ -29,8 +29,8 @@
 //! [automatic cleanup]: https://aws.amazon.com/blogs/aws/s3-lifecycle-management-update-support-for-multipart-uploads-and-delete-markers/
 
 use async_trait::async_trait;
-use futures::stream::BoxStream;
-use futures::{StreamExt, TryStreamExt};
+use futures_util::stream::BoxStream;
+use futures_util::{StreamExt, TryStreamExt};
 use reqwest::header::{HeaderName, IF_MATCH, IF_NONE_MATCH};
 use reqwest::{Method, StatusCode};
 use std::{sync::Arc, time::Duration};
@@ -275,7 +275,7 @@ impl ObjectStore for AmazonS3 {
                     client
                         .bulk_delete_request(locations)
                         .await
-                        .map(futures::stream::iter)
+                        .map(futures_util::stream::iter)
                 }
             })
             .buffered(20)
@@ -298,7 +298,7 @@ impl ObjectStore for AmazonS3 {
             return self
                 .client
                 .list(prefix)
-                .try_filter(move |f| futures::future::ready(f.location > offset))
+                .try_filter(move |f| futures_util::future::ready(f.location > offset))
                 .boxed();
         }
 
@@ -625,6 +625,7 @@ mod tests {
         let test_conditional_put = config.conditional_put != S3ConditionalPut::Disabled;
 
         put_get_delete_list(&integration).await;
+        list_with_offset_exclusivity(&integration).await;
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;

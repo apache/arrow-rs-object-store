@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use rand::{prelude::*, rng};
+use rand::{Rng, RngExt, rng};
 use std::time::Duration;
 
 /// Exponential backoff with decorrelated jitter algorithm
@@ -56,7 +56,7 @@ pub(crate) struct Backoff {
     next_backoff_secs: f64,
     max_backoff_secs: f64,
     base: f64,
-    rng: Option<Box<dyn RngCore + Sync + Send>>,
+    rng: Option<Box<dyn Rng + Sync + Send>>,
 }
 
 impl std::fmt::Debug for Backoff {
@@ -81,7 +81,7 @@ impl Backoff {
     /// Used [`rand::rng()`] if no rng provided
     pub(crate) fn new_with_rng(
         config: &BackoffConfig,
-        rng: Option<Box<dyn RngCore + Sync + Send>>,
+        rng: Option<Box<dyn Rng + Sync + Send>>,
     ) -> Self {
         let init_backoff = config.init_backoff.as_secs_f64();
         Self {
@@ -109,22 +109,27 @@ impl Backoff {
 
 #[cfg(test)]
 mod tests {
+    use std::convert::Infallible;
+
+    use rand::{TryRng, rand_core::utils::fill_bytes_via_next_word};
+
     use super::*;
-    use rand::rand_core::impls::fill_bytes_via_next;
 
     struct FixedRng(u64);
 
-    impl RngCore for FixedRng {
-        fn next_u32(&mut self) -> u32 {
-            self.0 as _
+    impl TryRng for FixedRng {
+        type Error = Infallible;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok(self.0 as _)
         }
 
-        fn next_u64(&mut self) -> u64 {
-            self.0
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok(self.0)
         }
 
-        fn fill_bytes(&mut self, dst: &mut [u8]) {
-            fill_bytes_via_next(self, dst)
+        fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+            fill_bytes_via_next_word(dst, || self.try_next_u64())
         }
     }
 

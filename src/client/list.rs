@@ -21,8 +21,8 @@ use crate::list::{PaginatedListOptions, PaginatedListResult};
 use crate::path::{DELIMITER, Path};
 use crate::{ListResult, ObjectMeta};
 use async_trait::async_trait;
-use futures::stream::BoxStream;
-use futures::{StreamExt, TryStreamExt};
+use futures_util::stream::BoxStream;
+use futures_util::{StreamExt, TryStreamExt};
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 
@@ -93,7 +93,7 @@ impl<T: ListClient + Clone> ListClientExt for T {
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         self.list_paginated(prefix, false, None)
-            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
+            .map_ok(|r| futures_util::stream::iter(r.objects.into_iter().map(Ok)))
             .try_flatten()
             .boxed()
     }
@@ -104,7 +104,7 @@ impl<T: ListClient + Clone> ListClientExt for T {
         offset: &Path,
     ) -> BoxStream<'static, Result<ObjectMeta>> {
         self.list_paginated(prefix, false, Some(offset))
-            .map_ok(|r| futures::stream::iter(r.objects.into_iter().map(Ok)))
+            .map_ok(|r| futures_util::stream::iter(r.objects.into_iter().map(Ok)))
             .try_flatten()
             .boxed()
     }

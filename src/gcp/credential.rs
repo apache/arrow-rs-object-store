@@ -27,7 +27,7 @@ use async_trait::async_trait;
 use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
-use futures::TryFutureExt;
+use futures_util::TryFutureExt;
 use http::{HeaderMap, Method};
 use itertools::Itertools;
 use percent_encoding::utf8_percent_encode;

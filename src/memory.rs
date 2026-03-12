@@ -23,7 +23,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{StreamExt, stream::BoxStream};
+use futures_util::{StreamExt, stream::BoxStream};
 use parking_lot::RwLock;
 
 use crate::multipart::{MultipartStore, PartId};
@@ -78,7 +78,7 @@ impl From<Error> for super::Error {
 
 /// In-memory storage suitable for testing or for opting out of using a cloud
 /// storage provider.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct InMemory {
     storage: SharedStorage,
 }
@@ -259,7 +259,7 @@ impl ObjectStore for InMemory {
             }
             None => (0..entry.data.len() as u64, entry.data),
         };
-        let stream = futures::stream::once(futures::future::ready(Ok(data)));
+        let stream = futures_util::stream::once(futures_util::future::ready(Ok(data)));
 
         Ok(GetResult {
             payload: GetResultPayload::Stream(stream.boxed()),
@@ -334,7 +334,7 @@ impl ObjectStore for InMemory {
             })
             .collect();
 
-        futures::stream::iter(values).boxed()
+        futures_util::stream::iter(values).boxed()
     }
 
     /// The memory implementation returns all results, as opposed to the cloud
@@ -512,7 +512,7 @@ struct InMemoryUpload {
 impl MultipartUpload for InMemoryUpload {
     fn put_part(&mut self, payload: PutPayload) -> UploadPart {
         self.parts.push(payload);
-        Box::pin(futures::future::ready(Ok(())))
+        Box::pin(futures_util::future::ready(Ok(())))
     }
 
     async fn complete(&mut self) -> Result<PutResult> {
@@ -548,6 +548,7 @@ mod tests {
         let integration = InMemory::new();
 
         put_get_delete_list(&integration).await;
+        list_with_offset_exclusivity(&integration).await;
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
@@ -564,6 +565,7 @@ mod tests {
         let integration: Box<dyn ObjectStore> = Box::new(InMemory::new());
 
         put_get_delete_list(&integration).await;
+        list_with_offset_exclusivity(&integration).await;
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;
@@ -577,6 +579,7 @@ mod tests {
         let integration: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
 
         put_get_delete_list(&integration).await;
+        list_with_offset_exclusivity(&integration).await;
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;
         list_with_delimiter(&integration).await;

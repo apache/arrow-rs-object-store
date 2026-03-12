@@ -18,8 +18,8 @@
 use crate::client::{HttpError, HttpErrorKind};
 use crate::{PutPayload, collect_bytes};
 use bytes::Bytes;
-use futures::StreamExt;
-use futures::stream::BoxStream;
+use futures_util::StreamExt;
+use futures_util::stream::BoxStream;
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Body, Frame, SizeHint};
@@ -43,9 +43,9 @@ impl HttpRequestBody {
     pub(crate) fn into_reqwest(self) -> reqwest::Body {
         match self.0 {
             Inner::Bytes(b) => b.into(),
-            Inner::PutPayload(_, payload) => reqwest::Body::wrap_stream(futures::stream::iter(
-                payload.into_iter().map(Ok::<_, HttpError>),
-            )),
+            Inner::PutPayload(_, payload) => reqwest::Body::wrap_stream(
+                futures_util::stream::iter(payload.into_iter().map(Ok::<_, HttpError>)),
+            ),
         }
     }
 

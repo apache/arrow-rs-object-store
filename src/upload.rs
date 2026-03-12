@@ -15,13 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(feature = "tokio")]
 use std::task::{Context, Poll};
 
-use crate::{PutPayload, PutPayloadMut, PutResult, Result};
+#[cfg(feature = "tokio")]
+use crate::PutPayloadMut;
+use crate::{PutPayload, PutResult, Result};
 use async_trait::async_trait;
-use bytes::Bytes;
-use futures::future::BoxFuture;
-use futures::ready;
+use futures_util::future::BoxFuture;
+#[cfg(feature = "tokio")]
 use tokio::task::JoinSet;
 
 /// An upload part request
@@ -50,7 +52,7 @@ pub trait MultipartUpload: Send + std::fmt::Debug {
     /// returned futures in parallel
     ///
     /// ```no_run
-    /// # use futures::StreamExt;
+    /// # use futures_util::StreamExt;
     /// # use object_store::MultipartUpload;
     /// #
     /// # async fn test() {
@@ -58,7 +60,7 @@ pub trait MultipartUpload: Send + std::fmt::Debug {
     /// let mut upload: Box<&dyn MultipartUpload> = todo!();
     /// let p1 = upload.put_part(vec![0; 10 * 1024 * 1024].into());
     /// let p2 = upload.put_part(vec![1; 10 * 1024 * 1024].into());
-    /// futures::future::try_join(p1, p2).await.unwrap();
+    /// futures_util::future::try_join(p1, p2).await.unwrap();
     /// upload.complete().await.unwrap();
     /// # }
     /// ```
@@ -115,7 +117,8 @@ impl<W: MultipartUpload + ?Sized> MultipartUpload for Box<W> {
 /// allowing back pressure on producers, prior to buffering the next part. However, unlike
 /// [`Sink`] this back pressure is optional, allowing integration with synchronous producers
 ///
-/// [`Sink`]: futures::sink::Sink
+/// [`Sink`]: futures_util::sink::Sink
+#[cfg(feature = "tokio")]
 #[derive(Debug)]
 pub struct WriteMultipart {
     upload: Box<dyn MultipartUpload>,
@@ -127,6 +130,7 @@ pub struct WriteMultipart {
     tasks: JoinSet<Result<()>>,
 }
 
+#[cfg(feature = "tokio")]
 impl WriteMultipart {
     /// Create a new [`WriteMultipart`] that will upload using 5MB chunks
     pub fn new(upload: Box<dyn MultipartUpload>) -> Self {
@@ -152,7 +156,7 @@ impl WriteMultipart {
         max_concurrency: usize,
     ) -> Poll<Result<()>> {
         while !self.tasks.is_empty() && self.tasks.len() >= max_concurrency {
-            ready!(self.tasks.poll_join_next(cx)).unwrap()??
+            futures_core::ready!(self.tasks.poll_join_next(cx)).unwrap()??
         }
         Poll::Ready(Ok(()))
     }
@@ -161,7 +165,7 @@ impl WriteMultipart {
     ///
     /// See [`Self::poll_for_capacity`] for a [`Poll`] version of this function
     pub async fn wait_for_capacity(&mut self, max_concurrency: usize) -> Result<()> {
-        futures::future::poll_fn(|cx| self.poll_for_capacity(cx, max_concurrency)).await
+        futures_util::future::poll_fn(|cx| self.poll_for_capacity(cx, max_concurrency)).await
     }
 
     /// Write data to this [`WriteMultipart`]
@@ -195,7 +199,7 @@ impl WriteMultipart {
     /// will allow multiple calls to share the same underlying allocation.
     ///
     /// See [`Self::write`] for information on backpressure
-    pub fn put(&mut self, mut bytes: Bytes) {
+    pub fn put(&mut self, mut bytes: bytes::Bytes) {
         while !bytes.is_empty() {
             let remaining = self.chunk_size - self.buffer.content_length();
             if bytes.len() < remaining {
@@ -243,10 +247,10 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
-    use futures::FutureExt;
+    use futures_util::FutureExt;
     use parking_lot::Mutex;
     use rand::prelude::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     use crate::ObjectStoreExt;
     use crate::memory::InMemory;
@@ -283,7 +287,7 @@ mod tests {
     impl MultipartUpload for InstrumentedUpload {
         fn put_part(&mut self, data: PutPayload) -> UploadPart {
             self.chunks.lock().push(data);
-            futures::future::ready(Ok(())).boxed()
+            futures_util::future::ready(Ok(())).boxed()
         }
 
         async fn complete(&mut self) -> Result<PutResult> {

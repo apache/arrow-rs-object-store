@@ -174,6 +174,14 @@ pub enum ClientConfigKey {
     ///
     /// This will spread the connections across more servers.
     ///
+    /// <div class="warning">
+    ///
+    /// **Warning**
+    ///
+    /// This will override the DNS resolver configured by [`reqwest`].
+    ///
+    /// </div>
+    ///
     /// Supported keys:
     /// - `randomize_addresses`
     RandomizeAddresses,
@@ -698,6 +706,11 @@ impl ClientOptions {
     pub fn with_http2_max_frame_size(mut self, sz: u32) -> Self {
         self.http2_max_frame_size = Some(ConfigValue::Parsed(sz));
         self
+    }
+
+    /// Get the default headers defined through `ClientOptions::with_default_headers`
+    pub fn get_default_headers(&self) -> Option<&HeaderMap> {
+        self.default_headers.as_ref()
     }
 
     /// Get the mime type for the file in `path` to be uploaded
