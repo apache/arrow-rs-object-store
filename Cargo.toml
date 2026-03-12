@@ -65,6 +65,12 @@ serde_urlencoded = { version = "0.7", optional = true }
 tokio = { version = "1.29.0", features = ["sync", "macros", "rt", "time", "io-util"], optional = true }
 tracing = { version = "0.1", optional = true }
 
+[target.'cfg(target_family="unix")'.dependencies]
+libc = { version = "0.2", optional = true }
+
+[target.'cfg(target_family="windows")'.dependencies]
+windows-sys = { version = "0.61.2", default-features = false, features = ["Win32_Foundation"], optional = true }
+
 [target.'cfg(target_family="unix")'.dev-dependencies]
 nix = { version = "0.31.1", features = ["fs"] }
 
@@ -77,7 +83,7 @@ futures-channel = {version = "0.3", features = ["sink"]}
 default = ["fs"]
 cloud = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/stream", "chrono/serde", "base64", "rand", "ring", "http-body-util", "form_urlencoded", "serde_urlencoded", "tokio"]
 azure = ["cloud", "httparse"]
-fs = ["walkdir", "tokio"]
+fs = ["walkdir", "tokio", "libc", "windows-sys"]
 gcp = ["cloud", "rustls-pki-types"]
 aws = ["cloud", "md-5"]
 http = ["cloud"]
