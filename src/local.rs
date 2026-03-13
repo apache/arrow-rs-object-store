@@ -54,7 +54,7 @@ pub(crate) enum Error {
 
     #[error("Unable to access metadata for {}: {}", path, source)]
     Metadata {
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        source: Box<dyn std::error::Error + Send + Sync>,
         path: String,
     },
 
@@ -418,7 +418,7 @@ impl ObjectStore for LocalFileSystem {
         Ok(Box::new(LocalUpload::new(src, dest, file)))
     }
 
-    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+    async fn get_opts<'a>(&self, location: &Path, options: GetOptions) -> Result<GetResult<'a>> {
         let location = location.clone();
         let path = self.path_to_filesystem(&location)?;
         maybe_spawn_blocking(move || {
@@ -459,10 +459,10 @@ impl ObjectStore for LocalFileSystem {
         .await
     }
 
-    fn delete_stream(
+    fn delete_stream<'a>(
         &self,
-        locations: BoxStream<'static, Result<Path>>,
-    ) -> BoxStream<'static, Result<Path>> {
+        locations: BoxStream<'a, Result<Path>>,
+    ) -> BoxStream<'a, Result<Path>> {
         let config = Arc::clone(&self.config);
         let automatic_cleanup = self.automatic_cleanup;
         locations
@@ -478,15 +478,15 @@ impl ObjectStore for LocalFileSystem {
             .boxed()
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+    fn list<'a>(&self, prefix: Option<&Path>) -> BoxStream<'a, Result<ObjectMeta>> {
         Self::list_with_maybe_offset(Arc::clone(&self.config), prefix, None)
     }
 
-    fn list_with_offset(
+    fn list_with_offset<'a>(
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'static, Result<ObjectMeta>> {
+    ) -> BoxStream<'a, Result<ObjectMeta>> {
         Self::list_with_maybe_offset(Arc::clone(&self.config), prefix, Some(offset))
     }
 
@@ -701,11 +701,11 @@ impl LocalFileSystem {
         }
     }
 
-    fn list_with_maybe_offset(
+    fn list_with_maybe_offset<'a>(
         config: Arc<Config>,
         prefix: Option<&Path>,
         maybe_offset: Option<&Path>,
-    ) -> BoxStream<'static, Result<ObjectMeta>> {
+    ) -> BoxStream<'a, Result<ObjectMeta>> {
         let root_path = match prefix {
             Some(prefix) => match config.prefix_to_filesystem(prefix) {
                 Ok(path) => path,
@@ -923,12 +923,12 @@ impl Drop for LocalUpload {
     }
 }
 
-pub(crate) fn chunked_stream(
+pub(crate) fn chunked_stream<'a>(
     mut file: File,
     path: PathBuf,
     range: Range<u64>,
     chunk_size: usize,
-) -> BoxStream<'static, Result<Bytes, super::Error>> {
+) -> BoxStream<'a, Result<Bytes, super::Error>> {
     futures_util::stream::once(async move {
         let requested = range.end - range.start;
 

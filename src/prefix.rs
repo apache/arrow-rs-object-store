@@ -115,7 +115,7 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner.put_multipart_opts(&full_path, opts).await
     }
 
-    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+    async fn get_opts<'a>(&self, location: &Path, options: GetOptions) -> Result<GetResult<'a>> {
         let full_path = self.full_path(location);
         self.inner.get_opts(&full_path, options).await
     }
@@ -125,10 +125,10 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         self.inner.get_ranges(&full_path, ranges).await
     }
 
-    fn delete_stream(
+    fn delete_stream<'a>(
         &self,
-        locations: BoxStream<'static, Result<Path>>,
-    ) -> BoxStream<'static, Result<Path>> {
+        locations: BoxStream<'a, Result<Path>>,
+    ) -> BoxStream<'a, Result<Path>> {
         let prefix = self.prefix.clone();
         let locations = locations
             .map(move |location| location.map(|loc| full_path(&prefix, &loc)))
@@ -140,18 +140,18 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
             .boxed()
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+    fn list<'a>(&self, prefix: Option<&Path>) -> BoxStream<'a, Result<ObjectMeta>> {
         let prefix = self.full_path(prefix.unwrap_or(&Path::default()));
         let s = self.inner.list(Some(&prefix));
         let slf_prefix = self.prefix.clone();
         s.map_ok(move |meta| strip_meta(&slf_prefix, meta)).boxed()
     }
 
-    fn list_with_offset(
+    fn list_with_offset<'a>(
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'static, Result<ObjectMeta>> {
+    ) -> BoxStream<'a, Result<ObjectMeta>> {
         let offset = self.full_path(offset);
         let prefix = self.full_path(prefix.unwrap_or(&Path::default()));
         let s = self.inner.list_with_offset(Some(&prefix), &offset);

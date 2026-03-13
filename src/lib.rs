@@ -743,7 +743,7 @@ pub type MultipartId = String;
 /// ```
 ///
 #[async_trait]
-pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
+pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug {
     /// Save the provided `payload` to `location` with the given options
     ///
     /// The operation is guaranteed to be atomic, it will either successfully
@@ -888,7 +888,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ///     }
     /// }
     /// ```
-    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult>;
+    async fn get_opts<'a>(&self, location: &Path, options: GetOptions) -> Result<GetResult<'a>>;
 
     /// Return the bytes that are stored at the specified location
     /// in the given byte ranges
@@ -1022,8 +1022,8 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// #
     /// fn delete_stream(
     ///     &self,
-    ///     locations: BoxStream<'static, Result<Path>>,
-    /// ) -> BoxStream<'static, Result<Path>> {
+    ///     locations: BoxStream<'a, Result<Path>>,
+    /// ) -> BoxStream<'a, Result<Path>> {
     ///     let client = Arc::clone(&self.client);
     ///     locations
     ///         .map(move |location| {
@@ -1038,7 +1038,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     ///         .boxed()
     /// }
     /// #
-    /// #     fn list(&self, _: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+    /// #     fn list(&self, _: Option<&Path>) -> BoxStream<'a, Result<ObjectMeta>> {
     /// #         todo!()
     /// #     }
     /// #
@@ -1063,10 +1063,10 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// # let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
     /// # rt.block_on(example());
     /// ```
-    fn delete_stream(
+    fn delete_stream<'a>(
         &self,
-        locations: BoxStream<'static, Result<Path>>,
-    ) -> BoxStream<'static, Result<Path>>;
+        locations: BoxStream<'a, Result<Path>>,
+    ) -> BoxStream<'a, Result<Path>>;
 
     /// List all the objects with the given prefix.
     ///
@@ -1076,7 +1076,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Note: the order of returned [`ObjectMeta`] is not guaranteed
     ///
     /// For more advanced listing see [`PaginatedListStore`](list::PaginatedListStore)
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>>;
+    fn list<'a>(&self, prefix: Option<&Path>) -> BoxStream<'a, Result<ObjectMeta>>;
 
     /// List all the objects with the given prefix and a location greater than `offset`
     ///
@@ -1088,11 +1088,11 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Note: the order of returned [`ObjectMeta`] is not guaranteed
     ///
     /// For more advanced listing see [`PaginatedListStore`](list::PaginatedListStore)
-    fn list_with_offset(
+    fn list_with_offset<'a>(
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'static, Result<ObjectMeta>> {
+    ) -> BoxStream<'a, Result<ObjectMeta>> {
         let offset = offset.clone();
         self.list(prefix)
             .try_filter(move |f| futures_util::future::ready(f.location > offset))
@@ -1155,7 +1155,7 @@ macro_rules! as_ref_impl {
                 self.as_ref().put_multipart_opts(location, opts).await
             }
 
-            async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+            async fn get_opts<'a>(&self, location: &Path, options: GetOptions) -> Result<GetResult<'a>> {
                 self.as_ref().get_opts(location, options).await
             }
 
@@ -1167,22 +1167,22 @@ macro_rules! as_ref_impl {
                 self.as_ref().get_ranges(location, ranges).await
             }
 
-            fn delete_stream(
+            fn delete_stream<'a>(
                 &self,
-                locations: BoxStream<'static, Result<Path>>,
-            ) -> BoxStream<'static, Result<Path>> {
+                locations: BoxStream<'a, Result<Path>>,
+            ) -> BoxStream<'a, Result<Path>> {
                 self.as_ref().delete_stream(locations)
             }
 
-            fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+            fn list<'a>(&self, prefix: Option<&Path>) -> BoxStream<'a, Result<ObjectMeta>> {
                 self.as_ref().list(prefix)
             }
 
-            fn list_with_offset(
+            fn list_with_offset<'a>(
                 &self,
                 prefix: Option<&Path>,
                 offset: &Path,
-            ) -> BoxStream<'static, Result<ObjectMeta>> {
+            ) -> BoxStream<'a, Result<ObjectMeta>> {
                 self.as_ref().list_with_offset(prefix, offset)
             }
 
@@ -1264,7 +1264,7 @@ pub trait ObjectStoreExt: ObjectStore {
     ///     println!("Retrieved content: {}", String::from_utf8_lossy(&bytes));
     /// }
     /// ```
-    fn get(&self, location: &Path) -> impl Future<Output = Result<GetResult>>;
+    fn get<'a>(&self, location: &Path) -> impl Future<Output = Result<GetResult<'a>>>;
 
     /// Return the bytes that are stored at the specified location
     /// in the given byte range.
@@ -1351,7 +1351,7 @@ where
             .await
     }
 
-    async fn get(&self, location: &Path) -> Result<GetResult> {
+    async fn get<'a>(&self, location: &Path) -> Result<GetResult<'a>> {
         self.get_opts(location, GetOptions::default()).await
     }
 
@@ -1616,9 +1616,9 @@ impl GetOptions {
 
 /// Result for a get request
 #[derive(Debug)]
-pub struct GetResult {
+pub struct GetResult<'a> {
     /// The [`GetResultPayload`]
-    pub payload: GetResultPayload,
+    pub payload: GetResultPayload<'a>,
     /// The [`ObjectMeta`] for this object
     pub meta: ObjectMeta,
     /// The range of bytes returned by this request
@@ -1633,15 +1633,15 @@ pub struct GetResult {
 ///
 /// This special cases the case of a local file, as some systems may
 /// be able to optimise the case of a file already present on local disk
-pub enum GetResultPayload {
+pub enum GetResultPayload<'a> {
     /// The file, path
     #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
     File(std::fs::File, std::path::PathBuf),
     /// An opaque stream of bytes
-    Stream(BoxStream<'static, Result<Bytes>>),
+    Stream(BoxStream<'a, Result<Bytes>>),
 }
 
-impl Debug for GetResultPayload {
+impl<'a> Debug for GetResultPayload<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
@@ -1651,7 +1651,7 @@ impl Debug for GetResultPayload {
     }
 }
 
-impl GetResult {
+impl<'a> GetResult<'a> {
     /// Collects the data into a [`Bytes`]
     pub async fn bytes(self) -> Result<Bytes> {
         let len = self.range.end - self.range.start;
@@ -1685,7 +1685,7 @@ impl GetResult {
     ///
     /// If not called from a tokio context, this will perform IO on the current thread with
     /// no additional complexity or overheads
-    pub fn into_stream(self) -> BoxStream<'static, Result<Bytes>> {
+    pub fn into_stream(self) -> BoxStream<'a, Result<Bytes>> {
         match self.payload {
             #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
             GetResultPayload::File(file, path) => {
@@ -2023,9 +2023,9 @@ pub enum Error {
     #[error("Generic {} error: {}", store, source)]
     Generic {
         /// The store this error originated from
-        store: &'static str,
+        store: &'static  str,
         /// The wrapped error
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        source: Box<dyn std::error::Error + Send + Sync + 'static >,
     },
 
     /// Error when the object is not found at given location
@@ -2034,7 +2034,7 @@ pub enum Error {
         /// The path to file
         path: String,
         /// The wrapped error
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        source: Box<dyn std::error::Error + Send + Sync + 'static >,
     },
 
     /// Error for invalid path
@@ -2058,7 +2058,7 @@ pub enum Error {
     #[error("Operation not supported: {}", source)]
     NotSupported {
         /// The wrapped error
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        source: Box<dyn std::error::Error + Send + Sync + 'static >,
     },
 
     /// Error when the object already exists
@@ -2067,7 +2067,7 @@ pub enum Error {
         /// The path to the
         path: String,
         /// The wrapped error
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        source: Box<dyn std::error::Error + Send + Sync + 'static >,
     },
 
     /// Error when the required conditions failed for the operation
@@ -2076,7 +2076,7 @@ pub enum Error {
         /// The path to the file
         path: String,
         /// The wrapped error
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        source: Box<dyn std::error::Error + Send + Sync + 'static >,
     },
 
     /// Error when the object at the location isn't modified
@@ -2085,7 +2085,7 @@ pub enum Error {
         /// The path to the file
         path: String,
         /// The wrapped error
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        source: Box<dyn std::error::Error + Send + Sync + 'static >,
     },
 
     /// Error when an operation is not implemented
@@ -2112,7 +2112,7 @@ pub enum Error {
         /// The path to the file
         path: String,
         /// The wrapped error
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        source: Box<dyn std::error::Error + Send + Sync + 'static >,
     },
 
     /// Error when the used credentials lack valid authentication
@@ -2125,14 +2125,14 @@ pub enum Error {
         /// The path to the file
         path: String,
         /// The wrapped error
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        source: Box<dyn std::error::Error + Send + Sync + 'static >,
     },
 
     /// Error when a configuration key is invalid for the store used
     #[error("Configuration key: '{}' is not valid for store '{}'.", key, store)]
     UnknownConfigurationKey {
         /// The object store used
-        store: &'static str,
+        store: &'static  str,
         /// The configuration key used
         key: String,
     },
@@ -2423,7 +2423,7 @@ mod tests {
         assert_eq!(options.extensions.get::<&str>(), extensions.get::<&str>());
     }
 
-    fn takes_generic_object_store<T: ObjectStore>(store: T) {
+    fn takes_generic_object_store<'a, T: ObjectStore>(store: T) {
         // This function is just to ensure that the trait bounds are satisfied
         let _ = store;
     }

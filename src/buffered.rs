@@ -53,7 +53,7 @@ pub const DEFAULT_BUFFER_SIZE: usize = 1024 * 1024;
 ///
 /// [high first-byte latencies]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/optimizing-performance.html
 /// [`ObjectStoreExt::get`]: crate::ObjectStoreExt::get
-pub struct BufReader {
+pub struct BufReader<'a> {
     /// The object store to fetch data from
     store: Arc<dyn ObjectStore>,
     /// The size of the object
@@ -65,10 +65,10 @@ pub struct BufReader {
     /// The number of bytes to read in a single request
     capacity: usize,
     /// The buffered data if any
-    buffer: Buffer,
+    buffer: Buffer<'a>,
 }
 
-impl std::fmt::Debug for BufReader {
+impl<'a> std::fmt::Debug for BufReader<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BufReader")
             .field("path", &self.path)
@@ -78,13 +78,13 @@ impl std::fmt::Debug for BufReader {
     }
 }
 
-enum Buffer {
+enum Buffer<'a> {
     Empty,
-    Pending(BoxFuture<'static, std::io::Result<Bytes>>),
+    Pending(BoxFuture<'a, std::io::Result<Bytes>>),
     Ready(Bytes),
 }
 
-impl BufReader {
+impl<'a> BufReader<'a> {
     /// Create a new [`BufReader`] from the provided [`ObjectMeta`] and [`ObjectStore`]
     pub fn new(store: Arc<dyn ObjectStore>, meta: &ObjectMeta) -> Self {
         Self::with_capacity(store, meta, DEFAULT_BUFFER_SIZE)
@@ -134,7 +134,7 @@ impl BufReader {
     }
 }
 
-impl AsyncSeek for BufReader {
+impl<'a> AsyncSeek for BufReader<'a> {
     fn start_seek(mut self: Pin<&mut Self>, position: SeekFrom) -> std::io::Result<()> {
         self.cursor = match position {
             SeekFrom::Start(offset) => offset,
@@ -168,7 +168,7 @@ impl AsyncSeek for BufReader {
     }
 }
 
-impl AsyncRead for BufReader {
+impl<'a> AsyncRead for BufReader<'a> {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -189,7 +189,7 @@ impl AsyncRead for BufReader {
     }
 }
 
-impl AsyncBufRead for BufReader {
+impl<'a> AsyncBufRead for BufReader<'a> {
     fn poll_fill_buf(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<&[u8]>> {
         let capacity = self.capacity;
         self.get_mut().poll_fill_buf_impl(cx, capacity)
@@ -218,17 +218,17 @@ impl AsyncBufRead for BufReader {
 /// Up to `capacity` bytes will be buffered in memory, and flushed on shutdown
 /// using [`ObjectStore::put_opts`]. If `capacity` is exceeded, data will instead be
 /// streamed using [`ObjectStore::put_multipart_opts`].
-pub struct BufWriter {
+pub struct BufWriter<'a> {
     capacity: usize,
     max_concurrency: usize,
     attributes: Option<Attributes>,
     tags: Option<TagSet>,
     extensions: Option<Extensions>,
-    state: BufWriterState,
+    state: BufWriterState<'a>,
     store: Arc<dyn ObjectStore>,
 }
 
-impl std::fmt::Debug for BufWriter {
+impl<'a> std::fmt::Debug for BufWriter<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BufWriter")
             .field("capacity", &self.capacity)
@@ -236,18 +236,18 @@ impl std::fmt::Debug for BufWriter {
     }
 }
 
-enum BufWriterState {
+enum BufWriterState<'a> {
     /// Buffer up to capacity bytes
     Buffer(Path, PutPayloadMut),
     /// [`ObjectStore::put_multipart_opts`]
-    Prepare(BoxFuture<'static, crate::Result<WriteMultipart>>),
+    Prepare(BoxFuture<'a, crate::Result<WriteMultipart>>),
     /// Write to a multipart upload
     Write(Option<WriteMultipart>),
     /// [`ObjectStore::put_opts`]
-    Flush(BoxFuture<'static, crate::Result<()>>),
+    Flush(BoxFuture<'a, crate::Result<()>>),
 }
 
-impl BufWriter {
+impl<'a> BufWriter<'a> {
     /// Create a new [`BufWriter`] from the provided [`ObjectStore`] and [`Path`]
     pub fn new(store: Arc<dyn ObjectStore>, path: Path) -> Self {
         Self::with_capacity(store, path, 10 * 1024 * 1024)
@@ -372,7 +372,7 @@ impl BufWriter {
     }
 }
 
-impl AsyncWrite for BufWriter {
+impl<'a> AsyncWrite for BufWriter<'a> {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,

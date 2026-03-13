@@ -174,7 +174,7 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         }))
     }
 
-    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+    async fn get_opts<'a>(&self, location: &Path, options: GetOptions) -> Result<GetResult<'a>> {
         sleep(self.config().wait_get_per_call).await;
 
         // need to copy to avoid moving / referencing `self`
@@ -196,10 +196,10 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         self.inner.get_ranges(location, ranges).await
     }
 
-    fn delete_stream(
+    fn delete_stream<'a>(
         &self,
-        locations: BoxStream<'static, Result<Path>>,
-    ) -> BoxStream<'static, Result<Path>> {
+        locations: BoxStream<'a, Result<Path>>,
+    ) -> BoxStream<'a, Result<Path>> {
         // We wait for a certain duration before each delete location.
         // This may be suboptimal if the inner store implements batch deletes.
         // But there is no way around unnecessary waits since we do not know
@@ -209,7 +209,7 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         self.inner.delete_stream(locations)
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+    fn list<'a>(&self, prefix: Option<&Path>) -> BoxStream<'a, Result<ObjectMeta>> {
         let stream = self.inner.list(prefix);
         let config = Arc::clone(&self.config);
         futures_util::stream::once(async move {
@@ -222,11 +222,11 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         .boxed()
     }
 
-    fn list_with_offset(
+    fn list_with_offset<'a>(
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'static, Result<ObjectMeta>> {
+    ) -> BoxStream<'a, Result<ObjectMeta>> {
         let stream = self.inner.list_with_offset(prefix, offset);
         let config = Arc::clone(&self.config);
         futures_util::stream::once(async move {
@@ -270,7 +270,7 @@ fn usize_to_u32_saturate(x: usize) -> u32 {
     x.try_into().unwrap_or(u32::MAX)
 }
 
-fn throttle_get(result: GetResult, wait_get_per_byte: Duration) -> GetResult {
+fn throttle_get<'a>(result: GetResult<'a>, wait_get_per_byte: Duration) -> GetResult<'a> {
     #[allow(clippy::infallible_destructuring_match)]
     let s = match result.payload {
         GetResultPayload::Stream(s) => s,
@@ -289,12 +289,12 @@ fn throttle_get(result: GetResult, wait_get_per_byte: Duration) -> GetResult {
     }
 }
 
-fn throttle_stream<T: Send + 'static, E: Send + 'static, F>(
-    stream: BoxStream<'_, Result<T, E>>,
+fn throttle_stream<'a, T: Send + 'a, E: Send + 'a, F>(
+    stream: BoxStream<'a, Result<T, E>>,
     delay: F,
-) -> BoxStream<'_, Result<T, E>>
+) -> BoxStream<'a, Result<T, E>>
 where
-    F: Fn(&T) -> Duration + Send + Sync + 'static,
+    F: Fn(&T) -> Duration + Send + Sync + 'a,
 {
     stream
         .then(move |result| {

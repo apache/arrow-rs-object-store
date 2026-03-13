@@ -234,7 +234,7 @@ impl ObjectStore for InMemory {
         }))
     }
 
-    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+    async fn get_opts<'a>(&self, location: &Path, options: GetOptions) -> Result<GetResult<'a>> {
         let entry = self.entry(location)?;
         let e_tag = entry.e_tag.to_string();
 
@@ -294,10 +294,10 @@ impl ObjectStore for InMemory {
             .collect()
     }
 
-    fn delete_stream(
+    fn delete_stream<'a>(
         &self,
-        locations: BoxStream<'static, Result<Path>>,
-    ) -> BoxStream<'static, Result<Path>> {
+        locations: BoxStream<'a, Result<Path>>,
+    ) -> BoxStream<'a, Result<Path>> {
         let storage = Arc::clone(&self.storage);
         locations
             .map(move |location| {
@@ -308,7 +308,7 @@ impl ObjectStore for InMemory {
             .boxed()
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+    fn list<'a>(&self, prefix: Option<&Path>) -> BoxStream<'a, Result<ObjectMeta>> {
         let root = Path::default();
         let prefix = prefix.unwrap_or(&root);
 

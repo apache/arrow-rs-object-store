@@ -55,7 +55,7 @@ impl ChunkedStore {
 }
 
 impl Display for ChunkedStore {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    fn fmt(& self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "ChunkedStore({})", self.inner)
     }
 }
@@ -80,7 +80,7 @@ impl ObjectStore for ChunkedStore {
         self.inner.put_multipart_opts(location, opts).await
     }
 
-    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+    async fn get_opts<'a>(&self, location: &Path, options: GetOptions) -> Result<GetResult<'a>> {
         let r = self.inner.get_opts(location, options).await?;
         let stream = match r.payload {
             #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
@@ -139,22 +139,22 @@ impl ObjectStore for ChunkedStore {
         self.inner.get_ranges(location, ranges).await
     }
 
-    fn delete_stream(
+    fn delete_stream<'a>(
         &self,
-        locations: BoxStream<'static, Result<Path>>,
-    ) -> BoxStream<'static, Result<Path>> {
+        locations: BoxStream<'a, Result<Path>>,
+    ) -> BoxStream<'a, Result<Path>> {
         self.inner.delete_stream(locations)
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+    fn list<'a>(&self, prefix: Option<&Path>) -> BoxStream<'a, Result<ObjectMeta>> {
         self.inner.list(prefix)
     }
 
-    fn list_with_offset(
+    fn list_with_offset<'a>(
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'static, Result<ObjectMeta>> {
+    ) -> BoxStream<'a, Result<ObjectMeta>> {
         self.inner.list_with_offset(prefix, offset)
     }
 

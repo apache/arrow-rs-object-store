@@ -94,7 +94,7 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         }))
     }
 
-    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+    async fn get_opts<'a>(&self, location: &Path, options: GetOptions) -> Result<GetResult<'a>> {
         let permit = Arc::clone(&self.semaphore).acquire_owned().await.unwrap();
         let r = self.inner.get_opts(location, options).await?;
         Ok(permit_get_result(r, permit))
@@ -105,10 +105,10 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         self.inner.get_ranges(location, ranges).await
     }
 
-    fn delete_stream(
+    fn delete_stream<'a>(
         &self,
-        locations: BoxStream<'static, Result<Path>>,
-    ) -> BoxStream<'static, Result<Path>> {
+        locations: BoxStream<'a, Result<Path>>,
+    ) -> BoxStream<'a, Result<Path>> {
         let inner = Arc::clone(&self.inner);
         let fut = Arc::clone(&self.semaphore)
             .acquire_owned()
@@ -119,7 +119,7 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         fut.into_stream().flatten().boxed()
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+    fn list<'a>(&self, prefix: Option<&Path>) -> BoxStream<'a, Result<ObjectMeta>> {
         let prefix = prefix.cloned();
         let inner = Arc::clone(&self.inner);
         let fut = Arc::clone(&self.semaphore)
@@ -131,11 +131,11 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
         fut.into_stream().flatten().boxed()
     }
 
-    fn list_with_offset(
+    fn list_with_offset<'a>(
         &self,
         prefix: Option<&Path>,
         offset: &Path,
-    ) -> BoxStream<'static, Result<ObjectMeta>> {
+    ) -> BoxStream<'a, Result<ObjectMeta>> {
         let prefix = prefix.cloned();
         let offset = offset.clone();
         let inner = Arc::clone(&self.inner);
