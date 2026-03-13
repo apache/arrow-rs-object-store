@@ -550,8 +550,8 @@ pub mod delimited;
 pub mod gcp;
 #[cfg(feature = "http")]
 pub mod http;
-#[cfg(feature = "tokio")]
-pub mod limit;
+// #[cfg(feature = "tokio")]
+// pub mod limit;
 #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 pub mod local;
 pub mod memory;
@@ -1016,11 +1016,11 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug {
     /// #         todo!()
     /// #     }
     /// #
-    /// #     async fn get_opts(&self, _: &Path, _: GetOptions) -> Result<GetResult> {
+    /// #     async fn get_opts<'a>(&self, _: &Path, _: GetOptions) -> Result<GetResult<'a>> {
     /// #         todo!()
     /// #     }
     /// #
-    /// fn delete_stream(
+    /// fn delete_stream<'a>(
     ///     &self,
     ///     locations: BoxStream<'a, Result<Path>>,
     /// ) -> BoxStream<'a, Result<Path>> {
@@ -1038,7 +1038,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug {
     ///         .boxed()
     /// }
     /// #
-    /// #     fn list(&self, _: Option<&Path>) -> BoxStream<'a, Result<ObjectMeta>> {
+    /// #     fn list<'a>(&self, _: Option<&Path>) -> BoxStream<'a, Result<ObjectMeta>> {
     /// #         todo!()
     /// #     }
     /// #

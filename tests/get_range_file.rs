@@ -54,18 +54,18 @@ impl ObjectStore for MyStore {
         todo!()
     }
 
-    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+    async fn get_opts<'a>(&self, location: &Path, options: GetOptions) -> Result<GetResult<'a>> {
         self.0.get_opts(location, options).await
     }
 
-    fn delete_stream(
+    fn delete_stream<'a>(
         &self,
-        _: BoxStream<'static, Result<Path>>,
-    ) -> BoxStream<'static, Result<Path>> {
+        _: BoxStream<'a, Result<Path>>,
+    ) -> BoxStream<'a, Result<Path>> {
         todo!()
     }
 
-    fn list(&self, _: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
+    fn list<'a>(&self, _: Option<&Path>) -> BoxStream<'a, Result<ObjectMeta>> {
         todo!()
     }
 

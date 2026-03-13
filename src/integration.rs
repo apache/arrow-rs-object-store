@@ -584,7 +584,7 @@ pub async fn get_opts(storage: &dyn ObjectStore) {
 }
 
 /// Tests conditional writes
-pub async fn put_opts(storage: &dyn ObjectStore, supports_update: bool) {
+pub async fn put_opts(storage: &DynObjectStore, supports_update: bool) {
     delete_fixtures(storage).await;
     let path = Path::from("put_opts");
     let v1 = storage
@@ -1177,7 +1177,7 @@ pub async fn multipart_out_of_order(storage: &dyn ObjectStore) {
 }
 
 /// Tests [`PaginatedListStore`]
-pub async fn list_paginated(storage: &dyn ObjectStore, list: &dyn PaginatedListStore) {
+pub async fn list_paginated(storage: &DynObjectStore, list: &dyn PaginatedListStore) {
     delete_fixtures(storage).await;
 
     let r = list.list_paginated(None, Default::default()).await.unwrap();
