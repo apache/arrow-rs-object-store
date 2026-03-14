@@ -59,12 +59,12 @@ pub(crate) trait GetClient: Send + Sync + 'static {
 /// Extension trait for [`GetClient`] that adds common retrieval functionality
 #[async_trait]
 pub(crate) trait GetClientExt {
-    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult>;
+    async fn get_opts<'a>(&self, location: &Path, options: GetOptions) -> Result<GetResult<'a>>;
 }
 
 #[async_trait]
 impl<T: GetClient> GetClientExt for Arc<T> {
-    async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
+    async fn get_opts<'a>(&self, location: &Path, options: GetOptions) -> Result<GetResult<'a>> {
         let ctx = GetContext {
             location: location.clone(),
             options,
@@ -165,7 +165,7 @@ struct GetContext<T: GetClient> {
 }
 
 impl<T: GetClient> GetContext<T> {
-    async fn get_result(mut self) -> Result<GetResult> {
+    async fn get_result<'a>(mut self) -> Result<GetResult<'a>> {
         if let Some(r) = &self.options.range {
             r.is_valid().map_err(Self::err)?;
         }
