@@ -24,7 +24,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures_util::{FutureExt, Stream, TryStreamExt};
+use futures_util::{FutureExt, Stream};
 use std::ops::Range;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -36,34 +36,35 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 /// considered a single operation, even if it may result in more than one network call
 ///
 /// ```
+/// # use std::sync::Arc;
 /// # use object_store::memory::InMemory;
 /// # use object_store::limit::LimitStore;
 ///
 /// // Create an in-memory `ObjectStore` limited to 20 concurrent requests
-/// let store = LimitStore::new(InMemory::new(), 20);
+/// let store = LimitStore::new(Arc::new(InMemory::new()), 20);
 /// ```
 ///
 #[derive(Debug)]
-pub struct LimitStore<T: ObjectStore> {
-    inner: Arc<T>,
+pub struct LimitStore {
+    inner: Arc<dyn ObjectStore>,
     max_requests: usize,
     semaphore: Arc<Semaphore>,
 }
 
-impl<T: ObjectStore> LimitStore<T> {
+impl LimitStore {
     /// Create new limit store that will limit the maximum
     /// number of outstanding concurrent requests to
     /// `max_requests`
-    pub fn new(inner: T, max_requests: usize) -> Self {
+    pub fn new(inner: Arc<dyn ObjectStore>, max_requests: usize) -> Self {
         Self {
-            inner: Arc::new(inner),
+            inner,
             max_requests,
             semaphore: Arc::new(Semaphore::new(max_requests)),
         }
     }
 }
 
-impl<T: ObjectStore> std::fmt::Display for LimitStore<T> {
+impl std::fmt::Display for LimitStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "LimitStore({}, {})", self.max_requests, self.inner)
     }
@@ -71,7 +72,7 @@ impl<T: ObjectStore> std::fmt::Display for LimitStore<T> {
 
 #[async_trait]
 #[deny(clippy::missing_trait_methods)]
-impl<T: ObjectStore> ObjectStore for LimitStore<T> {
+impl ObjectStore for LimitStore {
     async fn put_opts(
         &self,
         location: &Path,
@@ -164,7 +165,7 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
     }
 }
 
-fn permit_get_result(r: GetResult, permit: OwnedSemaphorePermit) -> GetResult {
+fn permit_get_result<'a>(r: GetResult<'a>, permit: OwnedSemaphorePermit) -> GetResult<'a> {
     let payload = match r.payload {
         #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
         v @ GetResultPayload::File(_, _) => v,
@@ -247,14 +248,15 @@ mod tests {
     use crate::memory::InMemory;
     use futures_util::stream::StreamExt;
     use std::pin::Pin;
+    use std::sync::Arc;
     use std::time::Duration;
     use tokio::time::timeout;
 
     #[tokio::test]
     async fn limit_test() {
         let max_requests = 10;
-        let memory = InMemory::new();
-        let integration = LimitStore::new(memory, max_requests);
+        let memory = Arc::new(InMemory::new());
+        let integration = LimitStore::new(memory.clone(), max_requests);
 
         put_get_delete_list(&integration).await;
         get_opts(&integration).await;

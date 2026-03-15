@@ -550,9 +550,8 @@ pub mod delimited;
 pub mod gcp;
 #[cfg(feature = "http")]
 pub mod http;
-// todo!: lifetime issue
-// #[cfg(feature = "tokio")]
-// pub mod limit;
+#[cfg(feature = "tokio")]
+pub mod limit;
 #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 pub mod local;
 pub mod memory;
