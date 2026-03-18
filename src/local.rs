@@ -526,7 +526,7 @@ impl ObjectStore for LocalFileSystem {
                     drop(parts);
 
                     if is_directory {
-                        common_prefixes.insert(prefix.child(common_prefix));
+                        common_prefixes.insert(prefix.clone().join(common_prefix));
                     } else if let Some(metadata) = convert_entry(entry, entry_location)? {
                         objects.push(metadata);
                     }
@@ -1599,7 +1599,7 @@ mod tests {
         let integration = LocalFileSystem::new_with_prefix(root.clone()).unwrap();
 
         let directory = Path::from("directory");
-        let object = directory.child("child.txt");
+        let object = directory.clone().join("child.txt");
         let data = Bytes::from("arbitrary");
         integration.put(&object, data.clone().into()).await.unwrap();
         integration.head(&object).await.unwrap();

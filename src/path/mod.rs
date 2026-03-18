@@ -611,7 +611,7 @@ mod tests {
         );
 
         // a longer prefix doesn't match
-        let needle = haystack.child("longer now");
+        let needle = haystack.clone().join("longer now");
         assert!(
             !haystack.prefix_matches(&needle),
             "{haystack:?} shouldn't have started with {needle:?}"
@@ -625,7 +625,7 @@ mod tests {
         );
 
         // two dir prefix matches
-        let needle = needle.child("baz%2Ftest");
+        let needle = needle.join("baz%2Ftest");
         assert!(
             haystack.prefix_matches(&needle),
             "{haystack:?} should have started with {needle:?}"

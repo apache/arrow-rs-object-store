@@ -558,7 +558,7 @@ mod tests {
 
         // create new entries
         for i in 0..n_entries {
-            let path = prefix.child(i.to_string().as_str());
+            let path = prefix.clone().join(i.to_string().as_str());
             store.put(&path, "bar".into()).await.unwrap();
         }
 
