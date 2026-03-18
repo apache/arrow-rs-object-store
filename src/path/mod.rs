@@ -360,10 +360,23 @@ impl Path {
     }
 
     /// Creates a new child of this [`Path`]
+    #[deprecated = "use .join() or .clone().join() instead"]
     pub fn child<'a>(&self, child: impl Into<PathPart<'a>>) -> Self {
-        let raw = match self.raw.is_empty() {
-            true => format!("{}", child.into().raw),
-            false => format!("{}{}{}", self.raw, DELIMITER, child.into().raw),
+        self.clone().join(child)
+    }
+
+    /// Appends a single path segment to this [`Path`]
+    pub fn join<'a>(self, child: impl Into<PathPart<'a>>) -> Self {
+        let child_cow_str = child.into().raw;
+
+        let raw = if self.raw.is_empty() {
+            child_cow_str.to_string()
+        } else {
+            use std::fmt::Write;
+
+            let mut raw = self.raw;
+            write!(raw, "{DELIMITER}{child_cow_str}").expect("failed to append to string");
+            raw
         };
 
         Self { raw }
