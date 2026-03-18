@@ -680,10 +680,11 @@ impl AmazonS3Builder {
             }
             AmazonS3ConfigKey::RequestPayer => {
                 // Support the standard AWS value "requester" as a boolean true
+                let value: String = value.into();
                 if value.eq_ignore_ascii_case("requester") {
                     self.request_payer = ConfigValue::Parsed(true);
                 } else {
-                    self.request_payer = ConfigValue::Deferred(value.into());
+                    self.request_payer = ConfigValue::Deferred(value);
                 }
             }
             AmazonS3ConfigKey::Encryption(key) => match key {
