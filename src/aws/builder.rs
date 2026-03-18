@@ -574,7 +574,7 @@ impl AmazonS3Builder {
     /// * `AWS_CONTAINER_CREDENTIALS_FULL_URI` -> <https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html>
     /// * `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE` -> <https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html>
     /// * `AWS_ALLOW_HTTP` -> set to "true" to permit HTTP connections without TLS
-    /// * `AWS_REQUEST_PAYER` -> set to "true" to permit operations on requester-pays buckets.
+    /// * `AWS_REQUEST_PAYER` -> set to "requester" or "true" to permit operations on requester-pays buckets.
     ///
     /// # Example
     /// ```
@@ -679,7 +679,12 @@ impl AmazonS3Builder {
                 self.conditional_put = ConfigValue::Deferred(value.into())
             }
             AmazonS3ConfigKey::RequestPayer => {
-                self.request_payer = ConfigValue::Deferred(value.into())
+                // Support the standard AWS value "requester" as a boolean true
+                if value.eq_ignore_ascii_case("requester") {
+                    self.request_payer = ConfigValue::Parsed(true);
+                } else {
+                    self.request_payer = ConfigValue::Deferred(value.into());
+                }
             }
             AmazonS3ConfigKey::Encryption(key) => match key {
                 S3EncryptionConfigKey::ServerSideEncryption => {
@@ -1780,6 +1785,46 @@ mod tests {
             err,
             "Generic Config error: \"md5\" is not a valid checksum algorithm"
         );
+
+        let err = AmazonS3Builder::new()
+            .with_config(AmazonS3ConfigKey::RequestPayer, "requestr")
+            .with_bucket_name("bucket")
+            .with_region("region")
+            .build()
+            .unwrap_err()
+            .to_string();
+
+        assert_eq!(
+            err,
+            "Generic Config error: failed to parse \"requestr\" as boolean"
+        );
+    }
+
+    #[test]
+    fn test_request_payer_config() {
+        let s3 = AmazonS3Builder::new()
+            .with_config(AmazonS3ConfigKey::RequestPayer, "requester")
+            .with_bucket_name("bucket")
+            .with_region("region")
+            .build()
+            .unwrap();
+        assert!(s3.client.config.request_payer);
+
+        let s3 = AmazonS3Builder::new()
+            .with_config(AmazonS3ConfigKey::RequestPayer, "true")
+            .with_bucket_name("bucket")
+            .with_region("region")
+            .build()
+            .unwrap();
+        assert!(s3.client.config.request_payer);
+
+        let s3 = AmazonS3Builder::new()
+            .with_request_payer(true)
+            .with_bucket_name("bucket")
+            .with_region("region")
+            .build()
+            .unwrap();
+        assert!(s3.client.config.request_payer);
     }
 
     #[test]
