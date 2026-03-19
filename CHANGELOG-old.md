@@ -19,6 +19,16 @@
 
 # Historical Changelog
 
+## [v0.13.1](https://github.com/apache/arrow-rs-object-store/tree/v0.13.1) (2026-01-08)
+
+[Full Changelog](https://github.com/apache/arrow-rs-object-store/compare/v0.13.0...v0.13.1)
+
+**Merged pull requests:**
+
+- fix: clippy warning `SO_LINGER` w/ zero doesn't block \(also: it's just a test\) [\#592](https://github.com/apache/arrow-rs-object-store/pull/592) ([crepererum](https://github.com/crepererum))
+- fix: `docs.rs` build failure [\#591](https://github.com/apache/arrow-rs-object-store/pull/591) ([crepererum](https://github.com/crepererum))
+
+
 
 ## [v0.13.0](https://github.com/apache/arrow-rs-object-store/tree/v0.13.0) (2025-12-19)
 
@@ -106,6 +116,21 @@
 - minor: Fix MSRV CI workflow [\#502](https://github.com/apache/arrow-rs-object-store/pull/502) ([kylebarron](https://github.com/kylebarron))
 - Allow more settings without vendor prefix [\#500](https://github.com/apache/arrow-rs-object-store/pull/500) ([jonashaag](https://github.com/jonashaag))
 - Add Content\_length header to S3 create\_multipart [\#496](https://github.com/apache/arrow-rs-object-store/pull/496) ([dreamtalen](https://github.com/dreamtalen))
+
+
+
+## [v0.12.5](https://github.com/apache/arrow-rs-object-store/tree/v0.12.5) (2026-01-09)
+
+[Full Changelog](https://github.com/apache/arrow-rs-object-store/compare/v0.12.4...v0.12.5)
+
+**Fixed bugs:**
+
+- Only read file metadata once in `LocalFileSystem::get_ranges` [\#596](https://github.com/apache/arrow-rs-object-store/pull/596) ([AdamGS](https://github.com/AdamGS))
+- fix: `docs.rs` build failure [\#600](https://github.com/apache/arrow-rs-object-store/pull/600) ([alamb](https://github.com/alamb))
+
+**Merged pull requests:**
+
+- Get the 0.12 release branch to green CI [\#597](https://github.com/apache/arrow-rs-object-store/pull/597) ([AdamGS](https://github.com/AdamGS))
 
 
 
