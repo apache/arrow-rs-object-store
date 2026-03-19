@@ -53,6 +53,17 @@ The CHANGELOG is created automatically using
 This script creates a changelog using github issues and the
 labels associated with them.
 
+## Get GitHub Token
+The changelog generator needs a GitHub token. Go to <https://github.com/settings/personal-access-tokens>, and fill
+in the following details:
+
+- **Token name:** pick something
+- **Resource owner:** yourself
+- **Repository access:** public repositories
+- **Permissions:** None
+
+Hit "generate token" and save that token. You'll only see it once!
+
 ## Prepare CHANGELOG and version:
 
 Now prepare a PR to update `CHANGELOG.md` and versions on `main` to reflect the planned release.
