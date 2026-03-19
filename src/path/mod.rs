@@ -360,10 +360,23 @@ impl Path {
     }
 
     /// Creates a new child of this [`Path`]
+    #[deprecated = "use .join() or .clone().join() instead"]
     pub fn child<'a>(&self, child: impl Into<PathPart<'a>>) -> Self {
-        let raw = match self.raw.is_empty() {
-            true => format!("{}", child.into().raw),
-            false => format!("{}{}{}", self.raw, DELIMITER, child.into().raw),
+        self.clone().join(child)
+    }
+
+    /// Appends a single path segment to this [`Path`]
+    pub fn join<'a>(self, child: impl Into<PathPart<'a>>) -> Self {
+        let child_cow_str = child.into().raw;
+
+        let raw = if self.raw.is_empty() {
+            child_cow_str.to_string()
+        } else {
+            use std::fmt::Write;
+
+            let mut raw = self.raw;
+            write!(raw, "{DELIMITER}{child_cow_str}").expect("failed to append to string");
+            raw
         };
 
         Self { raw }
@@ -598,7 +611,7 @@ mod tests {
         );
 
         // a longer prefix doesn't match
-        let needle = haystack.child("longer now");
+        let needle = haystack.clone().join("longer now");
         assert!(
             !haystack.prefix_matches(&needle),
             "{haystack:?} shouldn't have started with {needle:?}"
@@ -612,7 +625,7 @@ mod tests {
         );
 
         // two dir prefix matches
-        let needle = needle.child("baz%2Ftest");
+        let needle = needle.join("baz%2Ftest");
         assert!(
             haystack.prefix_matches(&needle),
             "{haystack:?} should have started with {needle:?}"

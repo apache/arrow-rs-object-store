@@ -283,7 +283,7 @@ pub async fn put_get_delete_list(storage: &DynObjectStore) {
 
     // "HELLO" percent encoded
     let hello_prefix = Path::parse("%48%45%4C%4C%4F").unwrap();
-    let path = hello_prefix.child("foo.parquet");
+    let path = hello_prefix.clone().join("foo.parquet");
 
     storage.put(&path, vec![0, 1].into()).await.unwrap();
     let files = flatten_list_stream(storage, Some(&hello_prefix))

@@ -367,7 +367,7 @@ impl ObjectStore for InMemory {
             };
 
             if parts.next().is_some() {
-                common_prefixes.insert(prefix.child(common_prefix));
+                common_prefixes.insert(prefix.clone().join(common_prefix));
             } else {
                 let object = ObjectMeta {
                     location: k.clone(),
