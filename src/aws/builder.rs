@@ -1261,7 +1261,10 @@ impl AmazonS3Builder {
 ///
 /// <https://docs.aws.amazon.com/AmazonS3/latest/userguide/directory-bucket-naming-rules.html>
 fn parse_bucket_az(bucket: &str) -> Option<&str> {
-    Some(bucket.strip_suffix("--x-s3")?.rsplit_once("--")?.1)
+    let base = bucket
+        .strip_suffix("--x-s3")
+        .or_else(|| bucket.strip_suffix("--xa-s3"))?;
+    Some(base.rsplit_once("--")?.1)
 }
 
 /// Encryption configuration options for S3.
@@ -1787,8 +1790,11 @@ mod tests {
         let cases = [
             ("bucket-base-name--usw2-az1--x-s3", Some("usw2-az1")),
             ("bucket-base--name--azid--x-s3", Some("azid")),
+            ("bucket-base-name--use1-az4--xa-s3", Some("use1-az4")),
+            ("bucket-base--name--azid--xa-s3", Some("azid")),
             ("bucket-base-name", None),
             ("bucket-base-name--x-s3", None),
+            ("bucket-base-name--xa-s3", None),
         ];
 
         for (bucket, expected) in cases {
