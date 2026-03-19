@@ -117,7 +117,16 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let full_path = self.full_path(location);
-        self.inner.get_opts(&full_path, options).await
+        let slf_prefix = self.prefix.clone();
+        self.inner
+            .get_opts(&full_path, options)
+            .await
+            .map(move |opts| GetResult {
+                payload: opts.payload,
+                range: opts.range,
+                attributes: opts.attributes,
+                meta: strip_meta(&slf_prefix, opts.meta),
+            })
     }
 
     async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
