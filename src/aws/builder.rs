@@ -188,7 +188,7 @@ pub struct AmazonS3Builder {
     /// base64-encoded 256-bit customer encryption key for SSE-C.
     encryption_customer_key_base64: Option<String>,
     /// When set to true, charge requester for bucket operations
-    request_payer: ConfigValue<bool>,
+    request_payer: ConfigValue<RequesterPayer>,
     /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
 }
@@ -678,15 +678,7 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::ConditionalPut => {
                 self.conditional_put = ConfigValue::Deferred(value.into())
             }
-            AmazonS3ConfigKey::RequestPayer => {
-                // Support the standard AWS value "requester" as a boolean true
-                let value: String = value.into();
-                if value.eq_ignore_ascii_case("requester") {
-                    self.request_payer = ConfigValue::Parsed(true);
-                } else {
-                    self.request_payer = ConfigValue::Deferred(value);
-                }
-            }
+            AmazonS3ConfigKey::RequestPayer => self.request_payer.parse(value),
             AmazonS3ConfigKey::Encryption(key) => match key {
                 S3EncryptionConfigKey::ServerSideEncryption => {
                     self.encryption_type = Some(ConfigValue::Deferred(value.into()))
@@ -1067,7 +1059,7 @@ impl AmazonS3Builder {
     ///
     /// <https://docs.aws.amazon.com/AmazonS3/latest/userguide/RequesterPaysBuckets.html>
     pub fn with_request_payer(mut self, enabled: bool) -> Self {
-        self.request_payer = ConfigValue::Parsed(enabled);
+        self.request_payer = ConfigValue::Parsed(enabled.into());
         self
     }
 
@@ -1253,7 +1245,7 @@ impl AmazonS3Builder {
             copy_if_not_exists,
             conditional_put: self.conditional_put.get()?,
             encryption_headers,
-            request_payer: self.request_payer.get()?,
+            request_payer: self.request_payer.get()?.into(),
         };
 
         let http_client = http.connect(&config.client_options)?;
@@ -1268,6 +1260,37 @@ impl AmazonS3Builder {
 /// <https://docs.aws.amazon.com/AmazonS3/latest/userguide/directory-bucket-naming-rules.html>
 fn parse_bucket_az(bucket: &str) -> Option<&str> {
     Some(bucket.strip_suffix("--x-s3")?.rsplit_once("--")?.1)
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+struct RequesterPayer(bool);
+
+impl crate::config::Parse for RequesterPayer {
+    fn parse(v: &str) -> Result<Self> {
+        if v.eq_ignore_ascii_case("requester") {
+            Ok(Self(true))
+        } else {
+            Ok(Self(<bool as crate::config::Parse>::parse(v)?))
+        }
+    }
+}
+
+impl From<bool> for RequesterPayer {
+    fn from(value: bool) -> Self {
+        Self(value)
+    }
+}
+
+impl From<RequesterPayer> for bool {
+    fn from(value: RequesterPayer) -> Self {
+        value.0
+    }
+}
+
+impl std::fmt::Display for RequesterPayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
 }
 
 /// Encryption configuration options for S3.
@@ -1818,6 +1841,14 @@ mod tests {
             .build()
             .unwrap();
         assert!(s3.client.config.request_payer);
+
+        let s3 = AmazonS3Builder::new()
+            .with_config(AmazonS3ConfigKey::RequestPayer, "false")
+            .with_bucket_name("bucket")
+            .with_region("region")
+            .build()
+            .unwrap();
+        assert!(!s3.client.config.request_payer);
 
         let s3 = AmazonS3Builder::new()
             .with_request_payer(true)
