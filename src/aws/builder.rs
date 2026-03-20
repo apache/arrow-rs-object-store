@@ -1262,6 +1262,9 @@ fn parse_bucket_az(bucket: &str) -> Option<&str> {
     Some(bucket.strip_suffix("--x-s3")?.rsplit_once("--")?.1)
 }
 
+/// Captures `AWS_REQUEST_PAYER`.
+///
+/// Parses either as `"requester"` (case-insensitive) meaning `true`, or as a [`bool`] (i.e. `"true"`, `"1"`, `"no"`, etc.).
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
 struct RequesterPayer(bool);
 
@@ -1828,6 +1831,14 @@ mod tests {
     fn test_request_payer_config() {
         let s3 = AmazonS3Builder::new()
             .with_config(AmazonS3ConfigKey::RequestPayer, "requester")
+            .with_bucket_name("bucket")
+            .with_region("region")
+            .build()
+            .unwrap();
+        assert!(s3.client.config.request_payer);
+
+        let s3 = AmazonS3Builder::new()
+            .with_config(AmazonS3ConfigKey::RequestPayer, "REQUESTER")
             .with_bucket_name("bucket")
             .with_region("region")
             .build()
