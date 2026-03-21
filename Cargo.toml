@@ -47,6 +47,7 @@ walkdir = { version = "2", optional = true }
 
 # Cloud storage support
 base64 = { version = "0.22", default-features = false, features = ["std"], optional = true }
+crc-fast = { version = "1.6" , optional = true }
 form_urlencoded = { version = "1.2", optional = true }
 http-body-util = { version = "0.1.2", optional = true }
 httparse = { version = "1.8.0", default-features = false, features = ["std"], optional = true }
@@ -79,7 +80,7 @@ cloud = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/stream
 azure = ["cloud", "httparse"]
 fs = ["walkdir", "tokio"]
 gcp = ["cloud", "rustls-pki-types"]
-aws = ["cloud", "md-5"]
+aws = ["cloud", "crc-fast", "md-5"]
 http = ["cloud"]
 tls-webpki-roots = ["reqwest?/rustls-tls-webpki-roots"]
 integration = ["rand", "tokio"]
