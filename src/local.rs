@@ -137,6 +137,37 @@ impl From<Error> for super::Error {
     }
 }
 
+/// Explicitly close a file, checking for errors that would be silently ignored by Rust's `File::drop()`.
+///
+/// On network filesystems (e.g. NFS), `close()` can fail and indicate data loss.
+fn close_file(file: File) -> std::result::Result<(), io::Error> {
+    #[cfg(target_family = "unix")]
+    {
+        use std::os::unix::io::IntoRawFd;
+        let fd = file.into_raw_fd();
+        // SAFETY: `fd` is a valid, owned file descriptor obtained from `into_raw_fd()`.
+        match unsafe { libc::close(fd) } {
+            0 => Ok(()),
+            _ => Err(io::Error::last_os_error()),
+        }
+    }
+    #[cfg(target_family = "windows")]
+    {
+        use std::os::windows::io::IntoRawHandle;
+        let handle = file.into_raw_handle();
+        // SAFETY: `handle` is a valid, owned handle obtained from `into_raw_handle()`.
+        match unsafe { windows_sys::Win32::Foundation::CloseHandle(handle as _) } {
+            0 => Err(io::Error::last_os_error()),
+            _ => Ok(()),
+        }
+    }
+    #[cfg(not(any(target_family = "unix", target_family = "windows")))]
+    {
+        drop(file);
+        Ok(())
+    }
+}
+
 /// Local filesystem storage providing an [`ObjectStore`] interface to files on
 /// local disk. Can optionally be created with a directory prefix
 ///
@@ -359,16 +390,17 @@ impl ObjectStore for LocalFileSystem {
                         path: path.to_string_lossy().to_string(),
                     })?;
                     e_tag = Some(get_etag(&metadata));
+                    // Explicitly close the file, checking for errors that would be silently ignored by drop.
+                    // On network filesystems (e.g. NFS), close can fail and indicate data loss.
+                    //
+                    // This also ensures the file is closed before rename, which is required by some FUSE
+                    // filesystems (e.g. Blobfuse) to trigger the upload operation.
+                    close_file(file).map_err(|source| Error::UnableToCopyDataToFile { source })?;
                     match opts.mode {
-                        PutMode::Overwrite => {
-                            // For some fuse types of file systems, the file must be closed first
-                            // to trigger the upload operation, and then renamed, such as Blobfuse
-                            std::mem::drop(file);
-                            match std::fs::rename(&staging_path, &path) {
-                                Ok(_) => None,
-                                Err(source) => Some(Error::UnableToRenameFile { source }),
-                            }
-                        }
+                        PutMode::Overwrite => match std::fs::rename(&staging_path, &path) {
+                            Ok(_) => None,
+                            Err(source) => Some(Error::UnableToRenameFile { source }),
+                        },
                         PutMode::Create => match std::fs::hard_link(&staging_path, &path) {
                             Ok(_) => {
                                 let _ = std::fs::remove_file(&staging_path); // Attempt to cleanup
@@ -840,7 +872,7 @@ struct LocalUpload {
 #[derive(Debug)]
 struct UploadState {
     dest: PathBuf,
-    file: Mutex<File>,
+    file: Mutex<Option<File>>,
 }
 
 impl LocalUpload {
@@ -848,7 +880,7 @@ impl LocalUpload {
         Self {
             state: Arc::new(UploadState {
                 dest,
-                file: Mutex::new(file),
+                file: Mutex::new(Some(file)),
             }),
             src: Some(src),
             offset: 0,
@@ -864,7 +896,8 @@ impl MultipartUpload for LocalUpload {
 
         let s = Arc::clone(&self.state);
         maybe_spawn_blocking(move || {
-            let mut file = s.file.lock();
+            let mut guard = s.file.lock();
+            let file = guard.as_mut().ok_or(Error::Aborted)?;
             file.seek(SeekFrom::Start(offset)).map_err(|source| {
                 let path = s.dest.clone();
                 Error::Seek { source, path }
@@ -884,13 +917,23 @@ impl MultipartUpload for LocalUpload {
         let s = Arc::clone(&self.state);
         maybe_spawn_blocking(move || {
             // Ensure no inflight writes
-            let file = s.file.lock();
-            std::fs::rename(&src, &s.dest)
-                .map_err(|source| Error::UnableToRenameFile { source })?;
+            let mut guard = s.file.lock();
+            let file = guard.take().ok_or(Error::Aborted)?;
+
             let metadata = file.metadata().map_err(|e| Error::Metadata {
                 source: e.into(),
                 path: src.to_string_lossy().to_string(),
             })?;
+
+            // Explicitly close the file, checking for errors that would be silently ignored by drop.
+            // On network filesystems (e.g. NFS), close can fail and indicate data loss.
+            //
+            // This also ensures the file is closed before rename, which is required by some FUSE
+            // filesystems (e.g. Blobfuse) to trigger the upload operation.
+            close_file(file).map_err(|source| Error::UnableToCopyDataToFile { source })?;
+
+            std::fs::rename(&src, &s.dest)
+                .map_err(|source| Error::UnableToRenameFile { source })?;
 
             Ok(PutResult {
                 e_tag: Some(get_etag(&metadata)),
@@ -1912,5 +1955,17 @@ mod unix_test {
         integration.get(&location).await.unwrap();
 
         spawned.await.unwrap();
+    }
+
+    #[test]
+    fn test_close_file_detects_error() {
+        use std::os::unix::io::AsRawFd;
+
+        let file = tempfile::tempfile().unwrap();
+        let fd = file.as_raw_fd();
+        // Close the fd behind Rust's back so close_file will get EBADF
+        assert_eq!(unsafe { libc::close(fd) }, 0);
+        let err = super::close_file(file).unwrap_err();
+        assert_eq!(err.raw_os_error(), Some(libc::EBADF));
     }
 }
