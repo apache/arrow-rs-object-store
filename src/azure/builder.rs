@@ -21,9 +21,12 @@ use crate::azure::credential::{
     ImdsManagedIdentityProvider, WorkloadIdentityOAuthProvider,
 };
 use crate::azure::{AzureCredential, AzureCredentialProvider, MicrosoftAzure, STORE};
+use crate::builder::FromUrlBuilder;
 use crate::client::{HttpConnector, TokenCredentialProvider, http_connector};
 use crate::config::ConfigValue;
-use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
+use crate::{
+    ClientConfigKey, ClientOptions, ObjectStore, Result, RetryConfig, StaticCredentialProvider,
+};
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -1055,6 +1058,30 @@ impl MicrosoftAzureBuilder {
         let client = Arc::new(AzureClient::new(config, http_client));
 
         Ok(MicrosoftAzure { client })
+    }
+}
+
+impl FromUrlBuilder for MicrosoftAzureBuilder {
+    type ConfigKey = AzureConfigKey;
+
+    fn builder_new() -> Self {
+        Self::new()
+    }
+
+    fn builder_with_url(self, url: Url) -> Self {
+        self.with_url(url)
+    }
+
+    fn builder_with_config(self, key: &str, value: String) -> Self {
+        if let Ok(key) = key.parse() {
+            self.with_config(key, value)
+        } else {
+            self
+        }
+    }
+
+    fn builder_build(self) -> Result<Box<dyn ObjectStore>> {
+        Ok(Box::new(self.build()?) as _)
     }
 }
 

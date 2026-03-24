@@ -563,6 +563,7 @@ pub mod signer;
 #[cfg(feature = "tokio")]
 pub mod throttle;
 
+mod builder;
 #[cfg(feature = "cloud")]
 pub mod client;
 

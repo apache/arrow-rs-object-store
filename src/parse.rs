@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::ObjectStore;
+use crate::builder::FromUrlBuilder;
 #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 use crate::local::LocalFileSystem;
 use crate::memory::InMemory;
@@ -139,20 +140,6 @@ impl ObjectStoreScheme {
     }
 }
 
-#[cfg(feature = "cloud")]
-macro_rules! builder_opts {
-    ($builder:ty, $url:expr, $options:expr) => {{
-        let builder = $options.into_iter().fold(
-            <$builder>::new().with_url($url.to_string()),
-            |builder, (key, value)| match key.as_ref().to_ascii_lowercase().parse() {
-                Ok(k) => builder.with_config(k, value),
-                Err(_) => builder,
-            },
-        );
-        Box::new(builder.build()?) as _
-    }};
-}
-
 /// Create an [`ObjectStore`] based on the provided `url`
 ///
 /// Returns
@@ -195,7 +182,6 @@ where
 {
     let _options = options;
     let (scheme, path) = ObjectStoreScheme::parse(url)?;
-    let path = Path::parse(path)?;
 
     let store = match scheme {
         #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
@@ -203,20 +189,22 @@ where
         ObjectStoreScheme::Memory => Box::new(InMemory::new()) as _,
         #[cfg(feature = "aws")]
         ObjectStoreScheme::AmazonS3 => {
-            builder_opts!(crate::aws::AmazonS3Builder, url, _options)
+            crate::aws::AmazonS3Builder::build_from_url_and_options(url, _options)?
         }
         #[cfg(feature = "gcp")]
         ObjectStoreScheme::GoogleCloudStorage => {
-            builder_opts!(crate::gcp::GoogleCloudStorageBuilder, url, _options)
+            crate::gcp::GoogleCloudStorageBuilder::build_from_url_and_options(url, _options)?
         }
         #[cfg(feature = "azure")]
         ObjectStoreScheme::MicrosoftAzure => {
-            builder_opts!(crate::azure::MicrosoftAzureBuilder, url, _options)
+            crate::azure::MicrosoftAzureBuilder::build_from_url_and_options(url, _options)?
         }
         #[cfg(feature = "http")]
         ObjectStoreScheme::Http => {
-            let url = &url[..url::Position::BeforePath];
-            builder_opts!(crate::http::HttpBuilder, url, _options)
+            let url: Url = url[..url::Position::BeforePath]
+                .parse()
+                .expect("URL with empty path and no query or fragment must still be a valid URL");
+            crate::http::HttpBuilder::build_from_url_and_options(&url, _options)?
         }
         #[cfg(not(all(
             feature = "fs",
