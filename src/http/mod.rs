@@ -39,6 +39,7 @@ use futures_util::{StreamExt, TryStreamExt};
 use itertools::Itertools;
 use url::Url;
 
+use crate::builder::FromUrlBuilder;
 use crate::client::get::GetClientExt;
 use crate::client::header::get_etag;
 use crate::client::{HttpConnector, http_connector};
@@ -287,6 +288,30 @@ impl HttpBuilder {
                 self.retry_config,
             )),
         })
+    }
+}
+
+impl FromUrlBuilder for HttpBuilder {
+    type ConfigKey = ClientConfigKey;
+
+    fn builder_new() -> Self {
+        Self::new()
+    }
+
+    fn builder_with_url(self, url: Url) -> Self {
+        self.with_url(url)
+    }
+
+    fn builder_with_config(self, key: &str, value: String) -> Self {
+        if let Ok(key) = key.parse() {
+            self.with_config(key, value)
+        } else {
+            self
+        }
+    }
+
+    fn builder_build(self) -> Result<Box<dyn ObjectStore>> {
+        Ok(Box::new(self.build()?) as _)
     }
 }
 

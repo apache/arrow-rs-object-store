@@ -24,9 +24,12 @@ use crate::aws::{
     AmazonS3, AwsCredential, AwsCredentialProvider, Checksum, S3ConditionalPut, S3CopyIfNotExists,
     STORE,
 };
+use crate::builder::FromUrlBuilder;
 use crate::client::{HttpConnector, TokenCredentialProvider, http_connector};
 use crate::config::ConfigValue;
-use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
+use crate::{
+    ClientConfigKey, ClientOptions, ObjectStore, Result, RetryConfig, StaticCredentialProvider,
+};
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use itertools::Itertools;
@@ -1254,6 +1257,30 @@ impl AmazonS3Builder {
         let client = Arc::new(S3Client::new(config, http_client));
 
         Ok(AmazonS3 { client })
+    }
+}
+
+impl FromUrlBuilder for AmazonS3Builder {
+    type ConfigKey = AmazonS3ConfigKey;
+
+    fn builder_new() -> Self {
+        Self::new()
+    }
+
+    fn builder_with_url(self, url: Url) -> Self {
+        self.with_url(url)
+    }
+
+    fn builder_with_config(self, key: &str, value: String) -> Self {
+        if let Ok(key) = key.parse() {
+            self.with_config(key, value)
+        } else {
+            self
+        }
+    }
+
+    fn builder_build(self) -> Result<Box<dyn ObjectStore>> {
+        Ok(Box::new(self.build()?) as _)
     }
 }
 
