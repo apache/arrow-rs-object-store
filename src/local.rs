@@ -443,12 +443,18 @@ impl ObjectStore for LocalFileSystem {
         let path = self.path_to_filesystem(location)?;
         let ranges = ranges.to_vec();
         maybe_spawn_blocking(move || {
-            // Vectored IO might be faster
-            let (mut file, metadata) = open_file(&path)?;
-            ranges
-                .into_iter()
-                .map(|r| read_range(&mut file, metadata.len(), &path, r))
-                .collect()
+            #[cfg(feature = "io_uring")]
+            {
+                io_uring_get_ranges(&path, &ranges)
+            }
+            #[cfg(not(feature = "io_uring"))]
+            {
+                let (mut file, metadata) = open_file(&path)?;
+                ranges
+                    .into_iter()
+                    .map(|r| read_range(&mut file, metadata.len(), &path, r))
+                    .collect()
+            }
         })
         .await
     }
@@ -1011,6 +1017,124 @@ pub(crate) fn read_range(
     }
 
     Ok(buf.into())
+}
+
+/// Read multiple byte ranges from a file using io_uring, submitting all reads
+/// as a single batch to the kernel. This avoids N separate syscalls and allows
+/// the kernel to optimize I/O scheduling (e.g. reordering for disk locality).
+#[cfg(feature = "io_uring")]
+fn io_uring_get_ranges(path: &PathBuf, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
+    use io_uring::{IoUring, opcode, types};
+    use std::os::unix::io::AsRawFd;
+
+    let (file, metadata) = open_file(path)?;
+    let fd = types::Fd(file.as_raw_fd());
+    let file_len = metadata.len();
+    let n = ranges.len();
+
+    if n == 0 {
+        return Ok(vec![]);
+    }
+
+    let mut ring = IoUring::new(n as u32).map_err(|source| Error::UnableToReadBytes {
+        source,
+        path: path.clone(),
+    })?;
+
+    // Clamp each range to file length and validate, matching read_range behavior.
+    let clamped: Vec<(usize, Range<u64>)> = ranges
+        .iter()
+        .enumerate()
+        .map(|(i, r)| {
+            if r.start >= file_len {
+                Err(Error::InvalidRange {
+                    source: InvalidGetRange::StartTooLarge {
+                        requested: r.start,
+                        length: file_len,
+                    },
+                }
+                .into())
+            } else {
+                let end = r.end.min(file_len);
+                Ok((i, r.start..end))
+            }
+        })
+        .collect::<Result<_>>()?;
+
+    // Allocate buffers upfront — these must outlive the io_uring operations.
+    let mut buffers: Vec<Vec<u8>> = clamped
+        .iter()
+        .map(|(_, r)| vec![0u8; (r.end - r.start) as usize])
+        .collect();
+
+    // Submit all read SQEs in one batch.
+    unsafe {
+        let sq = ring.submission_shared();
+        for (sq_idx, ((_, range), buf)) in clamped.iter().zip(buffers.iter_mut()).enumerate() {
+            let len = (range.end - range.start) as u32;
+            let entry = opcode::Read::new(fd, buf.as_mut_ptr(), len)
+                .offset(range.start)
+                .build()
+                .user_data(sq_idx as u64);
+            sq.push(&entry).map_err(|_| Error::UnableToReadBytes {
+                source: io::Error::new(io::ErrorKind::Other, "io_uring submission queue full"),
+                path: path.clone(),
+            })?;
+        }
+    }
+
+    // Single syscall to submit all and wait for all completions.
+    ring.submit_and_wait(n).map_err(|source| Error::UnableToReadBytes {
+        source,
+        path: path.clone(),
+    })?;
+
+    // Collect results. CQEs may arrive out of order, so use user_data as index.
+    let mut results: Vec<Option<Bytes>> = (0..n).map(|_| None).collect();
+
+    for cqe in ring.completion() {
+        let sq_idx = cqe.user_data() as usize;
+        let bytes_read = cqe.result();
+        let (orig_idx, ref range) = clamped[sq_idx];
+        let expected = range.end - range.start;
+
+        if bytes_read < 0 {
+            return Err(Error::UnableToReadBytes {
+                source: io::Error::from_raw_os_error(-bytes_read),
+                path: path.clone(),
+            }
+            .into());
+        }
+
+        let bytes_read = bytes_read as u64;
+        if bytes_read != expected {
+            return Err(Error::OutOfRange {
+                path: path.clone(),
+                expected,
+                actual: bytes_read,
+            }
+            .into());
+        }
+
+        results[orig_idx] = Some(Bytes::from(std::mem::take(&mut buffers[sq_idx])));
+    }
+
+    results
+        .into_iter()
+        .enumerate()
+        .map(|(i, r)| {
+            r.ok_or_else(|| {
+                Error::UnableToReadBytes {
+                    source: io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("missing io_uring completion for range {i}"),
+                    ),
+                    path: path.clone(),
+                }
+                .into()
+            })
+        })
+        .collect()
 }
 
 fn open_file(path: &PathBuf) -> Result<(File, Metadata)> {
