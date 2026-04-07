@@ -595,8 +595,8 @@ mod tests {
         let checksum_src = Checksum::SHA256;
         let checksum_dst = Checksum::CRC64NVME;
 
-        let src = Path::parse("src.bin").unwrap();
-        let dst = Path::parse("dst.bin").unwrap();
+        let src = Path::parse("change_checksum_src.bin").unwrap();
+        let dst = Path::parse("change_checksum_dst.bin").unwrap();
 
         let store = AmazonS3Builder::from_env()
             .with_bucket_name(bucket)
