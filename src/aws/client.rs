@@ -765,27 +765,16 @@ impl S3Client {
             (e_tag, checksum_sha256, checksum_crc64nvme)
         };
 
-        let content_id = if let Some(checksum) = self.config.checksum {
-            match checksum {
-                Checksum::SHA256 => {
-                    let meta = PartMetadata {
-                        e_tag,
-                        checksum_sha256,
-                        checksum_crc64nvme: None,
-                    };
-                    quick_xml::se::to_string(&meta).unwrap()
-                }
-                Checksum::CRC64NVME => {
-                    let meta = PartMetadata {
-                        e_tag,
-                        checksum_sha256: None,
-                        checksum_crc64nvme,
-                    };
-                    quick_xml::se::to_string(&meta).unwrap()
-                }
+        let content_id = match self.config.checksum {
+            Some(_) => {
+                let meta = PartMetadata {
+                    e_tag,
+                    checksum_sha256,
+                    checksum_crc64nvme,
+                };
+                quick_xml::se::to_string(&meta).unwrap()
             }
-        } else {
-            e_tag
+            None => e_tag,
         };
 
         Ok(PartId { content_id })
