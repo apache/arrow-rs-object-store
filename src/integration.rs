@@ -177,6 +177,7 @@ pub async fn put_get_delete_list(storage: &DynObjectStore) {
 
     let head = storage.head(&location).await.unwrap();
     assert_eq!(head.size, data.len() as u64);
+    assert_eq!(head.location, location);
 
     storage.delete(&location).await.unwrap();
 

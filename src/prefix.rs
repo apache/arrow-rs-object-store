@@ -117,7 +117,9 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let full_path = self.full_path(location);
-        self.inner.get_opts(&full_path, options).await
+        let mut result = self.inner.get_opts(&full_path, options).await?;
+        result.meta = self.strip_meta(result.meta);
+        Ok(result)
     }
 
     async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
@@ -297,6 +299,26 @@ mod tests {
         let location = Path::from("prefix/test_written.json");
         let read_data = local.get(&location).await.unwrap().bytes().await.unwrap();
         assert_eq!(&*read_data, data)
+    }
+
+    // Regression test for
+    // https://github.com/apache/arrow-rs-object-store/issues/664:
+    // head/get returned an ObjectMeta whose location still contained the
+    // prefix, so round-tripping the returned location back into the store would
+    // double-prefix it.
+    #[tokio::test]
+    async fn prefix_head_get_strip_prefix() {
+        let store = PrefixStore::new(InMemory::new(), "prefix");
+        let path = Path::from("test_file");
+        store.put(&path, "data".into()).await.unwrap();
+
+        let head = store.head(&path).await.unwrap();
+        assert_eq!(head.location, path);
+        let get = store.get(&path).await.unwrap();
+        assert_eq!(get.meta.location, path);
+
+        // The returned location must round-trip back into the same store.
+        store.get(&head.location).await.unwrap();
     }
 
     #[tokio::test]
