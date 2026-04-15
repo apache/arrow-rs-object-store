@@ -25,7 +25,13 @@ description = "A generic object store interface for uniformly interacting with A
 keywords = ["object", "storage", "cloud"]
 repository = "https://github.com/apache/arrow-rs-object-store"
 rust-version = "1.85"
-include = ["src/**/*.rs", "README.md", "LICENSE.txt", "NOTICE.txt", "Cargo.toml"]
+include = [
+    "src/**/*.rs",
+    "README.md",
+    "LICENSE.txt",
+    "NOTICE.txt",
+    "Cargo.toml",
+]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -46,10 +52,14 @@ url = "2.2"
 walkdir = { version = "2", optional = true }
 
 # Cloud storage support
-base64 = { version = "0.22", default-features = false, features = ["std"], optional = true }
+base64 = { version = "0.22", default-features = false, features = [
+    "std",
+], optional = true }
 form_urlencoded = { version = "1.2", optional = true }
 http-body-util = { version = "0.1.2", optional = true }
-httparse = { version = "1.8.0", default-features = false, features = ["std"], optional = true }
+httparse = { version = "1.8.0", default-features = false, features = [
+    "std",
+], optional = true }
 hyper = { version = "1.2", default-features = false, optional = true }
 md-5 = { version = "0.11.0", default-features = false, optional = true }
 quick-xml = { version = "0.39.0", features = ["serialize", "overlapped-lists"], optional = true }
@@ -65,6 +75,9 @@ serde_urlencoded = { version = "0.7", optional = true }
 tokio = { version = "1.29.0", features = ["sync", "macros", "rt", "time", "io-util"], optional = true }
 tracing = { version = "0.1", optional = true }
 
+[target.'cfg(target_family="unix")'.dependencies]
+xattr = { version = "1", optional = true }
+
 [target.'cfg(target_family="unix")'.dev-dependencies]
 nix = { version = "0.31.1", features = ["fs"] }
 
@@ -74,7 +87,7 @@ wasm-bindgen-futures = "0.4.18"
 futures-channel = {version = "0.3", features = ["sink"]}
 
 [features]
-default = ["fs"]
+default = ["fs", "xattr"]
 cloud = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/stream", "chrono/serde", "base64", "rand", "ring", "http-body-util", "form_urlencoded", "serde_urlencoded", "tokio"]
 azure = ["cloud", "httparse"]
 fs = ["walkdir", "tokio"]
