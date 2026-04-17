@@ -117,8 +117,8 @@ impl<T: ListClient + Clone> ListClientExt for T {
 
         while let Some(result) = stream.next().await {
             let response = result?;
-            common_prefixes.extend(response.common_prefixes.into_iter());
-            objects.extend(response.objects.into_iter());
+            common_prefixes.extend(response.common_prefixes);
+            objects.extend(response.objects);
         }
 
         Ok(ListResult {
