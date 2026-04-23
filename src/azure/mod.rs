@@ -472,7 +472,11 @@ mod tests {
             !result.contains(&offset),
             "offset file_b should be excluded, got: {result:?}"
         );
-        assert_eq!(result.len(), 3, "expected c/d/e after file_b, got: {result:?}");
+        assert_eq!(
+            result.len(),
+            3,
+            "expected c/d/e after file_b, got: {result:?}"
+        );
 
         // Test 2: Offset at file_a → should return b, c, d, e
         let offset = Path::from(format!("{test_dir}/file_a.txt"));
@@ -482,8 +486,15 @@ mod tests {
             .try_collect()
             .await
             .unwrap();
-        assert!(!result.contains(&offset), "offset file_a should be excluded");
-        assert_eq!(result.len(), 4, "expected b/c/d/e after file_a, got: {result:?}");
+        assert!(
+            !result.contains(&offset),
+            "offset file_a should be excluded"
+        );
+        assert_eq!(
+            result.len(),
+            4,
+            "expected b/c/d/e after file_a, got: {result:?}"
+        );
 
         // Test 3: Offset at file_e (last) → should return empty
         let offset = Path::from(format!("{test_dir}/file_e.txt"));
@@ -493,7 +504,10 @@ mod tests {
             .try_collect()
             .await
             .unwrap();
-        assert!(result.is_empty(), "offset at last file should return empty, got: {result:?}");
+        assert!(
+            result.is_empty(),
+            "offset at last file should return empty, got: {result:?}"
+        );
 
         // Test 4: Offset before all files → should return all 5
         let offset = Path::from(format!("{test_dir}/file"));
@@ -503,7 +517,11 @@ mod tests {
             .try_collect()
             .await
             .unwrap();
-        assert_eq!(result.len(), 5, "offset before all files should return all, got: {result:?}");
+        assert_eq!(
+            result.len(),
+            5,
+            "offset before all files should return all, got: {result:?}"
+        );
 
         // Test 5: Every returned entry is strictly greater than offset
         let offset = Path::from(format!("{test_dir}/file_c.txt"));
