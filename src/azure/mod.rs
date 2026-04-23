@@ -421,13 +421,15 @@ mod tests {
 
     /// Verifies that `list_with_offset` works against OneLake (Fabric) endpoints.
     ///
-    /// OneLake silently ignores the `startFrom` query parameter, so the client
-    /// must fall back to client-side filtering.
+    /// OneLake silently ignores the `startFrom` query parameter when using
+    /// friendly-name URLs (e.g. `.../MyWorkspace/lakehouse.Lakehouse/...`),
+    /// returning 200 OK with zero results.
+    /// GUID-based URLs handle `startFrom` correctly.
     ///
     /// Set these env vars before running:
     /// - `AZURE_STORAGE_TOKEN`: bearer token (e.g. from `az account get-access-token`)
-    /// - `ONELAKE_URL`: full OneLake URL, e.g.
-    ///   `https://onelake.blob.fabric.microsoft.com/<ws>/<item>/Files/`
+    /// - `ONELAKE_URL`: full OneLake URL with friendly names, e.g.
+    ///   `https://onelake.blob.fabric.microsoft.com/<workspace>/<item>.Lakehouse/`
     ///
     /// See <https://github.com/apache/arrow-rs-object-store/issues/695>
     #[ignore = "Used for manual testing against a real OneLake endpoint."]
