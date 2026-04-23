@@ -127,11 +127,20 @@ impl ObjectStore for MicrosoftAzure {
         prefix: Option<&Path>,
         offset: &Path,
     ) -> BoxStream<'static, Result<ObjectMeta>> {
-        if self.client.config().is_emulator {
-            // Azurite doesn't support the startFrom query parameter,
+        let disable_start_from = self.client.config().is_emulator
+            || self
+                .client
+                .config()
+                .service
+                .host_str()
+                .is_some_and(|h| h.ends_with(".fabric.microsoft.com"));
+
+        if disable_start_from {
+            // Azurite and OneLake don't support the startFrom query parameter,
             // fall back to client-side filtering
             //
             // See https://github.com/Azure/Azurite/issues/2619#issuecomment-3660701055
+            // See https://github.com/apache/arrow-rs-object-store/issues/695
             let offset = offset.clone();
             self.list(prefix)
                 .try_filter(move |f| futures_util::future::ready(f.location > offset))
