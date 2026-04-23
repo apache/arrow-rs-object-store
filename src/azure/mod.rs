@@ -426,8 +426,8 @@ mod tests {
     ///
     /// Set these env vars before running:
     /// - `AZURE_STORAGE_TOKEN`: bearer token (e.g. from `az account get-access-token`)
-    /// - `ONELAKE_URL`: full OneLake table URL, e.g.
-    ///   `https://onelake.dfs.fabric.microsoft.com/<ws>/<item>/Tables/<table>`
+    /// - `ONELAKE_URL`: full OneLake URL, e.g.
+    ///   `https://onelake.blob.fabric.microsoft.com/<ws>/<item>/Files/`
     ///
     /// See <https://github.com/apache/arrow-rs-object-store/issues/695>
     #[ignore = "Used for manual testing against a real OneLake endpoint."]
