@@ -459,6 +459,12 @@ impl GoogleCloudStorageBuilder {
         self
     }
 
+    /// Set the signing credential provider overriding any other options
+    pub fn with_signing_credentials(mut self, credentials: GcpSigningCredentialProvider) -> Self {
+        self.signing_credentials = Some(credentials);
+        self
+    }
+
     /// Set the retry configuration
     pub fn with_retry(mut self, retry_config: RetryConfig) -> Self {
         self.retry_config = retry_config;
