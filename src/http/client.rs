@@ -19,7 +19,9 @@ use super::STORE;
 use crate::client::get::GetClient;
 use crate::client::header::HeaderConfig;
 use crate::client::retry::{self, RetryConfig, RetryContext, RetryExt};
-use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpResponse};
+use crate::client::{
+    GetOptionsExt, HttpClient, HttpError, HttpResponse, ObjectStoreOperation, OperationKind,
+};
 use crate::path::{DELIMITER, Path};
 use crate::util::deserialize_rfc1123;
 use crate::{Attribute, Attributes, ClientOptions, GetOptions, ObjectMeta, PutPayload, Result};
@@ -181,7 +183,10 @@ impl Client {
         let mut retry = false;
         loop {
             let url = self.path_url(location);
-            let mut builder = self.client.put(url);
+            let mut builder = self.client.put(url).operation(
+                ObjectStoreOperation::new(OperationKind::Put, "http")
+                    .with_location(location.clone()),
+            );
 
             let mut has_content_type = false;
             for (k, v) in &attributes {
@@ -247,9 +252,14 @@ impl Client {
             .unwrap_or_else(|| self.url.to_string());
 
         let method = Method::from_bytes(b"PROPFIND").unwrap();
+        let mut op = ObjectStoreOperation::new(OperationKind::List, "http");
+        if let Some(path) = location {
+            op = op.with_location(path.clone());
+        }
         let result = self
             .client
             .request(method, url)
+            .operation(op)
             .header("Depth", depth)
             .retryable(&self.retry_config)
             .idempotent(true)
@@ -296,6 +306,10 @@ impl Client {
         let url = self.path_url(path);
         self.client
             .delete(url)
+            .operation(
+                ObjectStoreOperation::new(OperationKind::Delete, "http")
+                    .with_location(path.clone()),
+            )
             .send_retry(&self.retry_config)
             .await
             .map_err(|source| source.error(STORE, path.to_string()))?;
@@ -310,6 +324,10 @@ impl Client {
             let mut builder = self
                 .client
                 .request(method, self.path_url(from))
+                .operation(
+                    ObjectStoreOperation::new(OperationKind::Copy, "http")
+                        .with_location(from.clone()),
+                )
                 .header("Destination", self.path_url(to).as_str());
 
             if !overwrite {
@@ -370,15 +388,19 @@ impl GetClient for Client {
         options: GetOptions,
     ) -> Result<HttpResponse> {
         let url = self.path_url(path);
-        let method = match options.head {
-            true => Method::HEAD,
-            false => Method::GET,
+        let (method, kind) = match options.head {
+            true => (Method::HEAD, OperationKind::Head),
+            false => (Method::GET, OperationKind::Get),
         };
         let has_range = options.range.is_some();
-        let builder = self.client.request(method, url);
-
-        let res = builder
+        // `.operation(...)` must come AFTER `.with_get_options(...)` because the
+        // latter calls `.extensions(...)` which overwrites the entire
+        // `http::Extensions`, wiping anything set earlier in the chain.
+        let res = self
+            .client
+            .request(method, url)
             .with_get_options(options)
+            .operation(ObjectStoreOperation::new(kind, "http").with_location(path.clone()))
             .retryable_request()
             .send(ctx)
             .await
@@ -515,4 +537,103 @@ pub(crate) struct Prop {
 #[derive(Deserialize)]
 pub(crate) struct ResourceType {
     collection: Option<()>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::client::get::GetClient;
+    use crate::client::mock_server::MockServer;
+    use crate::client::retry::RetryContext;
+    use crate::client::{HttpClient, HttpRequest, HttpResponse, HttpService};
+    use async_trait::async_trait;
+    use hyper::Response;
+    use parking_lot::Mutex;
+    use std::sync::Arc;
+
+    /// `HttpService` wrapper that captures any [`ObjectStoreOperation`]
+    /// found on outbound requests, then forwards to an inner reqwest client.
+    #[derive(Debug)]
+    struct RecordingService {
+        inner: reqwest::Client,
+        seen: Arc<Mutex<Vec<ObjectStoreOperation>>>,
+    }
+
+    #[async_trait]
+    impl HttpService for RecordingService {
+        async fn call(&self, req: HttpRequest) -> Result<HttpResponse, HttpError> {
+            if let Some(op) = req.extensions().get::<ObjectStoreOperation>() {
+                self.seen.lock().push(op.clone());
+            }
+            self.inner.call(req).await
+        }
+    }
+
+    async fn setup() -> (Client, Arc<Mutex<Vec<ObjectStoreOperation>>>, MockServer) {
+        let mock = MockServer::new().await;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let recording = RecordingService {
+            inner: reqwest::Client::new(),
+            seen: Arc::clone(&seen),
+        };
+        let http_client = HttpClient::new(recording);
+        let client = Client::new(
+            Url::parse(mock.url()).unwrap(),
+            http_client,
+            ClientOptions::default(),
+            RetryConfig::default(),
+        );
+        (client, seen, mock)
+    }
+
+    #[tokio::test]
+    async fn delete_populates_operation_extension() {
+        let (client, seen, mock) = setup().await;
+        mock.push(Response::new("".to_string()));
+
+        let path = Path::parse("foo/bar").unwrap();
+        client.delete(&path).await.unwrap();
+
+        let captured = seen.lock();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].kind, OperationKind::Delete);
+        assert_eq!(captured[0].backend, "http");
+        assert_eq!(captured[0].location.as_ref(), Some(&path));
+    }
+
+    #[tokio::test]
+    async fn put_populates_operation_extension() {
+        let (client, seen, mock) = setup().await;
+        mock.push(Response::new("".to_string()));
+
+        let path = Path::parse("uploads/x").unwrap();
+        client
+            .put(&path, PutPayload::from_static(b"hi"), Attributes::default())
+            .await
+            .unwrap();
+
+        let captured = seen.lock();
+        assert!(captured.iter().any(|op| op.kind == OperationKind::Put
+            && op.backend == "http"
+            && op.location.as_ref() == Some(&path)));
+    }
+
+    #[tokio::test]
+    async fn get_populates_operation_extension() {
+        let (client, seen, mock) = setup().await;
+        mock.push(Response::new("body".to_string()));
+
+        let path = Path::parse("files/y").unwrap();
+        let mut ctx = RetryContext::new(&RetryConfig::default());
+        client
+            .get_request(&mut ctx, &path, GetOptions::default())
+            .await
+            .unwrap();
+
+        let captured = seen.lock();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].kind, OperationKind::Get);
+        assert_eq!(captured[0].backend, "http");
+        assert_eq!(captured[0].location.as_ref(), Some(&path));
+    }
 }
