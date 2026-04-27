@@ -98,11 +98,11 @@ impl HttpRequestBuilder {
         self
     }
 
-    /// Attach an [`ObjectStoreOperation`] to the outbound request via
-    /// `http::Request::extensions`. Wrapping `HttpService` impls (tower
-    /// layers, reqwest middleware, etc.) can read it via
-    /// `req.extensions().get::<ObjectStoreOperation>()` to produce useful
-    /// trace spans without sniffing URLs.
+    /// Attach an [`ObjectStoreOperation`](crate::client::ObjectStoreOperation)
+    /// to the outbound request via `http::Request::extensions`. Wrapping
+    /// `HttpService` impls (tower layers, reqwest middleware, etc.) can
+    /// read it via `req.extensions().get::<ObjectStoreOperation>()` to
+    /// produce useful trace spans without sniffing URLs.
     pub(crate) fn operation(mut self, op: crate::client::ObjectStoreOperation) -> Self {
         if let Ok(r) = &mut self.request {
             r.extensions_mut().insert(op);
