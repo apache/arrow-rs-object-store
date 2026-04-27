@@ -539,7 +539,9 @@ pub(crate) struct ResourceType {
     collection: Option<()>,
 }
 
-#[cfg(test)]
+// `mock_server` is only built `#[cfg(not(target_arch = "wasm32"))]`, so the
+// test module that uses it must follow the same gate.
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
     use crate::client::get::GetClient;

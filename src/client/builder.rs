@@ -103,6 +103,10 @@ impl HttpRequestBuilder {
     /// `HttpService` impls (tower layers, reqwest middleware, etc.) can
     /// read it via `req.extensions().get::<ObjectStoreOperation>()` to
     /// produce useful trace spans without sniffing URLs.
+    ///
+    /// Marked `allow(dead_code)` because only the `http` backend wires
+    /// it up in this PR; AWS / GCP / Azure follow-up PRs will use it.
+    #[allow(dead_code)]
     pub(crate) fn operation(mut self, op: crate::client::ObjectStoreOperation) -> Self {
         if let Ok(r) = &mut self.request {
             r.extensions_mut().insert(op);
