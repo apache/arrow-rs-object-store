@@ -55,7 +55,7 @@ hyper = { version = "1.2", default-features = false, optional = true }
 md-5 = { version = "0.11.0", default-features = false, optional = true }
 quick-xml = { version = "0.39.0", features = ["serialize", "overlapped-lists"], optional = true }
 rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"], optional = true }
-reqwest = { version = "0.13", default-features = false, features = ["http2", "rustls-no-provider"], optional = true }
+reqwest = { version = "0.13", default-features = false, features = ["http2"], optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 aws-lc-rs = { version = "1.15", default-features = false, optional = true }
 rustls-pki-types = { version = "1.9", default-features = false, features = ["std"], optional = true }
@@ -84,9 +84,9 @@ futures-channel = {version = "0.3", features = ["sink"]}
 [features]
 default = ["fs"]
 cloud-no-crypto = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/stream", "chrono/serde", "base64", "rand","http-body-util", "form_urlencoded", "serde_urlencoded", "tokio"]
-cloud = ["aws-lc-rs", "cloud-no-crypto"]
+cloud = ["aws-lc-rs", "reqwest/rustls", "cloud-no-crypto"]
 
-aws-lc-rs = ["dep:aws-lc-rs", "reqwest/rustls", "rustls-pki-types"]
+aws-lc-rs = ["dep:aws-lc-rs", "rustls-pki-types"]
 ring = ["dep:ring", "rustls-pki-types"]
 
 azure-no-crypto = ["cloud-no-crypto", "httparse"]
