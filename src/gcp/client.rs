@@ -32,8 +32,8 @@ use crate::multipart::PartId;
 use crate::path::Path;
 use crate::util::hex_encode;
 use crate::{
-    Attribute, Attributes, ClientOptions, GetOptions, MultipartId, PutMode, PutMultipartOptions,
-    PutOptions, PutPayload, PutResult, Result, RetryConfig,
+    Attribute, Attributes, ClientOptions, CopyMode, GetOptions, MultipartId, PutMode,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, RetryConfig,
 };
 use async_trait::async_trait;
 use base64::Engine;
@@ -566,12 +566,7 @@ impl GoogleCloudStorageClient {
     }
 
     /// Perform a copy request <https://cloud.google.com/storage/docs/xml-api/put-object-copy>
-    pub(crate) async fn copy_request(
-        &self,
-        from: &Path,
-        to: &Path,
-        if_not_exists: bool,
-    ) -> Result<()> {
+    pub(crate) async fn copy_request(&self, from: &Path, to: &Path, mode: CopyMode) -> Result<()> {
         let credential = self.get_credential().await?;
         let url = self.object_url(to);
 
@@ -582,6 +577,11 @@ impl GoogleCloudStorageClient {
             .client
             .request(Method::PUT, url)
             .header("x-goog-copy-source", source);
+
+        let if_not_exists = match mode {
+            CopyMode::Create => true,
+            CopyMode::Overwrite => false,
+        };
 
         if if_not_exists {
             builder = builder.header(&VERSION_MATCH, 0);
