@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::builder::FromUrlBuilder;
 use crate::client::{HttpConnector, TokenCredentialProvider, http_connector};
 use crate::config::ConfigValue;
 use crate::gcp::client::{GoogleCloudStorageClient, GoogleCloudStorageConfig};
@@ -26,7 +27,9 @@ use crate::gcp::{
     GcpCredential, GcpCredentialProvider, GcpSigningCredential, GcpSigningCredentialProvider,
     GoogleCloudStorage, STORE, credential,
 };
-use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
+use crate::{
+    ClientConfigKey, ClientOptions, ObjectStore, Result, RetryConfig, StaticCredentialProvider,
+};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -635,6 +638,30 @@ impl GoogleCloudStorageBuilder {
         Ok(GoogleCloudStorage {
             client: Arc::new(GoogleCloudStorageClient::new(config, http_client)?),
         })
+    }
+}
+
+impl FromUrlBuilder for GoogleCloudStorageBuilder {
+    type ConfigKey = GoogleConfigKey;
+
+    fn builder_new() -> Self {
+        Self::new()
+    }
+
+    fn builder_with_url(self, url: Url) -> Self {
+        self.with_url(url)
+    }
+
+    fn builder_with_config(self, key: &str, value: String) -> Self {
+        if let Ok(key) = key.parse() {
+            self.with_config(key, value)
+        } else {
+            self
+        }
+    }
+
+    fn builder_build(self) -> Result<Box<dyn ObjectStore>> {
+        Ok(Box::new(self.build()?) as _)
     }
 }
 
