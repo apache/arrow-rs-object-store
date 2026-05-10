@@ -25,3 +25,8 @@ pub use connection::*;
 
 mod spawn;
 pub use spawn::*;
+
+// `reqwest-middleware` is not supported on wasm32: its `Middleware` trait
+// requires `Send + Sync` whereas the wasm `HttpService` ecosystem uses `?Send`.
+#[cfg(all(feature = "reqwest-middleware", not(target_arch = "wasm32")))]
+mod reqwest_middleware;

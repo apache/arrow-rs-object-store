@@ -55,6 +55,7 @@ md-5 = { version = "0.11.0", default-features = false, optional = true }
 quick-xml = { version = "0.39.0", features = ["serialize", "overlapped-lists"], optional = true }
 rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"], optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "http2"], optional = true }
+reqwest-middleware = { version = "0.4", optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 rustls-pki-types = { version = "1.9", default-features = false, features = ["std"], optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
@@ -90,6 +91,7 @@ http = ["cloud"]
 tls-webpki-roots = ["reqwest?/rustls-tls-webpki-roots"]
 integration = ["rand", "tokio"]
 tokio = ["dep:tokio", "dep:tracing"]
+reqwest-middleware = ["dep:reqwest-middleware", "cloud"]
 
 [dev-dependencies] # In alphabetical order
 futures-executor = "0.3"
