@@ -1074,7 +1074,8 @@ fn url_from_env(env_name: &str, default_url: &str) -> Result<Url> {
     Ok(url)
 }
 
-fn split_sas(sas: &str) -> Result<Vec<(String, String)>, Error> {
+/// Parse a SAS token string into the query pairs expected by [`AzureCredential::SASToken`].
+pub fn split_sas(sas: &str) -> Result<Vec<(String, String)>> {
     let sas = percent_decode_str(sas)
         .decode_utf8()
         .map_err(|source| Error::DecodeSasKey { source })?;
@@ -1271,6 +1272,27 @@ mod tests {
         ];
         let pairs = split_sas(raw_sas).unwrap();
         assert_eq!(expected, pairs);
+    }
+
+    #[test]
+    fn azure_test_split_sas_trims_leading_question_mark_and_skips_empties() {
+        let pairs = split_sas("?&sv=2021-10-04& &sp=r").unwrap();
+        assert_eq!(
+            pairs,
+            vec![
+                ("sv".to_string(), "2021-10-04".to_string()),
+                ("sp".to_string(), "r".to_string()),
+            ],
+        );
+    }
+
+    #[test]
+    fn azure_test_split_sas_rejects_missing_equals() {
+        let err = split_sas("sv=2021-10-04&bogus").unwrap_err();
+        assert!(
+            err.to_string().contains("Missing component"),
+            "unexpected error: {err}",
+        );
     }
 
     #[test]
