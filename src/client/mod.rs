@@ -331,7 +331,7 @@ pub struct ClientOptions {
     proxy_ca_certificate: Option<String>,
     proxy_excludes: Option<String>,
     allow_http: ConfigValue<bool>,
-    allow_insecure: ConfigValue<bool>,
+    allow_invalid_certificates: ConfigValue<bool>,
     timeout: Option<ConfigValue<Duration>>,
     connect_timeout: Option<ConfigValue<Duration>>,
     read_timeout: Option<ConfigValue<Duration>>,
@@ -366,7 +366,7 @@ impl Default for ClientOptions {
             proxy_ca_certificate: None,
             proxy_excludes: None,
             allow_http: Default::default(),
-            allow_insecure: Default::default(),
+            allow_invalid_certificates: Default::default(),
             timeout: Some(Duration::from_secs(30).into()),
             connect_timeout: Some(Duration::from_secs(5).into()),
             read_timeout: None,
@@ -396,7 +396,7 @@ impl ClientOptions {
     pub fn with_config(mut self, key: ClientConfigKey, value: impl Into<String>) -> Self {
         match key {
             ClientConfigKey::AllowHttp => self.allow_http.parse(value),
-            ClientConfigKey::AllowInvalidCertificates => self.allow_insecure.parse(value),
+            ClientConfigKey::AllowInvalidCertificates => self.allow_invalid_certificates.parse(value),
             ClientConfigKey::ConnectTimeout => {
                 self.connect_timeout = Some(ConfigValue::Deferred(value.into()))
             }
@@ -442,7 +442,7 @@ impl ClientOptions {
     pub fn get_config_value(&self, key: &ClientConfigKey) -> Option<String> {
         match key {
             ClientConfigKey::AllowHttp => Some(self.allow_http.to_string()),
-            ClientConfigKey::AllowInvalidCertificates => Some(self.allow_insecure.to_string()),
+            ClientConfigKey::AllowInvalidCertificates => Some(self.allow_invalid_certificates.to_string()),
             ClientConfigKey::ConnectTimeout => self.connect_timeout.as_ref().map(fmt_duration),
             ClientConfigKey::ReadTimeout => self.read_timeout.as_ref().map(fmt_duration),
             ClientConfigKey::DefaultContentType => self.default_content_type.clone(),
@@ -543,8 +543,8 @@ impl ClientOptions {
     /// as a last resort or for testing
     ///
     /// </div>
-    pub fn with_allow_invalid_certificates(mut self, allow_insecure: bool) -> Self {
-        self.allow_insecure = allow_insecure.into();
+    pub fn with_allow_invalid_certificates(mut self, allow_invalid_certificates: bool) -> Self {
+        self.allow_invalid_certificates = allow_invalid_certificates.into();
         self
     }
 
@@ -870,7 +870,7 @@ impl ClientOptions {
             builder = builder.http2_prior_knowledge()
         }
 
-        if self.allow_insecure.get()? {
+        if self.allow_invalid_certificates.get()? {
             builder = builder.danger_accept_invalid_certs(true)
         }
 
