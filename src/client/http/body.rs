@@ -196,7 +196,11 @@ impl HttpResponseBody {
         String::from_utf8(b.into()).map_err(|e| HttpError::new(HttpErrorKind::Decode, e))
     }
 
-    #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+    #[cfg(any(
+        feature = "aws-no-crypto",
+        feature = "gcp-no-crypto",
+        feature = "azure-no-crypto"
+    ))]
     pub(crate) async fn json<B: serde::de::DeserializeOwned>(self) -> Result<B, HttpError> {
         let b = self.bytes().await?;
         serde_json::from_slice(&b).map_err(|e| HttpError::new(HttpErrorKind::Decode, e))
