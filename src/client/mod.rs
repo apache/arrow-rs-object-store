@@ -21,7 +21,7 @@
 
 pub(crate) mod backoff;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
 mod dns;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -30,44 +30,45 @@ pub(crate) mod mock_server;
 
 pub(crate) mod retry;
 
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+#[cfg(any(feature = "aws-base", feature = "gcp-base", feature = "azure-base"))]
 pub(crate) mod pagination;
 
 pub(crate) mod get;
 
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+#[cfg(any(feature = "aws-base", feature = "gcp-base", feature = "azure-base"))]
 pub(crate) mod list;
 
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+#[cfg(any(feature = "aws-base", feature = "gcp-base", feature = "azure-base"))]
 pub(crate) mod token;
 
 pub(crate) mod header;
 
-#[cfg(any(feature = "aws", feature = "gcp"))]
+#[cfg(any(feature = "aws-base", feature = "gcp-base"))]
 pub(crate) mod s3;
 
 pub(crate) mod builder;
 mod http;
 
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+#[cfg(any(feature = "aws-base", feature = "gcp-base", feature = "azure-base"))]
 pub(crate) mod parts;
 pub use http::*;
 
+use ::http::header::{HeaderMap, HeaderValue};
 use async_trait::async_trait;
-use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
 use reqwest::{NoProxy, Proxy};
 
 use crate::config::{ConfigValue, fmt_duration};
 use crate::path::Path;
 use crate::{GetOptions, Result};
 
+#[cfg(feature = "reqwest")]
 fn map_client_error(e: reqwest::Error) -> super::Error {
     super::Error::Generic {
         store: "HTTP client",
@@ -75,6 +76,7 @@ fn map_client_error(e: reqwest::Error) -> super::Error {
     }
 }
 
+#[cfg(feature = "reqwest")]
 static DEFAULT_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"),);
 
 /// Configuration keys for [`ClientOptions`]
@@ -272,10 +274,10 @@ impl FromStr for ClientConfigKey {
 /// This is used to configure the client to trust a specific certificate. See
 /// [Self::from_pem] for an example
 #[derive(Debug, Clone)]
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
 pub struct Certificate(reqwest::tls::Certificate);
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
 impl Certificate {
     /// Create a `Certificate` from a PEM encoded certificate.
     ///
@@ -322,7 +324,7 @@ impl Certificate {
 #[derive(Debug, Clone)]
 pub struct ClientOptions {
     user_agent: Option<ConfigValue<HeaderValue>>,
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
     root_certificates: Vec<Certificate>,
     content_type_map: HashMap<String, String>,
     default_content_type: Option<String>,
@@ -357,7 +359,7 @@ impl Default for ClientOptions {
         // we opt for a slightly higher default timeout of 30 seconds
         Self {
             user_agent: None,
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
             root_certificates: Default::default(),
             content_type_map: Default::default(),
             default_content_type: None,
@@ -489,7 +491,7 @@ impl ClientOptions {
     ///
     /// This can be used to connect to a server that has a self-signed
     /// certificate for example.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
     pub fn with_root_certificate(mut self, certificate: Certificate) -> Self {
         self.root_certificates.push(certificate);
         self
@@ -783,14 +785,14 @@ impl ClientOptions {
     /// In particular:
     /// * Allows HTTP as metadata endpoints do not use TLS
     /// * Configures a low connection timeout to provide quick feedback if not present
-    #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+    #[cfg(any(feature = "aws-base", feature = "gcp-base", feature = "azure-base"))]
     pub(crate) fn metadata_options(&self) -> Self {
         self.clone()
             .with_allow_http(true)
             .with_connect_timeout(Duration::from_secs(1))
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
     pub(crate) fn client(&self) -> Result<reqwest::Client> {
         let mut builder = reqwest::ClientBuilder::new();
 
@@ -890,7 +892,7 @@ impl ClientOptions {
             .map_err(map_client_error)
     }
 
-    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    #[cfg(all(feature = "reqwest", target_arch = "wasm32", target_os = "unknown"))]
     pub(crate) fn client(&self) -> Result<reqwest::Client> {
         let mut builder = reqwest::ClientBuilder::new();
 
@@ -990,7 +992,7 @@ where
     }
 }
 
-#[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
+#[cfg(any(feature = "aws-base", feature = "azure-base", feature = "gcp-base"))]
 mod cloud {
     use super::*;
     use crate::RetryConfig;
@@ -1016,7 +1018,7 @@ mod cloud {
         }
 
         /// Override the minimum remaining TTL for a cached token to be used
-        #[cfg(any(feature = "aws", feature = "gcp"))]
+        #[cfg(any(feature = "aws-base", feature = "gcp-base"))]
         pub(crate) fn with_min_ttl(mut self, min_ttl: Duration) -> Self {
             self.cache = self.cache.with_min_ttl(min_ttl);
             self
@@ -1047,7 +1049,7 @@ mod cloud {
 }
 
 use crate::client::builder::HttpRequestBuilder;
-#[cfg(any(feature = "aws", feature = "azure", feature = "gcp"))]
+#[cfg(any(feature = "aws-base", feature = "azure-base", feature = "gcp-base"))]
 pub(crate) use cloud::*;
 
 #[cfg(test)]

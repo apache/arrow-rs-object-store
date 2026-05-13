@@ -341,6 +341,7 @@ mod test {
         }
     }
 
+    #[cfg(feature = "reqwest")]
     #[tokio::test]
     #[ignore]
     async fn gcs_test_sign() {
