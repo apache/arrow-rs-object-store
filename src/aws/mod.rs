@@ -31,8 +31,8 @@
 use async_trait::async_trait;
 use futures_util::stream::BoxStream;
 use futures_util::{StreamExt, TryStreamExt};
-use reqwest::header::{HeaderName, IF_MATCH, IF_NONE_MATCH};
-use reqwest::{Method, StatusCode};
+use http::header::{HeaderName, IF_MATCH, IF_NONE_MATCH};
+use http::{Method, StatusCode};
 use std::{sync::Arc, time::Duration};
 use url::Url;
 
@@ -58,14 +58,14 @@ mod client;
 mod credential;
 mod precondition;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
 mod resolve;
 
 pub use builder::{AmazonS3Builder, AmazonS3ConfigKey};
 pub use checksum::Checksum;
 pub use precondition::{S3ConditionalPut, S3CopyIfNotExists};
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
 pub use resolve::resolve_bucket_region;
 
 /// This struct is used to maintain the URI path encoding
@@ -118,7 +118,7 @@ impl Signer for AmazonS3 {
     /// ```
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # use object_store::{aws::AmazonS3Builder, path::Path, signer::Signer};
-    /// # use reqwest::Method;
+    /// # use http::Method;
     /// # use std::time::Duration;
     /// #
     /// let region = "us-east-1";
@@ -515,6 +515,7 @@ mod tests {
     use super::*;
     use crate::ClientOptions;
     use crate::ObjectStoreExt;
+    #[cfg(feature = "reqwest")]
     use crate::client::SpawnedReqwestConnector;
     use crate::client::get::GetClient;
     use crate::client::retry::RetryContext;
@@ -923,6 +924,7 @@ mod tests {
 
     /// Integration test that ensures I/O is done on an alternate threadpool
     /// when using the `SpawnedReqwestConnector`.
+    #[cfg(feature = "reqwest")]
     #[test]
     fn s3_alternate_threadpool_spawned_request_connector() {
         maybe_skip_integration!();

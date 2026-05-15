@@ -716,6 +716,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "reqwest")]
     #[tokio::test]
     async fn gcs_test_proxy_url() {
         let mut tfile = NamedTempFile::new().unwrap();
@@ -752,6 +753,7 @@ mod tests {
         builder.parse_url("mailto://bucket/path").unwrap_err();
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn gcs_test_service_account_key_only() {
         let _ = GoogleCloudStorageBuilder::new()
@@ -761,6 +763,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn gcs_test_with_base_url() {
         let no_base_url = GoogleCloudStorageBuilder::new()
@@ -834,6 +837,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn gcs_test_explicit_creds_skip_invalid_adc() {
         // Create a valid service account key file
@@ -862,6 +866,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn gcs_test_explicit_creds_with_service_account_key_skip_invalid_adc() {
         // Create invalid ADC file with unsupported credential type
@@ -885,6 +890,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn gcs_test_adc_error_propagated_without_explicit_creds() {
         // Create invalid ADC file with unsupported credential type
@@ -912,6 +918,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn gcs_test_with_credentials_skip_invalid_adc() {
         use crate::StaticCredentialProvider;

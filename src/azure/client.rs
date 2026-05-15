@@ -1374,6 +1374,7 @@ mod tests {
             quick_xml::de::from_str(S).unwrap();
     }
 
+    #[cfg(feature = "reqwest")]
     #[tokio::test]
     async fn test_build_bulk_delete_body() {
         let credential_provider = Arc::new(StaticCredentialProvider::new(

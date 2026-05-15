@@ -44,7 +44,7 @@ pub enum S3CopyIfNotExists {
     /// other than 412.
     ///
     /// Encoded as `header-with-status:<HEADER_NAME>:<HEADER_VALUE>:<STATUS>` ignoring whitespace
-    HeaderWithStatus(String, String, reqwest::StatusCode),
+    HeaderWithStatus(String, String, http::StatusCode),
     /// Native Amazon S3 supports copy if not exists through a multipart upload
     /// where the upload copies an existing object and is completed only if the
     /// new object does not already exist.
@@ -180,7 +180,7 @@ mod tests {
         let expected = Some(S3CopyIfNotExists::HeaderWithStatus(
             "key".to_owned(),
             "value".to_owned(),
-            reqwest::StatusCode::FORBIDDEN,
+            http::StatusCode::FORBIDDEN,
         ));
 
         assert_eq!(expected, S3CopyIfNotExists::from_str(input));
@@ -212,7 +212,7 @@ mod tests {
         let expected = Some(S3CopyIfNotExists::HeaderWithStatus(
             "key".to_owned(),
             "value".to_owned(),
-            reqwest::StatusCode::FORBIDDEN,
+            http::StatusCode::FORBIDDEN,
         ));
 
         const INPUTS: &[&str] = &[
