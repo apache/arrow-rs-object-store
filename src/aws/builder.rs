@@ -598,7 +598,7 @@ impl AmazonS3Builder {
         builder
     }
 
-    /// Parse available connection info form a well-known storage URL.
+    /// Parse available connection info from a well-known storage URL.
     ///
     /// The supported url schemes are:
     ///
@@ -608,14 +608,18 @@ impl AmazonS3Builder {
     /// - `https://<bucket>.s3.<region>.amazonaws.com`
     /// - `https://ACCOUNT_ID.r2.cloudflarestorage.com/bucket`
     ///
-    /// Note: Settings derived from the URL will override any others set on this builder
+    /// Note: Settings derived from the URL will override any others set on this builder.
+    ///
+    /// The path component is not retained by the returned [`AmazonS3`] store. Use
+    /// [`parse_url`](crate::parse_url) or [`ObjectStoreRegistry`](crate::registry::ObjectStoreRegistry)
+    /// when the path or prefix should be preserved alongside the store.
     ///
     /// # Example
     /// ```
     /// use object_store::aws::AmazonS3Builder;
     ///
     /// let s3 = AmazonS3Builder::from_env()
-    ///     .with_url("s3://bucket/path")
+    ///     .with_url("s3://bucket")
     ///     .build();
     /// ```
     pub fn with_url(mut self, url: impl Into<String>) -> Self {
