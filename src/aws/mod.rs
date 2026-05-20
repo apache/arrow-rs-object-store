@@ -199,6 +199,17 @@ impl ObjectStore for AmazonS3 {
                     r => r,
                 }
             }
+            (PutMode::Create, S3ConditionalPut::Header(k, v)) => {
+                match request.header(k, v).do_put().await {
+                    Err(e @ Error::NotModified { .. } | e @ Error::Precondition { .. }) => {
+                        Err(Error::AlreadyExists {
+                            path: location.to_string(),
+                            source: Box::new(e),
+                        })
+                    }
+                    r => r,
+                }
+            }
             (PutMode::Update(v), put) => {
                 let etag = v.e_tag.ok_or_else(|| Error::Generic {
                     store: STORE,
@@ -229,6 +240,12 @@ impl ObjectStore for AmazonS3 {
                     S3ConditionalPut::Disabled => Err(Error::NotImplemented {
                         operation:
                             "`put_opts` with mode `PutMode::Update` when conditional put is disabled"
+                                .into(),
+                        implementer: self.to_string(),
+                    }),
+                    S3ConditionalPut::Header(_, _) => Err(Error::NotImplemented {
+                        operation:
+                            "`put_opts` with mode `PutMode::Update` when conditional put uses a custom header"
                                 .into(),
                         implementer: self.to_string(),
                     }),
@@ -517,14 +534,79 @@ mod tests {
     use crate::ObjectStoreExt;
     use crate::client::SpawnedReqwestConnector;
     use crate::client::get::GetClient;
+    use crate::client::mock_server::MockServer;
     use crate::client::retry::RetryContext;
     use crate::integration::*;
     use crate::tests::*;
     use base64::Engine;
     use base64::prelude::BASE64_STANDARD;
     use http::HeaderMap;
+    use http::Response;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
+
+    fn mock_s3_store(mock: &MockServer, conditional_put: S3ConditionalPut) -> AmazonS3 {
+        AmazonS3Builder::new()
+            .with_bucket_name("bucket")
+            .with_region("us-east-1")
+            .with_endpoint(mock.url().to_string())
+            .with_allow_http(true)
+            .with_skip_signature(true)
+            .with_conditional_put(conditional_put)
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn put_create_uses_custom_conditional_header() {
+        let mock = MockServer::new().await;
+        mock.push_fn(|req| {
+            assert_eq!(req.method(), Method::PUT);
+            assert_eq!(req.headers().get("x-oss-forbid-overwrite").unwrap(), "true");
+
+            Response::builder()
+                .status(200)
+                .header("etag", "\"test-etag\"")
+                .body(String::new())
+                .unwrap()
+        });
+
+        let store = mock_s3_store(
+            &mock,
+            S3ConditionalPut::Header("x-oss-forbid-overwrite".into(), "true".into()),
+        );
+
+        store
+            .put_opts(&Path::from("test"), "hello".into(), PutMode::Create.into())
+            .await
+            .unwrap();
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn put_create_custom_conditional_header_conflict_is_already_exists() {
+        let mock = MockServer::new().await;
+        mock.push_fn(|req| {
+            assert_eq!(req.headers().get("x-oss-forbid-overwrite").unwrap(), "true");
+
+            Response::builder()
+                .status(StatusCode::CONFLICT)
+                .body(String::new())
+                .unwrap()
+        });
+
+        let store = mock_s3_store(
+            &mock,
+            S3ConditionalPut::Header("x-oss-forbid-overwrite".into(), "true".into()),
+        );
+
+        let err = store
+            .put_opts(&Path::from("test"), "hello".into(), PutMode::Create.into())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::AlreadyExists { .. }));
+        mock.shutdown().await;
+    }
 
     #[tokio::test]
     async fn write_multipart_file_with_signature() {

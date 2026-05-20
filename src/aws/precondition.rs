@@ -127,6 +127,20 @@ pub enum S3ConditionalPut {
     #[default]
     ETagMatch,
 
+    /// Some S3-compatible stores support create-only put semantics through
+    /// custom headers.
+    ///
+    /// If set, [`PutMode::Create`] will perform a normal put operation with the
+    /// provided header pair.
+    ///
+    /// Encoded as `header:<HEADER_NAME>:<HEADER_VALUE>` ignoring whitespace
+    ///
+    /// For example `header: x-oss-forbid-overwrite: true`, would set the header
+    /// `x-oss-forbid-overwrite` to `true`.
+    ///
+    /// [`PutMode::Create`]: crate::PutMode::Create
+    Header(String, String),
+
     /// Disable `conditional put`
     Disabled,
 }
@@ -135,6 +149,7 @@ impl std::fmt::Display for S3ConditionalPut {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ETagMatch => write!(f, "etag"),
+            Self::Header(k, v) => write!(f, "header: {k}: {v}"),
             Self::Disabled => write!(f, "disabled"),
         }
     }
@@ -145,7 +160,16 @@ impl S3ConditionalPut {
         match s.trim() {
             "etag" => Some(Self::ETagMatch),
             "disabled" => Some(Self::Disabled),
-            _ => None,
+            _ => {
+                let (variant, value) = s.split_once(':')?;
+                match variant.trim() {
+                    "header" => {
+                        let (k, v) = value.split_once(':')?;
+                        Some(Self::Header(k.trim().to_string(), v.trim().to_string()))
+                    }
+                    _ => None,
+                }
+            }
         }
     }
 }
@@ -161,7 +185,7 @@ impl Parse for S3ConditionalPut {
 
 #[cfg(test)]
 mod tests {
-    use super::S3CopyIfNotExists;
+    use super::{S3ConditionalPut, S3CopyIfNotExists};
 
     #[test]
     fn parse_s3_copy_if_not_exists_header() {
@@ -228,6 +252,38 @@ mod tests {
 
         for input in INPUTS {
             assert_eq!(expected, S3CopyIfNotExists::from_str(input));
+        }
+    }
+
+    #[test]
+    fn parse_s3_conditional_put_header() {
+        let input = "header: x-oss-forbid-overwrite: true";
+        let expected = Some(S3ConditionalPut::Header(
+            "x-oss-forbid-overwrite".to_owned(),
+            "true".to_owned(),
+        ));
+
+        assert_eq!(expected, S3ConditionalPut::from_str(input));
+    }
+
+    #[test]
+    fn parse_s3_conditional_put_header_whitespace_invariant() {
+        let expected = Some(S3ConditionalPut::Header(
+            "x-oss-forbid-overwrite".to_owned(),
+            "true".to_owned(),
+        ));
+
+        const INPUTS: &[&str] = &[
+            "header:x-oss-forbid-overwrite:true",
+            "header: x-oss-forbid-overwrite:true",
+            "header: x-oss-forbid-overwrite: true",
+            "header : x-oss-forbid-overwrite: true",
+            "header : x-oss-forbid-overwrite : true",
+            "header : x-oss-forbid-overwrite : true ",
+        ];
+
+        for input in INPUTS {
+            assert_eq!(expected, S3ConditionalPut::from_str(input));
         }
     }
 }
