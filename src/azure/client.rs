@@ -166,6 +166,7 @@ pub(crate) struct AzureConfig {
     pub is_emulator: bool,
     pub skip_signature: bool,
     pub disable_tagging: bool,
+    pub skip_invalid_paths: bool,
     pub client_options: ClientOptions,
 }
 
@@ -1008,7 +1009,7 @@ impl ListClient for Arc<AzureClient> {
         }
 
         Ok(PaginatedListResult {
-            result: to_list_result(response, prefix)?,
+            result: to_list_result(response, prefix, self.config.skip_invalid_paths)?,
             page_token: token,
         })
     }
@@ -1025,13 +1026,17 @@ struct ListResultInternal {
     pub blobs: Blobs,
 }
 
-fn to_list_result(value: ListResultInternal, prefix: Option<&str>) -> Result<ListResult> {
+fn to_list_result(
+    value: ListResultInternal,
+    prefix: Option<&str>,
+    skip_invalid_paths: bool,
+) -> Result<ListResult> {
     let prefix = prefix.unwrap_or_default();
     let common_prefixes = value
         .blobs
         .blob_prefix
         .into_iter()
-        .map(|x| Ok(Path::parse(x.name)?))
+        .filter_map(|x| parse_list_path(x.name, skip_invalid_paths).transpose())
         .collect::<Result<_>>()?;
 
     let objects = value
@@ -1045,13 +1050,21 @@ fn to_list_result(value: ListResultInternal, prefix: Option<&str>) -> Result<Lis
             !matches!(blob.properties.resource_type.as_ref(), Some(typ) if typ == "directory")
                 && blob.name.len() > prefix.len()
         })
-        .map(ObjectMeta::try_from)
+        .filter_map(|blob| blob_to_object_meta(blob, skip_invalid_paths).transpose())
         .collect::<Result<_>>()?;
 
     Ok(ListResult {
         common_prefixes,
         objects,
     })
+}
+
+fn parse_list_path(path: String, skip_invalid_paths: bool) -> Result<Option<Path>> {
+    match Path::parse(path) {
+        Ok(path) => Ok(Some(path)),
+        Err(_) if skip_invalid_paths => Ok(None),
+        Err(source) => Err(source.into()),
+    }
 }
 
 /// Collection of blobs and potentially shared prefixes returned from list requests.
@@ -1087,14 +1100,26 @@ impl TryFrom<Blob> for ObjectMeta {
     type Error = crate::Error;
 
     fn try_from(value: Blob) -> Result<Self> {
-        Ok(Self {
-            location: Path::parse(value.name)?,
-            last_modified: value.properties.last_modified,
-            size: value.properties.content_length,
-            e_tag: value.properties.e_tag,
-            version: None, // For consistency with S3 and GCP which don't include this
-        })
+        match blob_to_object_meta(value, false)? {
+            Some(meta) => Ok(meta),
+            None => unreachable!("invalid paths are not skipped"),
+        }
     }
+}
+
+fn blob_to_object_meta(value: Blob, skip_invalid_paths: bool) -> Result<Option<ObjectMeta>> {
+    let location = match parse_list_path(value.name, skip_invalid_paths)? {
+        Some(location) => location,
+        None => return Ok(None),
+    };
+
+    Ok(Some(ObjectMeta {
+        location,
+        last_modified: value.properties.last_modified,
+        size: value.properties.content_length,
+        e_tag: value.properties.e_tag,
+        version: None, // For consistency with S3 and GCP which don't include this
+    }))
 }
 
 /// Properties associated with individual blobs. The actual list
@@ -1184,6 +1209,60 @@ mod tests {
     use bytes::Bytes;
     use regex::bytes::Regex;
     use reqwest::Client;
+
+    fn list_response_with_invalid_paths() -> ListResultInternal {
+        const S: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<EnumerationResults ServiceEndpoint=\"https://account.blob.core.windows.net/\" ContainerName=\"container\">
+    <Blobs>
+        <BlobPrefix>
+            <Name>valid-prefix/</Name>
+        </BlobPrefix>
+        <BlobPrefix>
+            <Name>invalid//prefix/</Name>
+        </BlobPrefix>
+        <Blob>
+            <Name>valid.txt</Name>
+            <Properties>
+                <Last-Modified>Thu, 01 Jul 2021 10:44:59 GMT</Last-Modified>
+                <Content-Length>8</Content-Length>
+                <Content-Type>text/plain</Content-Type>
+            </Properties>
+        </Blob>
+        <Blob>
+            <Name>invalid//blob.txt</Name>
+            <Properties>
+                <Last-Modified>Thu, 01 Jul 2021 10:44:59 GMT</Last-Modified>
+                <Content-Length>8</Content-Length>
+                <Content-Type>text/plain</Content-Type>
+            </Properties>
+        </Blob>
+    </Blobs>
+    <NextMarker />
+</EnumerationResults>";
+
+        quick_xml::de::from_str(S).unwrap()
+    }
+
+    #[test]
+    fn list_result_errors_on_invalid_paths_by_default() {
+        let err = to_list_result(list_response_with_invalid_paths(), None, false).unwrap_err();
+        assert!(err.to_string().contains("empty path segment"));
+    }
+
+    #[test]
+    fn list_result_can_skip_invalid_paths() {
+        let result = to_list_result(list_response_with_invalid_paths(), None, true).unwrap();
+
+        assert_eq!(
+            result.common_prefixes,
+            vec![Path::parse("valid-prefix").unwrap()]
+        );
+        assert_eq!(result.objects.len(), 1);
+        assert_eq!(
+            result.objects[0].location,
+            Path::parse("valid.txt").unwrap()
+        );
+    }
 
     #[test]
     fn deserde_azure() {
@@ -1389,6 +1468,7 @@ mod tests {
             is_emulator: false,
             skip_signature: false,
             disable_tagging: false,
+            skip_invalid_paths: false,
             client_options: Default::default(),
         };
 
