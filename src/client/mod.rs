@@ -61,6 +61,9 @@ pub use crypto::*;
 
 use ::http::header::{HeaderMap, HeaderValue};
 use async_trait::async_trait;
+//kdn KEEP?
+use reqwest::dns::Resolve;
+use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -336,6 +339,14 @@ impl Certificate {
     }
 }
 
+#[derive(Clone)]
+struct DynResolver(Arc<dyn Resolve>);
+
+impl std::fmt::Debug for DynResolver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DynResolver")
+    }
+}
 /// HTTP client configuration for remote object stores
 #[derive(Debug, Clone)]
 pub struct ClientOptions {
@@ -363,6 +374,7 @@ pub struct ClientOptions {
     http1_only: ConfigValue<bool>,
     http2_only: ConfigValue<bool>,
     randomize_addresses: ConfigValue<bool>,
+    dns_resolver: Option<DynResolver>,
 }
 
 impl Default for ClientOptions {
@@ -402,6 +414,7 @@ impl Default for ClientOptions {
             http1_only: true.into(),
             http2_only: Default::default(),
             randomize_addresses: true.into(),
+            dns_resolver: Default::default(),
         }
     }
 }
@@ -796,6 +809,15 @@ impl ClientOptions {
         self
     }
 
+    /// Override the default DNS resolver with a custom [`reqwest::dns::Resolve`] implementation.
+    ///
+    /// When set, [`ClientConfigKey::RandomizeAddresses`] will be ignored. The provided
+    /// resolver is responsible for resolving, shuffling, caching, etc.
+    pub fn with_dns_resolver(mut self, resolver: Arc<dyn Resolve>) -> Self {
+        self.dns_resolver = Some(DynResolver(resolver));
+        self
+    }
+
     /// Get the default headers defined through `ClientOptions::with_default_headers`
     pub fn get_default_headers(&self) -> Option<&HeaderMap> {
         self.default_headers.as_ref()
@@ -928,7 +950,9 @@ impl ClientOptions {
         // size of objects.
         builder = builder.no_gzip().no_brotli().no_zstd().no_deflate();
 
-        if self.randomize_addresses.get()? {
+        if let Some(resolver) = &self.dns_resolver {
+            builder = builder.dns_resolver2(resolver.0.clone());
+        } else if self.randomize_addresses.get()? {
             builder = builder.dns_resolver(Arc::new(dns::ShuffleResolver));
         }
 
