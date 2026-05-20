@@ -170,6 +170,8 @@ pub struct MicrosoftAzureBuilder {
     use_fabric_endpoint: ConfigValue<bool>,
     /// When set to true, skips tagging objects
     disable_tagging: ConfigValue<bool>,
+    /// When set to true, skips invalid paths returned by list operations
+    skip_invalid_paths: ConfigValue<bool>,
     /// Fabric token service url
     fabric_token_service_url: Option<String>,
     /// Fabric workload host
@@ -352,6 +354,13 @@ pub enum AzureConfigKey {
     /// - `disable_tagging`
     DisableTagging,
 
+    /// Skips invalid paths returned by list operations
+    ///
+    /// Supported keys:
+    /// - `azure_skip_invalid_paths`
+    /// - `skip_invalid_paths`
+    SkipInvalidPaths,
+
     /// Fabric token service url
     ///
     /// Supported keys:
@@ -406,6 +415,7 @@ impl AsRef<str> for AzureConfigKey {
             Self::SkipSignature => "azure_skip_signature",
             Self::ContainerName => "azure_container_name",
             Self::DisableTagging => "azure_disable_tagging",
+            Self::SkipInvalidPaths => "azure_skip_invalid_paths",
             Self::FabricTokenServiceUrl => "azure_fabric_token_service_url",
             Self::FabricWorkloadHost => "azure_fabric_workload_host",
             Self::FabricSessionToken => "azure_fabric_session_token",
@@ -458,6 +468,7 @@ impl FromStr for AzureConfigKey {
             "azure_skip_signature" | "skip_signature" => Ok(Self::SkipSignature),
             "azure_container_name" | "container_name" => Ok(Self::ContainerName),
             "azure_disable_tagging" | "disable_tagging" => Ok(Self::DisableTagging),
+            "azure_skip_invalid_paths" | "skip_invalid_paths" => Ok(Self::SkipInvalidPaths),
             "azure_fabric_token_service_url" | "fabric_token_service_url" => {
                 Ok(Self::FabricTokenServiceUrl)
             }
@@ -586,6 +597,7 @@ impl MicrosoftAzureBuilder {
             }
             AzureConfigKey::ContainerName => self.container_name = Some(value.into()),
             AzureConfigKey::DisableTagging => self.disable_tagging.parse(value),
+            AzureConfigKey::SkipInvalidPaths => self.skip_invalid_paths.parse(value),
             AzureConfigKey::FabricTokenServiceUrl => {
                 self.fabric_token_service_url = Some(value.into())
             }
@@ -631,6 +643,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::Client(key) => self.client_options.get_config_value(key),
             AzureConfigKey::ContainerName => self.container_name.clone(),
             AzureConfigKey::DisableTagging => Some(self.disable_tagging.to_string()),
+            AzureConfigKey::SkipInvalidPaths => Some(self.skip_invalid_paths.to_string()),
             AzureConfigKey::FabricTokenServiceUrl => self.fabric_token_service_url.clone(),
             AzureConfigKey::FabricWorkloadHost => self.fabric_workload_host.clone(),
             AzureConfigKey::FabricSessionToken => self.fabric_session_token.clone(),
@@ -898,6 +911,13 @@ impl MicrosoftAzureBuilder {
         self
     }
 
+    /// If set to `true`, listing operations will skip objects and prefixes
+    /// whose names cannot be parsed as [`crate::Path`].
+    pub fn with_skip_invalid_paths(mut self, skip_invalid_paths: bool) -> Self {
+        self.skip_invalid_paths = skip_invalid_paths.into();
+        self
+    }
+
     /// The [`HttpConnector`] to use
     ///
     /// On non-WASM32 platforms uses [`reqwest`] by default, on WASM32 platforms must be provided
@@ -1045,6 +1065,7 @@ impl MicrosoftAzureBuilder {
             skip_signature: self.skip_signature.get()?,
             container,
             disable_tagging: self.disable_tagging.get()?,
+            skip_invalid_paths: self.skip_invalid_paths.get()?,
             retry_config: self.retry_config,
             client_options: self.client_options,
             service: storage_url,
@@ -1243,6 +1264,7 @@ mod tests {
             ("azure_client_id", azure_client_id),
             ("azure_storage_account_name", azure_storage_account_name),
             ("azure_storage_token", azure_storage_token),
+            ("azure_skip_invalid_paths", "true"),
         ]);
 
         let builder = options
@@ -1253,6 +1275,7 @@ mod tests {
         assert_eq!(builder.client_id.unwrap(), azure_client_id);
         assert_eq!(builder.account_name.unwrap(), azure_storage_account_name);
         assert_eq!(builder.bearer_token.unwrap(), azure_storage_token);
+        assert!(builder.skip_invalid_paths.get().unwrap());
     }
 
     #[test]
