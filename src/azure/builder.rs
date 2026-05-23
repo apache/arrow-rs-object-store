@@ -23,7 +23,9 @@ use crate::azure::credential::{
 use crate::azure::{AzureCredential, AzureCredentialProvider, MicrosoftAzure, STORE};
 use crate::client::{HttpConnector, TokenCredentialProvider, http_connector};
 use crate::config::ConfigValue;
-use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
+use crate::{
+    Capabilities, ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider,
+};
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -180,6 +182,8 @@ pub struct MicrosoftAzureBuilder {
     fabric_cluster_identifier: Option<String>,
     /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
+    /// Capabilities to advertise for this store instance
+    capabilities: Option<Capabilities>,
 }
 
 /// Configuration keys for [`MicrosoftAzureBuilder`]
@@ -906,6 +910,17 @@ impl MicrosoftAzureBuilder {
         self
     }
 
+    /// Override the [`Capabilities`] advertised by this store.
+    ///
+    /// By default the store reports `ordered_listing: true` because Azure Blob
+    /// Storage returns list results in lexicographic order. Use this method if
+    /// you are connecting to an endpoint whose behaviour differs from the
+    /// standard Azure Blob Storage API.
+    pub fn with_capabilities(mut self, capabilities: Capabilities) -> Self {
+        self.capabilities = capabilities;
+        self
+    }
+
     /// Configure a connection to container with given name on Microsoft Azure Blob store.
     pub fn build(mut self) -> Result<MicrosoftAzure> {
         if let Some(url) = self.url.take() {
@@ -1054,7 +1069,10 @@ impl MicrosoftAzureBuilder {
         let http_client = http.connect(&config.client_options)?;
         let client = Arc::new(AzureClient::new(config, http_client));
 
-        Ok(MicrosoftAzure { client })
+        Ok(MicrosoftAzure {
+            client,
+            capabilities: self.capabilities,
+        })
     }
 }
 

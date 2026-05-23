@@ -398,6 +398,18 @@ pub async fn put_get_delete_list(storage: &DynObjectStore) {
         assert_eq!(actual, expected, "{prefix:?} - {offset:?}");
     }
 
+    if storage.capabilities().ordered_listing {
+        let actual: Vec<_> = storage
+            .list(None)
+            .map_ok(|x| x.location)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        let mut sorted_files = files.clone();
+        sorted_files.sort();
+        assert_eq!(actual, sorted_files);
+    }
+
     // Test bulk delete
     let paths = vec![
         Path::from("a/a.file"),

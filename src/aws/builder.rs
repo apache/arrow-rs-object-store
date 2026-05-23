@@ -26,7 +26,9 @@ use crate::aws::{
 };
 use crate::client::{HttpConnector, TokenCredentialProvider, http_connector};
 use crate::config::ConfigValue;
-use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
+use crate::{
+    Capabilities, ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider,
+};
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use itertools::Itertools;
@@ -193,6 +195,8 @@ pub struct AmazonS3Builder {
     request_payer: ConfigValue<RequesterPayer>,
     /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
+    /// Capabilities to advertise for this store instance
+    capabilities: Option<Capabilities>,
 }
 
 /// Configuration keys for [`AmazonS3Builder`]
@@ -1105,6 +1109,17 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Override the [`Capabilities`] advertised by this store.
+    ///
+    /// By default the store reports `ordered_listing: true` because S3
+    /// `ListObjectsV2` returns results in lexicographic order. Use this
+    /// method if you are connecting to an S3-compatible endpoint whose
+    /// behaviour differs from the standard S3 API.
+    pub fn with_capabilities(mut self, capabilities: Capabilities) -> Self {
+        self.capabilities = Some(capabilities);
+        self
+    }
+
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
     pub fn build(mut self) -> Result<AmazonS3> {
@@ -1286,7 +1301,10 @@ impl AmazonS3Builder {
         let http_client = http.connect(&config.client_options)?;
         let client = Arc::new(S3Client::new(config, http_client));
 
-        Ok(AmazonS3 { client })
+        Ok(AmazonS3 {
+            client,
+            capabilities: self.capabilities,
+        })
     }
 }
 

@@ -742,6 +742,38 @@ pub type MultipartId = String;
 ///  };
 /// ```
 ///
+/// [`Capabilities`]: crate::Capabilities
+
+/// Optional features supported by an [`ObjectStore`] implementation.
+///
+/// Obtain the capabilities of a store by calling [`ObjectStore::capabilities`].
+/// All fields default to `false`; a store sets a field to `true` when it
+/// natively supports that feature.
+///
+/// The struct is `#[non_exhaustive]` so that new capability flags can be added
+/// in future versions without breaking existing code.
+///
+/// # Example
+///
+/// ```
+/// # use object_store::{ObjectStore, memory::InMemory};
+/// let store = InMemory::new();
+/// let caps = store.capabilities();
+/// if caps.ordered_listing {
+///     println!("list() results are in lexicographic order — no need to sort");
+/// }
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Capabilities {
+    /// If `true`, [`ObjectStore::list`] and [`ObjectStore::list_with_offset`]
+    /// return results in ascending lexicographic order by [`Path`].
+    ///
+    /// When this is `true`, callers can rely on the ordering and avoid
+    /// buffering results solely for the purpose of sorting them.
+    pub ordered_listing: bool,
+}
+
 #[async_trait]
 pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Save the provided `payload` to `location` with the given options
@@ -1131,6 +1163,14 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
         self.delete(from).await?;
         Ok(())
     }
+
+    /// Return the [`Capabilities`] supported by this store.
+    ///
+    /// All capability fields default to `false`. Individual store
+    /// implementations override this to advertise the features they support.
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::default()
+    }
 }
 
 macro_rules! as_ref_impl {
@@ -1201,6 +1241,10 @@ macro_rules! as_ref_impl {
                 options: RenameOptions,
             ) -> Result<()> {
                 self.as_ref().rename_opts(from, to, options).await
+            }
+
+            fn capabilities(&self) -> Capabilities {
+                self.as_ref().capabilities()
             }
         }
     };

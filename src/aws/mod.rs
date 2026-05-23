@@ -43,11 +43,7 @@ use crate::client::list::{ListClient, ListClientExt};
 use crate::multipart::{MultipartStore, PartId};
 use crate::signer::Signer;
 use crate::util::STRICT_ENCODE_SET;
-use crate::{
-    CopyMode, CopyOptions, Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, Path, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult,
-    Result, UploadPart,
-};
+use crate::{Capabilities, CopyMode, CopyOptions, Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore, Path, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart};
 
 static TAGS_HEADER: HeaderName = HeaderName::from_static("x-amz-tagging");
 static COPY_SOURCE_HEADER: HeaderName = HeaderName::from_static("x-amz-copy-source");
@@ -79,10 +75,17 @@ use crate::client::parts::Parts;
 use crate::list::{PaginatedListOptions, PaginatedListResult, PaginatedListStore};
 pub use credential::{AwsAuthorizer, AwsCredential};
 
+pub fn get_default_capabilities() -> Capabilities {
+    Capabilities {
+        ordered_listing: false,
+    }
+}
+
 /// Interface for [Amazon S3](https://aws.amazon.com/s3/).
 #[derive(Debug, Clone)]
 pub struct AmazonS3 {
     client: Arc<S3Client>,
+    capabilities: Option<Capabilities>,
 }
 
 impl std::fmt::Display for AmazonS3 {
@@ -412,6 +415,10 @@ impl ObjectStore for AmazonS3 {
                 }
             }
         }
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.capabilities.or_else(get_default_capabilities)
     }
 }
 

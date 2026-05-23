@@ -29,9 +29,9 @@ use parking_lot::RwLock;
 use crate::multipart::{MultipartStore, PartId};
 use crate::util::InvalidGetRange;
 use crate::{
-    Attributes, GetRange, GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutResult, Result,
-    UpdateVersion, UploadPart, path::Path,
+    Attributes, Capabilities, GetRange, GetResult, GetResultPayload, ListResult, MultipartId,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutResult,
+    Result, UpdateVersion, UploadPart, path::Path,
 };
 use crate::{CopyMode, CopyOptions, GetOptions, PutPayload};
 
@@ -411,6 +411,12 @@ impl ObjectStore for InMemory {
         }
 
         Ok(())
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities {
+            ordered_listing: true,
+        }
     }
 }
 

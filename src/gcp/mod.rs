@@ -42,9 +42,9 @@ use crate::client::CredentialProvider;
 use crate::gcp::credential::GCSAuthorizer;
 use crate::signer::Signer;
 use crate::{
-    GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart, multipart::PartId,
-    path::Path,
+    Capabilities, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
+    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart,
+    multipart::PartId, path::Path,
 };
 use async_trait::async_trait;
 use client::GoogleCloudStorageClient;
@@ -66,6 +66,13 @@ mod credential;
 
 const STORE: &str = "GCS";
 
+pub fn get_default_capabilities() -> Capabilities {
+    Capabilities {
+        // GCS XML API returns results in lexicographic order.
+        ordered_listing: true,
+    }
+}
+
 /// [`CredentialProvider`] for [`GoogleCloudStorage`]
 pub type GcpCredentialProvider = Arc<dyn CredentialProvider<Credential = GcpCredential>>;
 
@@ -77,6 +84,7 @@ pub type GcpSigningCredentialProvider =
 #[derive(Debug, Clone)]
 pub struct GoogleCloudStorage {
     client: Arc<GoogleCloudStorageClient>,
+    capabilities: Option<Capabilities>,
 }
 
 impl std::fmt::Display for GoogleCloudStorage {
@@ -222,6 +230,10 @@ impl ObjectStore for GoogleCloudStorage {
         } = options;
 
         self.client.copy_request(from, to, mode).await
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.capabilities.or_else(get_default_capabilities)
     }
 }
 

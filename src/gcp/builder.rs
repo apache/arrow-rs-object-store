@@ -26,7 +26,7 @@ use crate::gcp::{
     GcpCredential, GcpCredentialProvider, GcpSigningCredential, GcpSigningCredentialProvider,
     GoogleCloudStorage, STORE, credential,
 };
-use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
+use crate::{Capabilities, ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -120,6 +120,8 @@ pub struct GoogleCloudStorageBuilder {
     signing_credentials: Option<GcpSigningCredentialProvider>,
     /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
+    /// Capabilities to advertise for this store instance
+    capabilities: Option<Capabilities>,
 }
 
 /// Configuration keys for [`GoogleCloudStorageBuilder`]
@@ -534,6 +536,17 @@ impl GoogleCloudStorageBuilder {
         self
     }
 
+    /// Override the [`Capabilities`] advertised by this store.
+    ///
+    /// By default the store reports `ordered_listing: true` because GCS
+    /// returns list results in lexicographic order. Use this method if you
+    /// are connecting to an endpoint whose behaviour differs from the
+    /// standard GCS API.
+    pub fn with_capabilities(mut self, capabilities: Capabilities) -> Self {
+        self.capabilities = Some(capabilities);
+        self
+    }
+
     /// Configure a connection to Google Cloud Storage, returning a
     /// new [`GoogleCloudStorage`] and consuming `self`
     pub fn build(mut self) -> Result<GoogleCloudStorage> {
@@ -669,6 +682,7 @@ impl GoogleCloudStorageBuilder {
         let http_client = http.connect(&config.client_options)?;
         Ok(GoogleCloudStorage {
             client: Arc::new(GoogleCloudStorageClient::new(config, http_client)?),
+            capabilities: self.capabilities,
         })
     }
 }
