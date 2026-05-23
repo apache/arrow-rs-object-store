@@ -24,13 +24,13 @@
 //!
 //! They are intended solely for testing purposes.
 
+use crate::capabilities::Capability;
 use crate::list::{PaginatedListOptions, PaginatedListStore};
 use crate::multipart::MultipartStore;
 use crate::path::Path;
 use crate::{
-    Attribute, Attributes, Capability, DynObjectStore, Error, GetOptions, GetRange,
-    MultipartUpload, ObjectStore, ObjectStoreExt, PutMode, PutPayload, UpdateVersion,
-    WriteMultipart,
+    Attribute, Attributes, DynObjectStore, Error, GetOptions, GetRange, MultipartUpload,
+    ObjectStore, ObjectStoreExt, PutMode, PutPayload, UpdateVersion, WriteMultipart,
 };
 use bytes::Bytes;
 use futures_util::stream::FuturesUnordered;

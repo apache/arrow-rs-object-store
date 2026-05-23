@@ -26,12 +26,13 @@ use chrono::{DateTime, Utc};
 use futures_util::{StreamExt, stream::BoxStream};
 use parking_lot::RwLock;
 
+use crate::capabilities::Capability;
 use crate::multipart::{MultipartStore, PartId};
 use crate::util::InvalidGetRange;
 use crate::{
-    Attributes, Capabilities, Capability, GetRange, GetResult, GetResultPayload, ListResult,
-    MultipartId, MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOptions,
-    PutOptions, PutResult, Result, UpdateVersion, UploadPart, path::Path,
+    Attributes, Capabilities, GetRange, GetResult, GetResultPayload, ListResult, MultipartId,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutResult,
+    Result, UpdateVersion, UploadPart, path::Path,
 };
 use crate::{CopyMode, CopyOptions, GetOptions, PutPayload};
 
