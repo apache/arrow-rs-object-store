@@ -26,7 +26,9 @@ use crate::gcp::{
     GcpCredential, GcpCredentialProvider, GcpSigningCredential, GcpSigningCredentialProvider,
     GoogleCloudStorage, STORE, credential,
 };
-use crate::{Capabilities, ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
+use crate::{
+    Capabilities, ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider,
+};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Arc;

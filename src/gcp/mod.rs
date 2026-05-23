@@ -37,7 +37,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::CopyOptions;
 use crate::client::CredentialProvider;
 use crate::gcp::credential::GCSAuthorizer;
 use crate::signer::Signer;
@@ -46,6 +45,7 @@ use crate::{
     ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart,
     multipart::PartId, path::Path,
 };
+use crate::{Capability, CopyOptions};
 use async_trait::async_trait;
 use client::GoogleCloudStorageClient;
 use futures_util::stream::{BoxStream, StreamExt};
@@ -66,12 +66,7 @@ mod credential;
 
 const STORE: &str = "GCS";
 
-pub fn get_default_capabilities() -> Capabilities {
-    Capabilities {
-        // GCS XML API returns results in lexicographic order.
-        ordered_listing: true,
-    }
-}
+const DEFAULT_CAPABILITIES: Capabilities = Capabilities::new([Capability::OrderedListing]);
 
 /// [`CredentialProvider`] for [`GoogleCloudStorage`]
 pub type GcpCredentialProvider = Arc<dyn CredentialProvider<Credential = GcpCredential>>;
@@ -233,7 +228,7 @@ impl ObjectStore for GoogleCloudStorage {
     }
 
     fn capabilities(&self) -> Capabilities {
-        self.capabilities.or_else(get_default_capabilities)
+        self.capabilities.or(DEFAULT_CAPABILITIES)
     }
 }
 

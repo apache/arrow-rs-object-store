@@ -24,9 +24,9 @@
 //! Unused blocks will automatically be dropped after 7 days.
 //!
 use crate::{
-    Capabilities, CopyMode, CopyOptions, GetOptions, GetResult, ListResult, MultipartId,
-    MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload,
-    PutResult, Result, UploadPart,
+    Capabilities, Capability, CopyMode, CopyOptions, GetOptions, GetResult, ListResult,
+    MultipartId, MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions,
+    PutPayload, PutResult, Result, UploadPart,
     multipart::{MultipartStore, PartId},
     path::Path,
     signer::Signer,
@@ -57,12 +57,7 @@ pub use builder::{AzureConfigKey, MicrosoftAzureBuilder, split_sas};
 pub use credential::AzureCredential;
 
 const STORE: &str = "MicrosoftAzure";
-
-pub fn get_default_capabilities() -> Capabilities {
-    Capabilities {
-        ordered_listing: true,
-    }
-}
+const DEFAULT_CAPABILITIES: Capabilities = Capabilities::new([Capability::OrderedListing]);
 
 /// Interface for [Microsoft Azure Blob Storage](https://azure.microsoft.com/en-us/services/storage/blobs/).
 #[derive(Debug)]
@@ -189,7 +184,7 @@ impl ObjectStore for MicrosoftAzure {
     }
 
     fn capabilities(&self) -> Capabilities {
-        self.capabilities.or_else(get_default_capabilities)
+        self.capabilities.or(DEFAULT_CAPABILITIES)
     }
 }
 

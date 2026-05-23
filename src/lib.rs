@@ -571,6 +571,7 @@ pub use client::{
     ClientConfigKey, ClientOptions, CredentialProvider, StaticCredentialProvider,
     backoff::BackoffConfig, retry::RetryConfig,
 };
+use std::collections::HashSet;
 
 #[cfg(all(feature = "cloud", not(target_arch = "wasm32")))]
 pub use client::Certificate;
@@ -742,38 +743,6 @@ pub type MultipartId = String;
 ///  };
 /// ```
 ///
-/// [`Capabilities`]: crate::Capabilities
-
-/// Optional features supported by an [`ObjectStore`] implementation.
-///
-/// Obtain the capabilities of a store by calling [`ObjectStore::capabilities`].
-/// All fields default to `false`; a store sets a field to `true` when it
-/// natively supports that feature.
-///
-/// The struct is `#[non_exhaustive]` so that new capability flags can be added
-/// in future versions without breaking existing code.
-///
-/// # Example
-///
-/// ```
-/// # use object_store::{ObjectStore, memory::InMemory};
-/// let store = InMemory::new();
-/// let caps = store.capabilities();
-/// if caps.ordered_listing {
-///     println!("list() results are in lexicographic order — no need to sort");
-/// }
-/// ```
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct Capabilities {
-    /// If `true`, [`ObjectStore::list`] and [`ObjectStore::list_with_offset`]
-    /// return results in ascending lexicographic order by [`Path`].
-    ///
-    /// When this is `true`, callers can rely on the ordering and avoid
-    /// buffering results solely for the purpose of sorting them.
-    pub ordered_listing: bool,
-}
-
 #[async_trait]
 pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Save the provided `payload` to `location` with the given options
@@ -1169,7 +1138,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// All capability fields default to `false`. Individual store
     /// implementations override this to advertise the features they support.
     fn capabilities(&self) -> Capabilities {
-        Capabilities::default()
+        Capabilities::new([])
     }
 }
 
@@ -2189,6 +2158,88 @@ impl From<Error> for std::io::Error {
             _ => std::io::ErrorKind::Other,
         };
         Self::new(kind, e)
+    }
+}
+
+/// An individual capability that an [`ObjectStore`] implementation may support.
+///
+/// Used together with [`Capabilities`] to advertise optional backend features.
+/// Obtain the set of supported capabilities via [`ObjectStore::capabilities`].
+///
+/// # String representation
+///
+/// Each variant has a stable kebab-case string form accessible via
+/// [`Capability::as_str`] and parseable via [`Capability::from_str`].
+/// These strings are intended for configuration, logging, and serialisation.
+#[derive(Hash, Eq, PartialEq)]
+pub enum Capability {
+    /// List results from [`ObjectStore::list`] and
+    /// [`ObjectStore::list_with_offset`] are returned in ascending
+    /// lexicographic order by [`Path`].
+    ///
+    /// When this capability is present, callers may rely on the ordering and
+    /// avoid buffering all results solely for sorting purposes.
+    OrderedListing,
+}
+
+impl Capability {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Capability::OrderedListing => "ordered-listing",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "ordered-listing" => Some(Capability::OrderedListing),
+            _ => None,
+        }
+    }
+}
+
+/// Optional features supported by an [`ObjectStore`] implementation.
+///
+/// Obtain the capabilities of a store by calling [`ObjectStore::capabilities`].
+/// All fields default to `false`; a store sets a field to `true` when it
+/// natively supports that feature.
+///
+/// The struct is `#[non_exhaustive]` so that new capability flags can be added
+/// in future versions without breaking existing code.
+///
+/// # Example
+///
+/// ```
+/// # use object_store::{ObjectStore, memory::InMemory, Capability};
+/// let store = InMemory::new();
+/// if store.capabilities().has(Capability::OrderedListing) {
+///     println!("list() results are in lexicographic order — no need to sort");
+/// }
+/// ```
+pub struct Capabilities {
+    supported: HashSet<Capability>,
+}
+
+impl Capabilities {
+    /// Create a [`Capabilities`] from an explicit list of supported [`Capability`] values.
+    ///
+    /// Any capability not included in `capabilities` is considered unsupported.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use object_store::{Capabilities, Capability};
+    /// let caps = Capabilities::new([Capability::OrderedListing]);
+    /// assert!(caps.has(Capability::OrderedListing));
+    /// ```
+    pub fn new(capabilities: impl IntoIterator<Item = Capability>) -> Self {
+        Self {
+            supported: capabilities.into_iter().collect(),
+        }
+    }
+
+    /// Returns `true` if the given [`Capability`] is supported by this store.
+    pub fn has(&self, capability: Capability) -> bool {
+        self.supported.contains(&capability)
     }
 }
 
