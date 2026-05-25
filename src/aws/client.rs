@@ -578,7 +578,9 @@ impl S3Client {
             .header(CONTENT_TYPE, "application/xml")
             .body(body)
             .with_aws_sigv4(credential.authorizer(), Some(digest.as_ref()))
-            .send_retry(&self.config.retry_config)
+            .retryable(&self.config.retry_config)
+            .retry_error_body(true)
+            .send()
             .await
             .map_err(|source| Error::DeleteObjectsRequest {
                 source,
