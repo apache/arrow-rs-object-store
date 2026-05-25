@@ -21,7 +21,7 @@ use std::time::Duration;
 use humantime::{format_duration, parse_duration};
 use reqwest::header::HeaderValue;
 
-use crate::{Capabilities, Capability, Error, Result};
+use crate::{Capabilities, Error, Result};
 
 /// Provides deferred parsing of a value
 ///

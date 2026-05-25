@@ -917,7 +917,7 @@ impl MicrosoftAzureBuilder {
     /// you are connecting to an endpoint whose behaviour differs from the
     /// standard Azure Blob Storage API.
     pub fn with_capabilities(mut self, capabilities: Capabilities) -> Self {
-        self.capabilities = capabilities;
+        self.capabilities = Some(capabilities);
         self
     }
 

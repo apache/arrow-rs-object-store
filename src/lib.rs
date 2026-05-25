@@ -571,7 +571,6 @@ pub use client::{
     ClientConfigKey, ClientOptions, CredentialProvider, StaticCredentialProvider,
     backoff::BackoffConfig, retry::RetryConfig,
 };
-use std::collections::HashSet;
 
 #[cfg(all(feature = "cloud", not(target_arch = "wasm32")))]
 pub use client::Certificate;

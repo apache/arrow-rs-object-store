@@ -1,3 +1,6 @@
+//! Capability advertisement for [`ObjectStore`](crate::ObjectStore) implementations.
+//!
+//! See [`Capabilities`] and [`Capability`] for details.
 use crate::Error;
 use std::collections::HashSet;
 
@@ -5,12 +8,6 @@ use std::collections::HashSet;
 ///
 /// Used together with [`Capabilities`] to advertise optional backend features.
 /// Obtain the set of supported capabilities via [`ObjectStore::capabilities`].
-///
-/// # String representation
-///
-/// Each variant has a stable kebab-case string form accessible via
-/// [`Capability::as_str`] and parseable via [`Capability::from_str`].
-/// These strings are intended for configuration, logging, and serialisation.
 #[derive(Hash, Eq, PartialEq, Copy, Clone, Debug)]
 pub enum Capability {
     /// List results from [`ObjectStore::list`] and
@@ -61,7 +58,7 @@ impl Capability {
 ///     println!("list() results are in lexicographic order — no need to sort");
 /// }
 /// ```
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Default)]
 pub struct Capabilities {
     supported: HashSet<Capability>,
 }
@@ -89,6 +86,7 @@ impl Capabilities {
         self.supported.contains(&capability)
     }
 
+    /// Parses a comma-separated list of capability names into a [`Capabilities`].
     pub fn from_str(s: &str) -> crate::Result<Self> {
         let mut capabilities: Vec<Capability> = Vec::new();
         for mut cap in s.split(',') {
@@ -107,6 +105,19 @@ impl Capabilities {
             }
         }
         Ok(Self::new(capabilities))
+    }
+}
+
+impl std::fmt::Display for Capabilities {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut iter = self.supported.iter();
+        if let Some(cap) = iter.next() {
+            write!(f, "{}", cap.as_str())?;
+        }
+        for cap in iter {
+            write!(f, ", {}", cap.as_str())?;
+        }
+        Ok(())
     }
 }
 

@@ -261,6 +261,7 @@ impl Default for GoogleCloudStorageBuilder {
             skip_signature: Default::default(),
             signing_credentials: None,
             http_connector: None,
+            capabilities: None,
         }
     }
 }

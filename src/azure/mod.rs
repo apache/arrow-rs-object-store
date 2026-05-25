@@ -57,7 +57,10 @@ pub use builder::{AzureConfigKey, MicrosoftAzureBuilder, split_sas};
 pub use credential::AzureCredential;
 
 const STORE: &str = "MicrosoftAzure";
-const DEFAULT_CAPABILITIES: Capabilities = Capabilities::new([Capability::OrderedListing]);
+
+fn get_default_capabilities() -> Capabilities {
+    Capabilities::new([Capability::OrderedListing])
+}
 
 /// Interface for [Microsoft Azure Blob Storage](https://azure.microsoft.com/en-us/services/storage/blobs/).
 #[derive(Debug)]
@@ -184,7 +187,7 @@ impl ObjectStore for MicrosoftAzure {
     }
 
     fn capabilities(&self) -> Capabilities {
-        self.capabilities.or(DEFAULT_CAPABILITIES)
+        self.capabilities.clone().unwrap_or_else(get_default_capabilities)
     }
 }
 
@@ -369,6 +372,7 @@ mod tests {
         tagging(
             Arc::new(MicrosoftAzure {
                 client: Arc::clone(&integration.client),
+                capabilities: None,
             }),
             validate,
             |p| {

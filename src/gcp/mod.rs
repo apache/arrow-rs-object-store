@@ -66,7 +66,9 @@ mod credential;
 
 const STORE: &str = "GCS";
 
-const DEFAULT_CAPABILITIES: Capabilities = Capabilities::new([Capability::OrderedListing]);
+fn get_default_capabilities() -> Capabilities {
+    Capabilities::new([Capability::OrderedListing])
+}
 
 /// [`CredentialProvider`] for [`GoogleCloudStorage`]
 pub type GcpCredentialProvider = Arc<dyn CredentialProvider<Credential = GcpCredential>>;
@@ -228,7 +230,7 @@ impl ObjectStore for GoogleCloudStorage {
     }
 
     fn capabilities(&self) -> Capabilities {
-        self.capabilities.or(DEFAULT_CAPABILITIES)
+        self.capabilities.clone().unwrap_or_else(get_default_capabilities)
     }
 }
 
