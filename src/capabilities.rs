@@ -1,8 +1,27 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
 //! Capability advertisement for [`ObjectStore`](crate::ObjectStore) implementations.
 //!
 //! See [`Capabilities`] and [`Capability`] for details.
 use crate::Error;
 use std::collections::HashSet;
+
+const ORDERED_LISTING: &str = "ordered-listing";
 
 /// An individual capability that an [`ObjectStore`] implementation may support.
 ///
@@ -19,23 +38,27 @@ pub enum Capability {
     OrderedListing,
 }
 
-impl Capability {
-    /// Returns the stable kebab-case string representation of this capability.
-    ///
-    /// The returned string can be round-tripped through [`Capability::from_str`].
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Capability::OrderedListing => "ordered-listing",
-        }
-    }
+impl std::str::FromStr for Capability {
+    type Err = Error;
 
     /// Parses a capability from its kebab-case string representation.
     ///
     /// Returns `None` if `s` does not correspond to any known capability.
-    pub fn from_str(s: &str) -> Option<Self> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "ordered-listing" => Some(Capability::OrderedListing),
-            _ => None,
+            ORDERED_LISTING => Ok(Self::OrderedListing),
+            cap => Err(Error::Generic {
+                store: "Config",
+                source: format!("invalid capability: {cap}").into(),
+            }),
+        }
+    }
+}
+
+impl std::fmt::Display for Capability {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OrderedListing => write!(f, "{}", ORDERED_LISTING),
         }
     }
 }
@@ -85,24 +108,20 @@ impl Capabilities {
     pub fn has(&self, capability: Capability) -> bool {
         self.supported.contains(&capability)
     }
+}
+
+impl std::str::FromStr for Capabilities {
+    type Err = Error;
 
     /// Parses a comma-separated list of capability names into a [`Capabilities`].
-    pub fn from_str(s: &str) -> crate::Result<Self> {
+    fn from_str(s: &str) -> crate::Result<Self> {
         let mut capabilities: Vec<Capability> = Vec::new();
         for mut cap in s.split(',') {
             cap = cap.trim();
             if cap.is_empty() {
                 continue;
             }
-            match Capability::from_str(cap) {
-                Some(cap) => capabilities.push(cap),
-                None => {
-                    return Err(Error::Generic {
-                        store: "Config",
-                        source: format!("invalid capability: {cap}").into(),
-                    });
-                }
-            }
+            capabilities.push(cap.parse::<Capability>()?);
         }
         Ok(Self::new(capabilities))
     }
@@ -112,10 +131,10 @@ impl std::fmt::Display for Capabilities {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut iter = self.supported.iter();
         if let Some(cap) = iter.next() {
-            write!(f, "{}", cap.as_str())?;
+            write!(f, "{}", cap)?;
         }
         for cap in iter {
-            write!(f, ", {}", cap.as_str())?;
+            write!(f, ", {}", cap)?;
         }
         Ok(())
     }
@@ -127,27 +146,20 @@ mod tests {
 
     #[test]
     fn test_capability() {
-        assert_eq!(Capability::OrderedListing.as_str(), "ordered-listing");
+        assert_eq!(format!("{}", Capability::OrderedListing), "ordered-listing");
         assert_eq!(
             Capability::OrderedListing,
-            Capability::from_str("ordered-listing").unwrap()
+            "ordered-listing".parse::<Capability>().unwrap()
         );
-        assert_eq!(Capability::from_str("invalid").is_some(), false);
+        assert_eq!("invalid".parse::<Capability>().is_ok(), false);
     }
 
     #[test]
     fn test_capabilities() {
-        assert_eq!(Capabilities::from_str("invalid").is_err(), true);
+        assert_eq!("invalid".parse::<Capabilities>().is_err(), true);
+        assert_eq!("".parse::<Capabilities>().unwrap().has(Capability::OrderedListing), false);
         assert_eq!(
-            Capabilities::from_str("")
-                .unwrap()
-                .has(Capability::OrderedListing),
-            false
-        );
-        assert_eq!(
-            Capabilities::from_str("ordered-listing")
-                .unwrap()
-                .has(Capability::OrderedListing),
+            "ordered-listing".parse::<Capabilities>().unwrap().has(Capability::OrderedListing),
             true
         );
     }
