@@ -206,6 +206,10 @@ jobs:
         run: cargo build --target wasm32-unknown-unknown
       - name: Install wasm32-wasip1
         run: rustup target add wasm32-wasip1
+      - name: Use reqwest 0.13.2 for wasm32-wasip1
+        # TODO: reqwest 0.13.3+ doesn't compile against wasm32-wasip1, as it no
+        # longer uses the web (JS) backend.
+        run: cargo update -p reqwest --precise 0.13.2
       - name: Build wasm32-wasip1
         run: cargo build --features aws-no-crypto,gcp-no-crypto,azure-no-crypto,http-no-crypto,ring --target wasm32-wasip1
       - name: Install wasm-pack
