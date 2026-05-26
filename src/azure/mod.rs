@@ -187,7 +187,9 @@ impl ObjectStore for MicrosoftAzure {
     }
 
     fn capabilities(&self) -> Capabilities {
-        self.capabilities.clone().unwrap_or_else(get_default_capabilities)
+        self.capabilities
+            .clone()
+            .unwrap_or_else(get_default_capabilities)
     }
 }
 
