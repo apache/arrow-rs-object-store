@@ -54,19 +54,19 @@ jobs:
       - name: Run clippy with fs features
         run: cargo clippy --no-default-features --features fs -- -D warnings
       - name: Run clippy with aws-no-crypto feature
-        run: cargo clippy --features aws-no-crypto -- -D warnings
+        run: cargo clippy --features aws-no-crypto,reqwest/rustls -- -D warnings
       - name: Run clippy with aws feature
         run: cargo clippy --features aws -- -D warnings
       - name: Run clippy with gcp-no-crypto feature
-        run: cargo clippy --features gcp-no-crypto -- -D warnings
+        run: cargo clippy --features gcp-no-crypto,reqwest/rustls -- -D warnings
       - name: Run clippy with gcp feature
         run: cargo clippy --features gcp -- -D warnings
       - name: Run clippy with azure-no-crypto feature
-        run: cargo clippy --features azure-no-crypto -- -D warnings
+        run: cargo clippy --features azure-no-crypto,reqwest/rustls -- -D warnings
       - name: Run clippy with azure feature
         run: cargo clippy --features azure -- -D warnings
       - name: Run clippy with http-no-crypto feature
-        run: cargo clippy --features http-no-crypto -- -D warnings
+        run: cargo clippy --features http-no-crypto,reqwest/rustls -- -D warnings
       - name: Run clippy with http feature
         run: cargo clippy --features http -- -D warnings
       - name: Run clippy with integration feature
@@ -151,7 +151,7 @@ jobs:
       - name: Configure Azurite (Azure emulation)
         # the magical connection string is from
         # https://docs.microsoft.com/en-us/azure/storage/common/storage-use-azurite?tabs=visual-studio#http-connection-strings
-        # We skip the API version check to prevent breaks related to differences between Azurite, Azure and the azure-cli, 
+        # We skip the API version check to prevent breaks related to differences between Azurite, Azure and the azure-cli,
         # see https://github.com/Azure/Azurite/issues/2623
         run: |
           echo "AZURITE_CONTAINER=$(docker run -d -p 10000:10000 -p 10001:10001 -p 10002:10002 mcr.microsoft.com/azure-storage/azurite azurite -l /data --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck)" >> $GITHUB_ENV
