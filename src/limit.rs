@@ -17,7 +17,11 @@
 
 //! An object store that limits the maximum concurrency of the wrapped implementation
 
-use crate::{BoxStream, Capabilities, CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta, ObjectStore, Path, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result, StreamExt, UploadPart};
+use crate::{
+    BoxStream, Capabilities, CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult,
+    MultipartUpload, ObjectMeta, ObjectStore, Path, PutMultipartOptions, PutOptions, PutPayload,
+    PutResult, RenameOptions, Result, StreamExt, UploadPart,
+};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::{FutureExt, Stream};

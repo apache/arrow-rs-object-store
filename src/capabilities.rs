@@ -157,9 +157,17 @@ mod tests {
     #[test]
     fn test_capabilities() {
         assert_eq!("invalid".parse::<Capabilities>().is_err(), true);
-        assert_eq!("".parse::<Capabilities>().unwrap().has(Capability::OrderedListing), false);
         assert_eq!(
-            "ordered-listing".parse::<Capabilities>().unwrap().has(Capability::OrderedListing),
+            "".parse::<Capabilities>()
+                .unwrap()
+                .has(Capability::OrderedListing),
+            false
+        );
+        assert_eq!(
+            "ordered-listing"
+                .parse::<Capabilities>()
+                .unwrap()
+                .has(Capability::OrderedListing),
             true
         );
     }
