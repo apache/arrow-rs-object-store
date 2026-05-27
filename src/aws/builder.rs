@@ -433,7 +433,7 @@ pub enum AmazonS3ConfigKey {
 
     /// Disable bulk delete (`DeleteObjects`, `POST /?delete`)
     ///
-    /// If set to `true`, [`delete`](crate::ObjectStore::delete) and
+    /// If set to `true`, [`delete`](crate::ObjectStoreExt::delete) and
     /// [`delete_stream`](crate::ObjectStore::delete_stream) will issue
     /// single-object `DELETE /key` requests instead of the bulk `DeleteObjects`
     /// API (`POST /?delete`). Use this for S3-compatible providers that do not
@@ -1037,7 +1037,7 @@ impl AmazonS3Builder {
         self
     }
 
-    /// If set to `true`, [`delete`](crate::ObjectStore::delete) and
+    /// If set to `true`, [`delete`](crate::ObjectStoreExt::delete) and
     /// [`delete_stream`](crate::ObjectStore::delete_stream) will issue
     /// single-object `DELETE /key` requests instead of the bulk `DeleteObjects`
     /// API (`POST /?delete`).
