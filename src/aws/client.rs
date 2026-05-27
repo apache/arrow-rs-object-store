@@ -205,6 +205,7 @@ pub(crate) struct S3Config {
     pub sign_payload: bool,
     pub skip_signature: bool,
     pub disable_tagging: bool,
+    pub disable_bulk_delete: bool,
     pub checksum: Option<Checksum>,
     pub copy_if_not_exists: Option<S3CopyIfNotExists>,
     pub conditional_put: S3ConditionalPut,
@@ -613,6 +614,16 @@ impl S3Client {
         Ok(results)
     }
 
+    /// Make a single-object S3 Delete request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObject.html>
+    ///
+    /// Unlike [`bulk_delete_request`](Self::bulk_delete_request), this issues a
+    /// plain `DELETE /key` request, which is part of the core S3 API and is
+    /// supported by every S3-compatible provider.
+    pub(crate) async fn delete_request(&self, path: &Path) -> Result<()> {
+        self.request(Method::DELETE, path).send().await?;
+        Ok(())
+    }
+
     /// Make an S3 Copy request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html>
     pub(crate) fn copy_request<'a>(&'a self, from: &Path, to: &'a Path) -> Request<'a> {
         let source = format!("{}/{}", self.config.bucket, encode_path(from));
@@ -1006,10 +1017,13 @@ fn encode_path(path: &Path) -> PercentEncode<'_> {
 mod tests {
     use super::*;
     use crate::GetOptions;
+    use crate::ObjectStore;
+    use crate::aws::AmazonS3;
     use crate::client::HttpClient;
     use crate::client::get::GetClient;
     use crate::client::mock_server::MockServer;
     use crate::client::retry::RetryContext;
+    use futures_util::{StreamExt, TryStreamExt};
     use http::Response;
     use http::header::{AUTHORIZATION, CONTENT_LENGTH};
     use hyper::Request;
@@ -1047,6 +1061,7 @@ mod tests {
             retry_config: Default::default(),
             sign_payload: false,
             disable_tagging: false,
+            disable_bulk_delete: false,
             checksum: None,
             copy_if_not_exists: None,
             conditional_put: Default::default(),
@@ -1102,6 +1117,7 @@ mod tests {
             retry_config: Default::default(),
             sign_payload: false,
             disable_tagging: false,
+            disable_bulk_delete: false,
             checksum: None,
             copy_if_not_exists: None,
             conditional_put: Default::default(),
@@ -1150,6 +1166,55 @@ mod tests {
         let result = client.bulk_delete_request(vec![Path::from("test")]).await;
 
         assert!(result.is_ok());
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_single_object_delete_request() {
+        let mock = MockServer::new().await;
+        mock.push_fn(|req| {
+            // A single-object delete must use `DELETE /key`, not the bulk
+            // `POST /?delete` (DeleteObjects) API.
+            assert_eq!(req.method(), Method::DELETE);
+            assert_eq!(req.uri().path(), "/test-bucket/test");
+            assert!(req.uri().query().is_none());
+            Response::builder().status(204).body(String::new()).unwrap()
+        });
+
+        let config = default_headers_config(&mock);
+        let client = S3Client::new(config, HttpClient::new(reqwest::Client::new()));
+        let result = client.delete_request(&Path::from("test")).await;
+
+        assert!(result.is_ok());
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_disable_bulk_delete_uses_single_object_delete() {
+        let mock = MockServer::new().await;
+        // Two objects deleted => two single-object DELETE requests, no bulk POST.
+        for _ in 0..2 {
+            mock.push_fn(|req| {
+                assert_eq!(req.method(), Method::DELETE);
+                assert!(req.uri().path().starts_with("/test-bucket/"));
+                assert!(req.uri().query().is_none());
+                Response::builder().status(204).body(String::new()).unwrap()
+            });
+        }
+
+        let mut config = default_headers_config(&mock);
+        config.disable_bulk_delete = true;
+        let store = AmazonS3 {
+            client: Arc::new(S3Client::new(
+                config,
+                HttpClient::new(reqwest::Client::new()),
+            )),
+        };
+
+        let locations =
+            futures_util::stream::iter(vec![Ok(Path::from("foo")), Ok(Path::from("bar"))]).boxed();
+        let deleted: Vec<_> = store.delete_stream(locations).try_collect().await.unwrap();
+        assert_eq!(deleted.len(), 2);
         mock.shutdown().await;
     }
 

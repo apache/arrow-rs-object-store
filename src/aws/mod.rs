@@ -264,6 +264,25 @@ impl ObjectStore for AmazonS3 {
         locations: BoxStream<'static, Result<Path>>,
     ) -> BoxStream<'static, Result<Path>> {
         let client = Arc::clone(&self.client);
+
+        // Some S3-compatible providers do not implement
+        // the bulk `DeleteObjects` API (`POST /?delete`). When bulk delete is
+        // disabled, fall back to parallel single-object `DELETE /key` requests,
+        // which are part of the core S3 API supported by every provider.
+        if client.config.disable_bulk_delete {
+            return locations
+                .map(move |location| {
+                    let client = Arc::clone(&client);
+                    async move {
+                        let location = location?;
+                        client.delete_request(&location).await?;
+                        Ok(location)
+                    }
+                })
+                .buffered(20)
+                .boxed();
+        }
+
         locations
             .try_chunks(1_000)
             .map(move |locations| {
