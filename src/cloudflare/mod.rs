@@ -65,42 +65,73 @@
 //! | `CLOUDFLARE_API_TOKEN` or `CF_API_TOKEN` | Cloudflare API token |
 //! | `CLOUDFLARE_API_BASE_URL` | Custom API base URL (for testing) |
 
+/// Cloudflare Workers R2 bindings (available on `wasm32` with `cloudflare-workers` feature)
+#[cfg(all(
+    target_arch = "wasm32",
+    target_os = "unknown",
+    feature = "cloudflare-workers"
+))]
+pub mod workers;
+
+// REST API implementation (requires the `cloudflare` feature which brings in `cloud`)
+#[cfg(feature = "cloudflare")]
 use crate::client::CredentialProvider;
+#[cfg(feature = "cloudflare")]
 use crate::client::get::GetClientExt;
+#[cfg(feature = "cloudflare")]
 use crate::client::list::{ListClient, ListClientExt};
+#[cfg(feature = "cloudflare")]
 use crate::client::parts::Parts;
+#[cfg(feature = "cloudflare")]
 use crate::list::{PaginatedListOptions, PaginatedListResult, PaginatedListStore};
+#[cfg(feature = "cloudflare")]
 use crate::multipart::{MultipartStore, PartId};
+#[cfg(feature = "cloudflare")]
 use crate::path::Path;
+#[cfg(feature = "cloudflare")]
 use crate::{
     CopyMode, CopyOptions, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
     ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
     UploadPart,
 };
+#[cfg(feature = "cloudflare")]
 use async_trait::async_trait;
+#[cfg(feature = "cloudflare")]
 use futures_util::stream::BoxStream;
+#[cfg(feature = "cloudflare")]
 use futures_util::StreamExt;
+#[cfg(feature = "cloudflare")]
 use std::sync::Arc;
 
+#[cfg(feature = "cloudflare")]
 use client::CloudflareClient;
+#[cfg(feature = "cloudflare")]
 pub use builder::{CloudflareConfigKey, CloudflareR2Builder};
+#[cfg(feature = "cloudflare")]
 pub use credential::CloudflareCredential;
 
+#[cfg(feature = "cloudflare")]
 mod builder;
+#[cfg(feature = "cloudflare")]
 pub(crate) mod client;
+#[cfg(feature = "cloudflare")]
 pub(crate) mod credential;
 
+#[cfg(feature = "cloudflare")]
 const STORE: &str = "CloudflareR2";
 
 /// [`CredentialProvider`] for [`CloudflareR2`]
+#[cfg(feature = "cloudflare")]
 pub type CloudflareCredentialProvider = Arc<dyn CredentialProvider<Credential = CloudflareCredential>>;
 
 /// Interface for [Cloudflare R2](https://developers.cloudflare.com/r2/) using the REST API.
+#[cfg(feature = "cloudflare")]
 #[derive(Debug)]
 pub struct CloudflareR2 {
     client: Arc<CloudflareClient>,
 }
 
+#[cfg(feature = "cloudflare")]
 impl CloudflareR2 {
     /// Returns the [`CloudflareCredentialProvider`] used by [`CloudflareR2`]
     pub fn credentials(&self) -> &CloudflareCredentialProvider {
@@ -108,6 +139,7 @@ impl CloudflareR2 {
     }
 }
 
+#[cfg(feature = "cloudflare")]
 impl std::fmt::Display for CloudflareR2 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -119,12 +151,14 @@ impl std::fmt::Display for CloudflareR2 {
     }
 }
 
+#[cfg(feature = "cloudflare")]
 #[derive(Debug)]
 struct CloudflareMultipartUpload {
     state: Arc<UploadState>,
     part_idx: usize,
 }
 
+#[cfg(feature = "cloudflare")]
 #[derive(Debug)]
 struct UploadState {
     client: Arc<CloudflareClient>,
@@ -133,6 +167,7 @@ struct UploadState {
     parts: Parts,
 }
 
+#[cfg(feature = "cloudflare")]
 #[async_trait]
 impl MultipartUpload for CloudflareMultipartUpload {
     fn put_part(&mut self, payload: PutPayload) -> UploadPart {
@@ -165,6 +200,7 @@ impl MultipartUpload for CloudflareMultipartUpload {
     }
 }
 
+#[cfg(feature = "cloudflare")]
 #[async_trait]
 impl ObjectStore for CloudflareR2 {
     async fn put_opts(
@@ -245,6 +281,7 @@ impl ObjectStore for CloudflareR2 {
     }
 }
 
+#[cfg(feature = "cloudflare")]
 #[async_trait]
 impl MultipartStore for CloudflareR2 {
     async fn create_multipart(&self, path: &Path) -> Result<MultipartId> {
@@ -277,6 +314,7 @@ impl MultipartStore for CloudflareR2 {
     }
 }
 
+#[cfg(feature = "cloudflare")]
 #[async_trait]
 impl PaginatedListStore for CloudflareR2 {
     async fn list_paginated(

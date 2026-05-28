@@ -541,7 +541,7 @@
 pub mod aws;
 #[cfg(feature = "azure")]
 pub mod azure;
-#[cfg(feature = "cloudflare")]
+#[cfg(any(feature = "cloudflare", feature = "cloudflare-workers"))]
 pub mod cloudflare;
 #[cfg(feature = "tokio")]
 pub mod buffered;
