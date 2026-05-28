@@ -151,7 +151,7 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(feature = "gcp")]
+    #[cfg(any(feature = "gcp", feature = "cloudflare"))]
     pub(crate) fn bearer_auth(mut self, token: &str) -> Self {
         let value = HeaderValue::try_from(format!("Bearer {token}"));
         match (value, &mut self.request) {
@@ -177,7 +177,7 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(any(test, feature = "aws", feature = "gcp", feature = "azure"))]
+    #[cfg(any(test, feature = "aws", feature = "gcp", feature = "azure", feature = "cloudflare"))]
     pub(crate) fn query<T: serde::Serialize + ?Sized>(mut self, query: &T) -> Self {
         let mut error = None;
         if let Ok(ref mut req) = self.request {
