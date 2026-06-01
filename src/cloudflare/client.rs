@@ -22,7 +22,7 @@
 
 use crate::client::builder::HttpRequestBuilder;
 use crate::client::get::GetClient;
-use crate::client::header::{HeaderConfig, get_put_result};
+use crate::client::header::HeaderConfig;
 use crate::client::list::ListClient;
 use crate::client::retry::{RetryContext, RetryExt};
 use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpResponse};
@@ -255,8 +255,16 @@ impl Request<'_> {
 
     async fn do_put(self) -> Result<PutResult> {
         let response = self.send().await?;
-        Ok(get_put_result(response.headers(), VERSION_HEADER)
-            .map_err(|source| Error::Metadata { source })?)
+        let headers = response.headers();
+        let e_tag = headers
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        let version = headers
+            .get(VERSION_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        Ok(PutResult { e_tag, version })
     }
 }
 
@@ -476,8 +484,12 @@ impl CloudflareClient {
             .await
             .map_err(|source| Error::MultipartRequest { source })?;
 
-        Ok(get_put_result(response.headers(), VERSION_HEADER)
-            .map_err(|source| Error::Metadata { source })?)
+        let headers = response.headers();
+        let e_tag = headers
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        Ok(PutResult { e_tag, version: None })
     }
 
     /// Abort a multipart upload
@@ -591,12 +603,11 @@ impl ListClient for Arc<CloudflareClient> {
 
         let objects = body
             .result
-            .objects
             .into_iter()
             .map(|o| {
                 Ok(ObjectMeta {
                     location: crate::path::Path::parse(&o.key)?,
-                    last_modified: o.uploaded,
+                    last_modified: o.last_modified,
                     size: o.size,
                     e_tag: o.etag,
                     version: None,
@@ -604,17 +615,18 @@ impl ListClient for Arc<CloudflareClient> {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let common_prefixes = body
-            .result
-            .delimited_prefixes
-            .into_iter()
-            .map(|p| crate::path::Path::parse(p))
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-
-        let page_token = if body.result.truncated {
-            body.result.cursor
-        } else {
-            None
+        // Extract pagination cursor and delimited prefixes from result_info
+        let (page_token, common_prefixes) = match body.result_info {
+            Some(ri) => {
+                let cursor = ri.cursors.and_then(|c| c.after);
+                let prefixes = ri
+                    .delimited
+                    .into_iter()
+                    .map(|p| crate::path::Path::parse(p))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                (cursor, prefixes)
+            }
+            None => (None, Vec::new()),
         };
 
         Ok(PaginatedListResult {
@@ -631,27 +643,33 @@ impl ListClient for Arc<CloudflareClient> {
 
 #[derive(Debug, Deserialize)]
 struct R2ListResponse {
-    result: R2ListResult,
+    result: Vec<R2Object>,
     #[allow(dead_code)]
     success: bool,
+    /// Cursor for pagination (returned in response_info or as top-level field)
+    #[serde(default)]
+    result_info: Option<R2ResultInfo>,
 }
 
 #[derive(Debug, Deserialize)]
-struct R2ListResult {
-    objects: Vec<R2Object>,
+struct R2ResultInfo {
     #[serde(default)]
-    truncated: bool,
+    cursors: Option<R2Cursors>,
     #[serde(default)]
-    cursor: Option<String>,
+    delimited: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct R2Cursors {
     #[serde(default)]
-    delimited_prefixes: Vec<String>,
+    after: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct R2Object {
     key: String,
     size: u64,
-    uploaded: DateTime<Utc>,
+    last_modified: DateTime<Utc>,
     #[serde(default)]
     etag: Option<String>,
 }
