@@ -110,6 +110,20 @@ pub enum CloudflareConfigKey {
     /// - `endpoint`
     ApiBaseUrl,
 
+    /// The access key ID for S3-compatible API (used for presigned URLs)
+    ///
+    /// Supported keys:
+    /// - `access_key_id`
+    /// - `cloudflare_access_key_id`
+    AccessKeyId,
+
+    /// The secret access key for S3-compatible API (used for presigned URLs)
+    ///
+    /// Supported keys:
+    /// - `secret_access_key`
+    /// - `cloudflare_secret_access_key`
+    SecretAccessKey,
+
     /// Client configuration key
     Client(ClientConfigKey),
 }
@@ -121,6 +135,8 @@ impl AsRef<str> for CloudflareConfigKey {
             Self::BucketName => "bucket_name",
             Self::ApiToken => "api_token",
             Self::ApiBaseUrl => "api_base_url",
+            Self::AccessKeyId => "access_key_id",
+            Self::SecretAccessKey => "secret_access_key",
             Self::Client(key) => key.as_ref(),
         }
     }
@@ -135,6 +151,8 @@ impl FromStr for CloudflareConfigKey {
             "bucket_name" | "bucket" | "cloudflare_bucket_name" => Ok(Self::BucketName),
             "api_token" | "cloudflare_api_token" | "token" => Ok(Self::ApiToken),
             "api_base_url" | "endpoint" => Ok(Self::ApiBaseUrl),
+            "access_key_id" | "cloudflare_access_key_id" => Ok(Self::AccessKeyId),
+            "secret_access_key" | "cloudflare_secret_access_key" => Ok(Self::SecretAccessKey),
             _ => match s.parse::<ClientConfigKey>() {
                 Ok(key) => Ok(Self::Client(key)),
                 Err(_) => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
@@ -167,6 +185,10 @@ pub struct CloudflareR2Builder {
     api_token: Option<String>,
     /// Custom API base URL
     api_base_url: Option<String>,
+    /// Access key ID for S3-compatible API (presigned URLs)
+    access_key_id: Option<String>,
+    /// Secret access key for S3-compatible API (presigned URLs)
+    secret_access_key: Option<String>,
     /// Retry config
     retry_config: RetryConfig,
     /// Client options
@@ -215,6 +237,18 @@ impl CloudflareR2Builder {
             builder.api_base_url = Some(base_url);
         }
 
+        if let Ok(access_key_id) = std::env::var("CLOUDFLARE_R2_ACCESS_KEY_ID")
+            .or_else(|_| std::env::var("CF_R2_ACCESS_KEY_ID"))
+        {
+            builder.access_key_id = Some(access_key_id);
+        }
+
+        if let Ok(secret_access_key) = std::env::var("CLOUDFLARE_R2_SECRET_ACCESS_KEY")
+            .or_else(|_| std::env::var("CF_R2_SECRET_ACCESS_KEY"))
+        {
+            builder.secret_access_key = Some(secret_access_key);
+        }
+
         builder
     }
 
@@ -239,6 +273,22 @@ impl CloudflareR2Builder {
     /// Set a custom API base URL (for testing or self-hosted)
     pub fn with_api_base_url(mut self, api_base_url: impl Into<String>) -> Self {
         self.api_base_url = Some(api_base_url.into());
+        self
+    }
+
+    /// Set the access key ID for S3-compatible API (used for presigned URLs)
+    ///
+    /// This is the R2 access key ID from the Cloudflare dashboard API tokens page.
+    pub fn with_access_key_id(mut self, access_key_id: impl Into<String>) -> Self {
+        self.access_key_id = Some(access_key_id.into());
+        self
+    }
+
+    /// Set the secret access key for S3-compatible API (used for presigned URLs)
+    ///
+    /// This is the R2 secret access key from the Cloudflare dashboard API tokens page.
+    pub fn with_secret_access_key(mut self, secret_access_key: impl Into<String>) -> Self {
+        self.secret_access_key = Some(secret_access_key.into());
         self
     }
 
@@ -273,6 +323,8 @@ impl CloudflareR2Builder {
             CloudflareConfigKey::BucketName => self.bucket_name = Some(value.into()),
             CloudflareConfigKey::ApiToken => self.api_token = Some(value.into()),
             CloudflareConfigKey::ApiBaseUrl => self.api_base_url = Some(value.into()),
+            CloudflareConfigKey::AccessKeyId => self.access_key_id = Some(value.into()),
+            CloudflareConfigKey::SecretAccessKey => self.secret_access_key = Some(value.into()),
             CloudflareConfigKey::Client(key) => {
                 self.client_options = self.client_options.with_config(key, value)
             }
@@ -338,7 +390,11 @@ impl CloudflareR2Builder {
             credentials
         } else {
             let api_token = self.api_token.ok_or(Error::MissingApiToken)?;
-            Arc::new(StaticCloudflareCredentialProvider::new(api_token))
+            Arc::new(StaticCloudflareCredentialProvider::with_s3_credentials(
+                api_token,
+                self.access_key_id,
+                self.secret_access_key,
+            ))
         };
 
         let config = CloudflareConfig {

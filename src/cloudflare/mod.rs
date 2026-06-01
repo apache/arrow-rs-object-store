@@ -89,6 +89,8 @@ use crate::multipart::{MultipartStore, PartId};
 #[cfg(feature = "cloudflare")]
 use crate::path::Path;
 #[cfg(feature = "cloudflare")]
+use crate::signer::Signer;
+#[cfg(feature = "cloudflare")]
 use crate::{
     CopyMode, CopyOptions, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
     ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
@@ -101,7 +103,13 @@ use futures_util::stream::BoxStream;
 #[cfg(feature = "cloudflare")]
 use futures_util::StreamExt;
 #[cfg(feature = "cloudflare")]
+use reqwest::Method;
+#[cfg(feature = "cloudflare")]
 use std::sync::Arc;
+#[cfg(feature = "cloudflare")]
+use std::time::Duration;
+#[cfg(feature = "cloudflare")]
+use url::Url;
 
 #[cfg(feature = "cloudflare")]
 use client::CloudflareClient;
@@ -323,5 +331,42 @@ impl PaginatedListStore for CloudflareR2 {
         opts: PaginatedListOptions,
     ) -> Result<PaginatedListResult> {
         self.client.list_request(prefix, opts).await
+    }
+}
+
+#[cfg(feature = "cloudflare")]
+#[async_trait]
+impl Signer for CloudflareR2 {
+    /// Generate a presigned URL for the given method and path using Cloudflare's
+    /// S3-compatible endpoint (`{account_id}.r2.cloudflarestorage.com`) with AWS SigV4 signing.
+    ///
+    /// This requires `access_key_id` and `secret_access_key` to be configured on the builder.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # use object_store::{cloudflare::CloudflareR2Builder, path::Path, signer::Signer};
+    /// # use reqwest::Method;
+    /// # use std::time::Duration;
+    /// #
+    /// let r2 = CloudflareR2Builder::new()
+    ///     .with_account_id("my-account-id")
+    ///     .with_bucket_name("my-bucket")
+    ///     .with_api_token("my-api-token")
+    ///     .with_access_key_id("my-access-key-id")
+    ///     .with_secret_access_key("my-secret-access-key")
+    ///     .build()?;
+    ///
+    /// let url = r2.signed_url(
+    ///     Method::GET,
+    ///     &Path::from("some-folder/some-file.txt"),
+    ///     Duration::from_secs(60 * 60),
+    /// ).await?;
+    /// #     Ok(())
+    /// # }
+    /// ```
+    async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
+        self.client.signed_url(method, path, expires_in).await
     }
 }

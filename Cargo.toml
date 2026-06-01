@@ -85,7 +85,7 @@ futures-channel = {version = "0.3", features = ["sink"]}
 default = ["fs"]
 cloud = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/stream", "chrono/serde", "base64", "rand", "ring", "http-body-util", "form_urlencoded", "serde_urlencoded", "tokio"]
 azure = ["cloud", "httparse"]
-cloudflare = ["cloud"]
+cloudflare = ["cloud", "aws"]
 cloudflare-workers = ["worker"]
 fs = ["walkdir", "tokio", "nix", "windows-sys"]
 gcp = ["cloud", "rustls-pki-types"]

@@ -20,6 +20,7 @@
 //! This uses the Cloudflare API v4 endpoints:
 //! `https://api.cloudflare.com/client/v4/accounts/{account_id}/r2/buckets/{bucket_name}/objects`
 
+use crate::aws::{AwsAuthorizer, AwsCredential};
 use crate::client::builder::HttpRequestBuilder;
 use crate::client::get::GetClient;
 use crate::client::header::HeaderConfig;
@@ -43,6 +44,8 @@ use http::header::{
 use http::{HeaderName, Method};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
+use url::Url;
 
 const VERSION_HEADER: &str = "etag";
 const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
@@ -515,6 +518,61 @@ impl CloudflareClient {
             .map_err(|source| Error::MultipartRequest { source })?;
 
         Ok(())
+    }
+
+    /// Generate a presigned URL using Cloudflare's S3-compatible endpoint with AWS SigV4 signing.
+    ///
+    /// The S3-compatible endpoint is: `https://{account_id}.r2.cloudflarestorage.com/{bucket}/{path}`
+    /// R2 uses region `"auto"` for SigV4 signing.
+    pub(crate) async fn signed_url(
+        &self,
+        method: Method,
+        path: &Path,
+        expires_in: Duration,
+    ) -> Result<Url> {
+        let credential = self.config.credentials.get_credential().await?;
+
+        let access_key_id = credential.access_key_id.as_deref().ok_or_else(|| {
+            crate::Error::Generic {
+                store: STORE,
+                source: "access_key_id is required for presigned URL generation. \
+                         Configure it via with_access_key_id() on the builder."
+                    .to_string()
+                    .into(),
+            }
+        })?;
+
+        let secret_access_key = credential.secret_access_key.as_deref().ok_or_else(|| {
+            crate::Error::Generic {
+                store: STORE,
+                source: "secret_access_key is required for presigned URL generation. \
+                         Configure it via with_secret_access_key() on the builder."
+                    .to_string()
+                    .into(),
+            }
+        })?;
+
+        // Build the S3-compatible URL for R2
+        let s3_url = format!(
+            "https://{}.r2.cloudflarestorage.com/{}/{}",
+            self.config.account_id, self.config.bucket_name, path
+        );
+
+        let mut url: Url = s3_url.parse().map_err(|e| crate::Error::Generic {
+            store: STORE,
+            source: format!("Unable to parse S3-compatible URL: {e}").into(),
+        })?;
+
+        let aws_credential = AwsCredential {
+            key_id: access_key_id.to_string(),
+            secret_key: secret_access_key.to_string(),
+            token: None,
+        };
+
+        let authorizer = AwsAuthorizer::new(&aws_credential, "s3", "auto");
+        authorizer.sign(method, &mut url, expires_in);
+
+        Ok(url)
     }
 }
 
