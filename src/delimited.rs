@@ -77,26 +77,22 @@ impl LineDelimiter {
 
         let is_escape = &mut self.is_escape;
         let is_quote = &mut self.is_quote;
-        let mut record_ends = val
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, v)| {
-                if *is_escape {
-                    *is_escape = false;
-                    None
-                } else if *v == ESCAPE {
-                    *is_escape = true;
-                    None
-                } else if *v == QUOTE {
-                    *is_quote = !*is_quote;
-                    None
-                } else if *is_quote {
-                    None
-                } else {
-                    (*v == NEWLINE).then_some(idx + 1)
-                }
-            })
-            .into_iter();
+        let mut record_ends = val.iter().enumerate().filter_map(|(idx, v)| {
+            if *is_escape {
+                *is_escape = false;
+                None
+            } else if *v == ESCAPE {
+                *is_escape = true;
+                None
+            } else if *v == QUOTE {
+                *is_quote = !*is_quote;
+                None
+            } else if *is_quote {
+                None
+            } else {
+                (*v == NEWLINE).then_some(idx + 1)
+            }
+        });
 
         let start_offset = match self.remainder.is_empty() {
             true => 0,
