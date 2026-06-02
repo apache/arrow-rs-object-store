@@ -670,7 +670,6 @@ impl GoogleCloudStorageBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures_executor::block_on;
     use std::collections::HashMap;
     use std::io::Write;
     use tempfile::NamedTempFile;
@@ -712,8 +711,8 @@ mod tests {
         assert_eq!(builder.bucket_name.unwrap(), google_bucket_name.as_str());
     }
 
-    #[test]
-    fn gcs_test_config_aliases() {
+    #[tokio::test]
+    async fn gcs_test_config_aliases() {
         // Service account path
         for alias in [
             "google_service_account",
@@ -752,7 +751,7 @@ mod tests {
                 .build()
                 .unwrap();
 
-            let credential = block_on(gcs.credentials().get_credential()).unwrap();
+            let credential = gcs.credentials().get_credential().await.unwrap();
             assert_eq!(credential.bearer, "test-token");
         }
     }
@@ -863,7 +862,9 @@ mod tests {
             google_bucket_name
         );
         assert_eq!(
-            builder.get_config_value(&GoogleConfigKey::BearerToken).unwrap(),
+            builder
+                .get_config_value(&GoogleConfigKey::BearerToken)
+                .unwrap(),
             google_bearer_token
         );
     }
@@ -878,7 +879,10 @@ mod tests {
             .with_bearer_token("test-token")
             .with_credentials(custom_creds);
 
-        assert_eq!(builder.get_config_value(&GoogleConfigKey::BearerToken), None);
+        assert_eq!(
+            builder.get_config_value(&GoogleConfigKey::BearerToken),
+            None
+        );
     }
 
     #[test]
