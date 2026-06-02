@@ -96,8 +96,6 @@ impl LineDelimiter {
                     (*v == NEWLINE).then_some(idx + 1)
                 }
             })
-            // Materialize the split points, records_ends is a double ended iterator, so when calling next_back() the quoting/escaping logic would run in reverse, corrupting the internal state.
-            .collect::<Vec<_>>()
             .into_iter();
 
         let start_offset = match self.remainder.is_empty() {
@@ -115,7 +113,7 @@ impl LineDelimiter {
                 }
             },
         };
-        let end_offset = record_ends.next_back().unwrap_or(start_offset);
+        let end_offset = record_ends.last().unwrap_or(start_offset);
         if start_offset != end_offset {
             self.complete.push_back(val.slice(start_offset..end_offset));
         }
