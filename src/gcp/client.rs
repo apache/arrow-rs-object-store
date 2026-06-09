@@ -250,8 +250,10 @@ impl Request<'_> {
 
     async fn do_put(self) -> Result<PutResult> {
         let response = self.send().await?;
-        Ok(get_put_result(response, VERSION_HEADER)
-            .map_err(|source| Error::Metadata { source })?)
+        Ok(
+            get_put_result(response, VERSION_HEADER)
+                .map_err(|source| Error::Metadata { source })?,
+        )
     }
 }
 

@@ -470,8 +470,10 @@ impl Request<'_> {
 
     pub(crate) async fn do_put(self) -> Result<PutResult> {
         let response = self.send().await?;
-        Ok(get_put_result(response, VERSION_HEADER)
-            .map_err(|source| Error::Metadata { source })?)
+        Ok(
+            get_put_result(response, VERSION_HEADER)
+                .map_err(|source| Error::Metadata { source })?,
+        )
     }
 }
 
@@ -1399,10 +1401,7 @@ mod tests {
 
     #[async_trait]
     impl crate::client::HttpService for MarkerMiddleware {
-        async fn call(
-            &self,
-            req: crate::client::HttpRequest,
-        ) -> Result<HttpResponse, HttpError> {
+        async fn call(&self, req: crate::client::HttpRequest) -> Result<HttpResponse, HttpError> {
             let mut response = crate::client::HttpService::call(&self.0, req).await?;
             response.extensions_mut().insert(Marker(42));
             Ok(response)

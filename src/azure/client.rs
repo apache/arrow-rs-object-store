@@ -564,8 +564,10 @@ impl AzureClient {
         };
 
         let response = builder.header(&BLOB_TYPE, "BlockBlob").send().await?;
-        Ok(get_put_result(response, VERSION_HEADER)
-            .map_err(|source| Error::Metadata { source })?)
+        Ok(
+            get_put_result(response, VERSION_HEADER)
+                .map_err(|source| Error::Metadata { source })?,
+        )
     }
 
     /// PUT a block <https://learn.microsoft.com/en-us/rest/api/storageservices/put-block>
@@ -617,8 +619,10 @@ impl AzureClient {
             .send()
             .await?;
 
-        Ok(get_put_result(response, VERSION_HEADER)
-            .map_err(|source| Error::Metadata { source })?)
+        Ok(
+            get_put_result(response, VERSION_HEADER)
+                .map_err(|source| Error::Metadata { source })?,
+        )
     }
 
     fn build_bulk_delete_body(
