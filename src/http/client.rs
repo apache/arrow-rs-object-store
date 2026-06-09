@@ -241,7 +241,11 @@ impl Client {
         }
     }
 
-    pub(crate) async fn list(&self, location: Option<&Path>, depth: &str) -> Result<MultiStatus> {
+    pub(crate) async fn list(
+        &self,
+        location: Option<&Path>,
+        depth: &str,
+    ) -> Result<(MultiStatus, ::http::Extensions)> {
         let url = location
             .map(|path| self.path_url(path))
             .unwrap_or_else(|| self.url.to_string());
@@ -256,12 +260,15 @@ impl Client {
             .send()
             .await;
 
-        let response = match result {
-            Ok(result) => result
-                .into_body()
-                .bytes()
-                .await
-                .map_err(|source| Error::Reqwest { source })?,
+        let (response, extensions) = match result {
+            Ok(result) => {
+                let (parts, body) = result.into_parts();
+                let body = body
+                    .bytes()
+                    .await
+                    .map_err(|source| Error::Reqwest { source })?;
+                (body, parts.extensions)
+            }
             Err(e) if matches!(e.status(), Some(StatusCode::NOT_FOUND)) => {
                 return match depth {
                     "0" => {
@@ -289,7 +296,7 @@ impl Client {
         let status = quick_xml::de::from_reader(response.reader())
             .map_err(|source| Error::InvalidPropFind { source })?;
 
-        Ok(status)
+        Ok((status, extensions))
     }
 
     pub(crate) async fn delete(&self, path: &Path) -> Result<()> {

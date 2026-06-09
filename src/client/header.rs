@@ -70,15 +70,22 @@ pub(crate) enum Error {
     },
 }
 
-/// Extracts a PutResult from the provided [`HeaderMap`]
+/// Extracts a PutResult from the provided response
+///
+/// Propagates the extensions of the response into the [`PutResult`]
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub(crate) fn get_put_result(
-    headers: &HeaderMap,
+    response: crate::client::HttpResponse,
     version: &str,
 ) -> Result<crate::PutResult, Error> {
-    let e_tag = Some(get_etag(headers)?);
-    let version = get_version(headers, version)?;
-    Ok(crate::PutResult { e_tag, version })
+    let (parts, _) = response.into_parts();
+    let e_tag = Some(get_etag(&parts.headers)?);
+    let version = get_version(&parts.headers, version)?;
+    Ok(crate::PutResult {
+        e_tag,
+        version,
+        extensions: parts.extensions,
+    })
 }
 
 /// Extracts a optional version from the provided [`HeaderMap`]

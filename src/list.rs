@@ -61,6 +61,12 @@ pub struct PaginatedListResult {
     pub result: ListResult,
     /// If result set truncated, the pagination token to fetch next results
     pub page_token: Option<String>,
+    /// Implementation-specific extensions. Intended for use by implementations
+    /// that need to return context-specific information (like cache status) from trait methods.
+    ///
+    /// HTTP-backed stores in this crate populate this with the extensions of the HTTP
+    /// response, allowing custom HTTP middleware to propagate information to callers.
+    pub extensions: http::Extensions,
 }
 
 /// A low-level interface for interacting with paginated listing APIs

@@ -111,7 +111,8 @@ impl ObjectStore for HttpStore {
         }
 
         let response = self.client.put(location, payload, opts.attributes).await?;
-        let e_tag = match get_etag(response.headers()) {
+        let (parts, _) = response.into_parts();
+        let e_tag = match get_etag(&parts.headers) {
             Ok(e_tag) => Some(e_tag),
             Err(crate::client::header::Error::MissingEtag) => None,
             Err(source) => return Err(Error::Metadata { source }.into()),
@@ -120,6 +121,7 @@ impl ObjectStore for HttpStore {
         Ok(PutResult {
             e_tag,
             version: None,
+            extensions: parts.extensions,
         })
     }
 
@@ -161,7 +163,7 @@ impl ObjectStore for HttpStore {
         let prefix = prefix.cloned();
         let client = Arc::clone(&self.client);
         futures_util::stream::once(async move {
-            let status = client.list(prefix.as_ref(), "infinity").await?;
+            let (status, _) = client.list(prefix.as_ref(), "infinity").await?;
 
             let iter = status
                 .response
@@ -181,7 +183,7 @@ impl ObjectStore for HttpStore {
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        let status = self.client.list(prefix, "1").await?;
+        let (status, extensions) = self.client.list(prefix, "1").await?;
         let prefix_len = prefix.map(|p| p.as_ref().len()).unwrap_or(0);
 
         let mut objects: Vec<ObjectMeta> = Vec::with_capacity(status.response.len());
@@ -209,6 +211,7 @@ impl ObjectStore for HttpStore {
         Ok(ListResult {
             common_prefixes,
             objects,
+            extensions,
         })
     }
 

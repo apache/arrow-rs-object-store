@@ -470,7 +470,7 @@ impl Request<'_> {
 
     pub(crate) async fn do_put(self) -> Result<PutResult> {
         let response = self.send().await?;
-        Ok(get_put_result(response.headers(), VERSION_HEADER)
+        Ok(get_put_result(response, VERSION_HEADER)
             .map_err(|source| Error::Metadata { source })?)
     }
 }
@@ -857,11 +857,12 @@ impl S3Client {
                 path: location.as_ref().to_string(),
             })?;
 
-        let version = get_version(response.headers(), VERSION_HEADER)
+        let (parts, body) = response.into_parts();
+
+        let version = get_version(&parts.headers, VERSION_HEADER)
             .map_err(|source| Error::Metadata { source })?;
 
-        let data = response
-            .into_body()
+        let data = body
             .bytes()
             .await
             .map_err(|source| Error::CompleteMultipartResponseBody { source })?;
@@ -872,6 +873,7 @@ impl S3Client {
         Ok(PutResult {
             e_tag: Some(response.e_tag),
             version,
+            extensions: parts.extensions,
         })
     }
 
@@ -993,8 +995,11 @@ impl ListClient for Arc<S3Client> {
             .with_aws_sigv4(credential.authorizer(), None)
             .send_retry(&self.config.retry_config)
             .await
-            .map_err(|source| Error::ListRequest { source })?
-            .into_body()
+            .map_err(|source| Error::ListRequest { source })?;
+
+        let (parts, body) = response.into_parts();
+
+        let response = body
             .bytes()
             .await
             .map_err(|source| Error::ListResponseBody { source })?;
@@ -1007,6 +1012,7 @@ impl ListClient for Arc<S3Client> {
         Ok(PaginatedListResult {
             result: response.try_into()?,
             page_token: token,
+            extensions: parts.extensions,
         })
     }
 }
@@ -1378,6 +1384,116 @@ mod tests {
             )
             .await
             .unwrap();
+        mock.shutdown().await;
+    }
+
+    /// A marker inserted into response extensions by [`MarkerMiddleware`]
+    #[derive(Clone, Debug, PartialEq)]
+    struct Marker(usize);
+
+    /// [`HttpService`] middleware that tags every response with a [`Marker`]
+    ///
+    /// [`HttpService`]: crate::client::HttpService
+    #[derive(Debug)]
+    struct MarkerMiddleware(reqwest::Client);
+
+    #[async_trait]
+    impl crate::client::HttpService for MarkerMiddleware {
+        async fn call(
+            &self,
+            req: crate::client::HttpRequest,
+        ) -> Result<HttpResponse, HttpError> {
+            let mut response = crate::client::HttpService::call(&self.0, req).await?;
+            response.extensions_mut().insert(Marker(42));
+            Ok(response)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_response_extensions_propagated() {
+        use crate::client::get::GetClientExt;
+        use crate::client::list::ListClientExt;
+
+        let mock = MockServer::new().await;
+
+        let credential = AwsCredential {
+            key_id: "key".to_string(),
+            secret_key: "secret".to_string(),
+            token: None,
+        };
+
+        let config = S3Config {
+            bucket_endpoint: mock.url().to_string(),
+            bucket: "test-bucket".to_string(),
+            region: "us-east-1".to_string(),
+            credentials: Arc::new(crate::StaticCredentialProvider::new(credential)),
+            client_options: ClientOptions::new().with_allow_http(true),
+            skip_signature: true,
+            session_provider: None,
+            retry_config: Default::default(),
+            sign_payload: false,
+            disable_tagging: false,
+            disable_bulk_delete: false,
+            checksum: None,
+            copy_if_not_exists: None,
+            conditional_put: Default::default(),
+            encryption_headers: Default::default(),
+            request_payer: false,
+        };
+
+        let http = HttpClient::new(MarkerMiddleware(reqwest::Client::new()));
+        let client = Arc::new(S3Client::new(config, http));
+
+        mock.push_fn(|_| {
+            Response::builder()
+                .status(200)
+                .header("etag", "\"test-etag\"")
+                .body(String::new())
+                .unwrap()
+        });
+        let put = client
+            .request(Method::PUT, &Path::from("test"))
+            .with_payload(PutPayload::default())
+            .do_put()
+            .await
+            .unwrap();
+        assert_eq!(put.extensions.get::<Marker>(), Some(&Marker(42)));
+
+        mock.push_fn(|_| {
+            Response::builder()
+                .status(200)
+                .header("etag", "\"test-etag\"")
+                .header("last-modified", "Thu, 05 Oct 2023 21:47:00 GMT")
+                .body("test-body".to_string())
+                .unwrap()
+        });
+        let get = client
+            .get_opts(&Path::from("test"), GetOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(get.extensions.get::<Marker>(), Some(&Marker(42)));
+
+        mock.push_fn(|_| {
+            Response::builder()
+                .status(200)
+                .body("<ListBucketResult></ListBucketResult>".to_string())
+                .unwrap()
+        });
+        let page = client
+            .list_request(None, PaginatedListOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(page.extensions.get::<Marker>(), Some(&Marker(42)));
+
+        mock.push_fn(|_| {
+            Response::builder()
+                .status(200)
+                .body("<ListBucketResult></ListBucketResult>".to_string())
+                .unwrap()
+        });
+        let list = client.list_with_delimiter(None).await.unwrap();
+        assert_eq!(list.extensions.get::<Marker>(), Some(&Marker(42)));
+
         mock.shutdown().await;
     }
 }

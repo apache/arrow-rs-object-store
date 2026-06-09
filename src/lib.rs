@@ -1413,6 +1413,14 @@ pub struct ListResult {
     pub common_prefixes: Vec<Path>,
     /// Object metadata for the listing
     pub objects: Vec<ObjectMeta>,
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to return context-specific information (like cache status) from trait methods.
+    ///
+    /// HTTP-backed stores in this crate populate this with the extensions of the HTTP
+    /// response, allowing custom HTTP middleware to propagate information to callers.
+    /// Where a result is assembled from multiple paginated requests, the extensions of
+    /// each response are merged, with those of later responses taking precedence.
+    pub extensions: Extensions,
 }
 
 /// The metadata that describes an object.
@@ -1627,6 +1635,12 @@ pub struct GetResult {
     pub range: Range<u64>,
     /// Additional object attributes
     pub attributes: Attributes,
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to return context-specific information (like cache status) from trait methods.
+    ///
+    /// HTTP-backed stores in this crate populate this with the extensions of the HTTP
+    /// response, allowing custom HTTP middleware to propagate information to callers.
+    pub extensions: Extensions,
 }
 
 /// The kind of a [`GetResult`]
@@ -1865,7 +1879,7 @@ impl From<Attributes> for PutMultipartOptions {
 }
 
 /// Result for a put request
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct PutResult {
     /// The unique identifier for the newly created object
     ///
@@ -1873,7 +1887,33 @@ pub struct PutResult {
     pub e_tag: Option<String>,
     /// A version indicator for the newly created object
     pub version: Option<String>,
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to return context-specific information (like cache status) from trait methods.
+    ///
+    /// HTTP-backed stores in this crate populate this with the extensions of the HTTP
+    /// response, allowing custom HTTP middleware to propagate information to callers.
+    ///
+    /// These extensions are excluded from [`PartialEq`] and [`Eq`].
+    pub extensions: Extensions,
 }
+
+impl PartialEq<Self> for PutResult {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            e_tag,
+            version,
+            extensions: _,
+        } = self;
+        let Self {
+            e_tag: other_e_tag,
+            version: other_version,
+            extensions: _,
+        } = other;
+        (e_tag == other_e_tag) && (version == other_version)
+    }
+}
+
+impl Eq for PutResult {}
 
 /// Configure preconditions for the copy operation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
