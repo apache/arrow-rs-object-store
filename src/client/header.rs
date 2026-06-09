@@ -72,7 +72,7 @@ pub(crate) enum Error {
 
 /// Extracts a PutResult from the provided response
 ///
-/// Propagates the extensions of the response into the [`PutResult`]
+/// Propagates the extensions of the response into the [`crate::PutResult`]
 #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub(crate) fn get_put_result(
     response: crate::client::HttpResponse,
