@@ -396,7 +396,9 @@ impl ClientOptions {
     pub fn with_config(mut self, key: ClientConfigKey, value: impl Into<String>) -> Self {
         match key {
             ClientConfigKey::AllowHttp => self.allow_http.parse(value),
-            ClientConfigKey::AllowInvalidCertificates => self.allow_invalid_certificates.parse(value),
+            ClientConfigKey::AllowInvalidCertificates => {
+                self.allow_invalid_certificates.parse(value)
+            }
             ClientConfigKey::ConnectTimeout => {
                 self.connect_timeout = Some(ConfigValue::Deferred(value.into()))
             }
@@ -442,7 +444,9 @@ impl ClientOptions {
     pub fn get_config_value(&self, key: &ClientConfigKey) -> Option<String> {
         match key {
             ClientConfigKey::AllowHttp => Some(self.allow_http.to_string()),
-            ClientConfigKey::AllowInvalidCertificates => Some(self.allow_invalid_certificates.to_string()),
+            ClientConfigKey::AllowInvalidCertificates => {
+                Some(self.allow_invalid_certificates.to_string())
+            }
             ClientConfigKey::ConnectTimeout => self.connect_timeout.as_ref().map(fmt_duration),
             ClientConfigKey::ReadTimeout => self.read_timeout.as_ref().map(fmt_duration),
             ClientConfigKey::DefaultContentType => self.default_content_type.clone(),
