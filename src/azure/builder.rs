@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::azure::client::{AzureClient, AzureConfig};
+use crate::azure::client::{AzureClient, AzureConfig, AzureEncryptionHeaders};
 use crate::azure::credential::{
     AzureAccessKey, AzureCliCredential, ClientSecretOAuthProvider, FabricTokenOAuthProvider,
     ImdsManagedIdentityProvider, WorkloadIdentityOAuthProvider,
@@ -84,6 +84,11 @@ enum Error {
 
     #[error("Missing component in SAS query pair")]
     MissingSasComponent {},
+
+    #[error("Invalid encryption key: {source}")]
+    InvalidEncryptionKey {
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
 
     #[error("Configuration key: '{}' is not known.", key)]
     UnknownConfigurationKey { key: String },
@@ -178,6 +183,8 @@ pub struct MicrosoftAzureBuilder {
     fabric_session_token: Option<String>,
     /// Fabric cluster identifier
     fabric_cluster_identifier: Option<String>,
+    /// Base64-encoded 256-bit customer-provided encryption key
+    encryption_key: Option<String>,
     /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
 }
@@ -380,6 +387,13 @@ pub enum AzureConfigKey {
     /// - `fabric_cluster_identifier`
     FabricClusterIdentifier,
 
+    /// Base64-encoded customer-provided encryption key
+    ///
+    /// Supported keys:
+    /// - `azure_storage_encryption_key`
+    /// - `encryption_key`
+    EncryptionKey,
+
     /// Client options
     Client(ClientConfigKey),
 }
@@ -410,6 +424,7 @@ impl AsRef<str> for AzureConfigKey {
             Self::FabricWorkloadHost => "azure_fabric_workload_host",
             Self::FabricSessionToken => "azure_fabric_session_token",
             Self::FabricClusterIdentifier => "azure_fabric_cluster_identifier",
+            Self::EncryptionKey => "azure_storage_encryption_key",
             Self::Client(key) => key.as_ref(),
         }
     }
@@ -466,6 +481,7 @@ impl FromStr for AzureConfigKey {
             "azure_fabric_cluster_identifier" | "fabric_cluster_identifier" => {
                 Ok(Self::FabricClusterIdentifier)
             }
+            "azure_storage_encryption_key" | "encryption_key" => Ok(Self::EncryptionKey),
             // Backwards compatibility
             "azure_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
             _ => match s.strip_prefix("azure_").unwrap_or(s).parse() {
@@ -594,6 +610,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::FabricClusterIdentifier => {
                 self.fabric_cluster_identifier = Some(value.into())
             }
+            AzureConfigKey::EncryptionKey => self.encryption_key = Some(value.into()),
         };
         self
     }
@@ -635,6 +652,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::FabricWorkloadHost => self.fabric_workload_host.clone(),
             AzureConfigKey::FabricSessionToken => self.fabric_session_token.clone(),
             AzureConfigKey::FabricClusterIdentifier => self.fabric_cluster_identifier.clone(),
+            AzureConfigKey::EncryptionKey => self.encryption_key.clone(),
         }
     }
 
@@ -938,6 +956,25 @@ impl MicrosoftAzureBuilder {
         self
     }
 
+    /// Set the customer-provided encryption key (CPK) used to encrypt blob content.
+    ///
+    /// `key` must be a base64-encoded 256-bit AES key (the decoded value must be
+    /// exactly 32 bytes). The same key must be supplied on every subsequent read,
+    /// write, or copy of any blob created with it; if the key is lost or omitted
+    /// the data is unrecoverable. CPK material is sent to Azure on every request,
+    /// so the configured endpoint must use HTTPS.
+    ///
+    /// Only a subset of Blob storage operations support CPK
+    /// (see the [Azure documentation][cpk-ops]). When CPK is enabled, `copy`
+    /// switches from the asynchronous `Copy Blob` API to `Put Blob From URL`,
+    /// which is synchronous and limits the source blob to 5,000 MiB.
+    ///
+    /// [cpk-ops]: https://learn.microsoft.com/en-us/azure/storage/blobs/encryption-customer-provided-keys#blob-storage-operations-supporting-customer-provided-keys
+    pub fn with_encryption_key(mut self, key: impl Into<String>) -> Self {
+        self.encryption_key = Some(key.into());
+        self
+    }
+
     /// The [`HttpConnector`] to use
     ///
     /// On non-WASM32 platforms uses [`reqwest`] by default, on WASM32 platforms must be provided
@@ -1079,6 +1116,16 @@ impl MicrosoftAzureBuilder {
             (false, url, credential, account_name)
         };
 
+        let encryption_headers =
+            AzureEncryptionHeaders::try_new(self.encryption_key).map_err(|source| {
+                Error::InvalidEncryptionKey {
+                    source: match source {
+                        crate::Error::Generic { source, .. } => source,
+                        other => Box::new(other),
+                    },
+                }
+            })?;
+
         let config = AzureConfig {
             account,
             is_emulator,
@@ -1089,6 +1136,7 @@ impl MicrosoftAzureBuilder {
             client_options: self.client_options,
             service: storage_url,
             credentials: auth,
+            encryption_headers,
         };
 
         let http_client = http.connect(&config.client_options)?;
@@ -1137,6 +1185,8 @@ pub fn split_sas(sas: &str) -> Result<Vec<(String, String)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
+    use base64::prelude::BASE64_STANDARD;
     use std::collections::HashMap;
 
     #[test]
@@ -1355,6 +1405,59 @@ mod tests {
                 "use_fabric_endpoint not set for URL: {url}"
             );
         }
+    }
+
+    #[test]
+    fn azure_encryption_key_roundtrip() {
+        let key = BASE64_STANDARD.encode([7_u8; 32]);
+        let builder = MicrosoftAzureBuilder::new().with_encryption_key(&key);
+
+        assert_eq!(
+            builder
+                .get_config_value(&AzureConfigKey::EncryptionKey)
+                .as_deref(),
+            Some(key.as_str())
+        );
+    }
+
+    #[test]
+    fn azure_encryption_key_rejects_malformed_base64() {
+        let err = MicrosoftAzureBuilder::new()
+            .with_account("account")
+            .with_container_name("container")
+            .with_access_key(EMULATOR_ACCOUNT_KEY)
+            .with_encryption_key("not-base64!!!")
+            .build()
+            .unwrap_err();
+
+        let msg = err.to_string();
+        assert!(msg.contains("Invalid encryption key") || msg.contains("Invalid byte"));
+    }
+
+    #[test]
+    fn azure_encryption_key_rejects_short_decoded_key() {
+        let err = MicrosoftAzureBuilder::new()
+            .with_account("account")
+            .with_container_name("container")
+            .with_access_key(EMULATOR_ACCOUNT_KEY)
+            .with_encryption_key(BASE64_STANDARD.encode([7_u8; 31]))
+            .build()
+            .unwrap_err();
+
+        assert!(err.to_string().contains("must decode to 32 bytes, got 31"));
+    }
+
+    #[test]
+    fn azure_encryption_key_rejects_long_decoded_key() {
+        let err = MicrosoftAzureBuilder::new()
+            .with_account("account")
+            .with_container_name("container")
+            .with_access_key(EMULATOR_ACCOUNT_KEY)
+            .with_encryption_key(BASE64_STANDARD.encode([7_u8; 33]))
+            .build()
+            .unwrap_err();
+
+        assert!(err.to_string().contains("must decode to 32 bytes, got 33"));
     }
 
     #[test]
