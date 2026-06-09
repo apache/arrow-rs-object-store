@@ -339,7 +339,10 @@ mod tests {
     use crate::ObjectStoreExt;
     use crate::integration::*;
     use crate::tests::*;
+    use base64::Engine;
+    use base64::prelude::BASE64_STANDARD;
     use bytes::Bytes;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[tokio::test]
     async fn azure_blob_test() {
@@ -426,6 +429,60 @@ mod tests {
         let loaded = result.bytes().await.unwrap();
         assert_eq!(data, loaded);
         store.delete(&path).await.unwrap();
+    }
+
+    // Azurite doesn't support CPK (just ignores it)
+    #[ignore = "Used for manual testing against a real storage account."]
+    #[tokio::test]
+    async fn azure_blob_cpk_test() {
+        let base = MicrosoftAzureBuilder::from_env();
+        let key = BASE64_STANDARD.encode([7_u8; 32]);
+        let wrong_key = BASE64_STANDARD.encode([9_u8; 32]);
+
+        let encrypted = base.clone().with_encryption_key(&key).build().unwrap();
+        let unencrypted = base.clone().build().unwrap();
+        let wrong = base.with_encryption_key(&wrong_key).build().unwrap();
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = Path::from(format!("cpk-test-{suffix}.txt"));
+        let copy_path = Path::from(format!("cpk-test-copy-{suffix}.txt"));
+        let payload = Bytes::from("customer-provided-key");
+
+        encrypted.put(&path, payload.clone().into()).await.unwrap();
+
+        let loaded = encrypted.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(loaded, payload);
+
+        let range = encrypted.get_range(&path, 9..17).await.unwrap();
+        assert_eq!(range, Bytes::from("provided"));
+
+        let meta = encrypted.head(&path).await.unwrap();
+        assert_eq!(meta.size, payload.len() as u64);
+
+        encrypted.copy(&path, &copy_path).await.unwrap();
+        let copied = encrypted
+            .get(&copy_path)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(copied, payload);
+
+        assert!(unencrypted.get(&path).await.is_err());
+        assert!(wrong.get(&path).await.is_err());
+        assert!(unencrypted.head(&path).await.is_err());
+        assert!(wrong.get_range(&path, 0..8).await.is_err());
+        assert!(unencrypted.get(&copy_path).await.is_err());
+        assert!(wrong.get(&copy_path).await.is_err());
+        let meta = encrypted.head(&copy_path).await.unwrap();
+        assert_eq!(meta.size, payload.len() as u64);
+
+        encrypted.delete(&copy_path).await.unwrap();
+        encrypted.delete(&path).await.unwrap();
     }
 
     #[ignore = "Used for manual testing against a real storage account."]
