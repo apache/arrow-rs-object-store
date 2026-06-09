@@ -241,11 +241,7 @@ impl Client {
         }
     }
 
-    pub(crate) async fn list(
-        &self,
-        location: Option<&Path>,
-        depth: &str,
-    ) -> Result<(MultiStatus, ::http::Extensions)> {
+    pub(crate) async fn list(&self, location: Option<&Path>, depth: &str) -> Result<MultiStatus> {
         let url = location
             .map(|path| self.path_url(path))
             .unwrap_or_else(|| self.url.to_string());
@@ -293,10 +289,11 @@ impl Client {
             }
         };
 
-        let status = quick_xml::de::from_reader(response.reader())
+        let mut status: MultiStatus = quick_xml::de::from_reader(response.reader())
             .map_err(|source| Error::InvalidPropFind { source })?;
+        status.extensions = extensions;
 
-        Ok((status, extensions))
+        Ok(status)
     }
 
     pub(crate) async fn delete(&self, path: &Path) -> Result<()> {
@@ -422,6 +419,9 @@ impl GetClient for Client {
 #[derive(Deserialize, Default)]
 pub(crate) struct MultiStatus {
     pub response: Vec<MultiStatusResponse>,
+    /// The extensions of the HTTP response this was parsed from
+    #[serde(skip)]
+    pub extensions: ::http::Extensions,
 }
 
 #[derive(Deserialize)]

@@ -163,7 +163,7 @@ impl ObjectStore for HttpStore {
         let prefix = prefix.cloned();
         let client = Arc::clone(&self.client);
         futures_util::stream::once(async move {
-            let (status, _) = client.list(prefix.as_ref(), "infinity").await?;
+            let status = client.list(prefix.as_ref(), "infinity").await?;
 
             let iter = status
                 .response
@@ -183,7 +183,7 @@ impl ObjectStore for HttpStore {
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
-        let (status, extensions) = self.client.list(prefix, "1").await?;
+        let status = self.client.list(prefix, "1").await?;
         let prefix_len = prefix.map(|p| p.as_ref().len()).unwrap_or(0);
 
         let mut objects: Vec<ObjectMeta> = Vec::with_capacity(status.response.len());
@@ -211,7 +211,7 @@ impl ObjectStore for HttpStore {
         Ok(ListResult {
             common_prefixes,
             objects,
-            extensions,
+            extensions: status.extensions,
         })
     }
 
