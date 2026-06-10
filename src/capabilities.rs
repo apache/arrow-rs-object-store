@@ -145,10 +145,10 @@ mod tests {
 
     #[test]
     fn test_capability() {
-        assert_eq!(format!("{}", Capability::OrderedListing), "ordered-listing");
+        assert_eq!(format!("{}", Capability::OrderedListing), "ordered_listing");
         assert_eq!(
             Capability::OrderedListing,
-            "ordered-listing".parse::<Capability>().unwrap()
+            "ordered_listing".parse::<Capability>().unwrap()
         );
         assert_eq!("invalid".parse::<Capability>().is_ok(), false);
     }
@@ -163,7 +163,7 @@ mod tests {
             false
         );
         assert_eq!(
-            "ordered-listing"
+            "ordered_listing"
                 .parse::<Capabilities>()
                 .unwrap()
                 .has(Capability::OrderedListing),

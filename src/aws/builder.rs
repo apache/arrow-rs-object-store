@@ -1658,7 +1658,7 @@ mod tests {
                 "aws_sse_customer_key_base64".parse().unwrap(),
                 "some_customer_key",
             )
-            .with_config(AmazonS3ConfigKey::Capabilities, "ordered-listing");
+            .with_config(AmazonS3ConfigKey::Capabilities, "ordered_listing");
 
         assert_eq!(
             builder
@@ -1722,7 +1722,7 @@ mod tests {
             builder
                 .get_config_value(&"aws_capabilities".parse().unwrap())
                 .unwrap(),
-            "ordered-listing"
+            "ordered_listing"
         );
     }
 
