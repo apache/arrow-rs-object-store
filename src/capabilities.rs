@@ -21,7 +21,7 @@
 use crate::Error;
 use std::collections::HashSet;
 
-const ORDERED_LISTING: &str = "ordered-listing";
+const ORDERED_LISTING: &str = "ordered_listing";
 
 /// An individual capability that an [`ObjectStore`] implementation may support.
 ///
@@ -42,9 +42,7 @@ pub enum Capability {
 impl std::str::FromStr for Capability {
     type Err = Error;
 
-    /// Parses a capability from its kebab-case string representation.
-    ///
-    /// Returns `None` if `s` does not correspond to any known capability.
+    /// Parses a capability from its snake_case string representation.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             ORDERED_LISTING => Ok(Self::OrderedListing),
@@ -129,11 +127,12 @@ impl std::str::FromStr for Capabilities {
 
 impl std::fmt::Display for Capabilities {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut iter = self.supported.iter();
-        if let Some(cap) = iter.next() {
+        let mut caps: Vec<_> = self.supported.iter().collect();
+        caps.sort_by_key(|cap| cap.to_string());
+        if let Some(cap) = caps.first() {
             write!(f, "{}", cap)?;
         }
-        for cap in iter {
+        for cap in caps[1..].iter() {
             write!(f, ", {}", cap)?;
         }
         Ok(())
