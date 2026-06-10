@@ -1575,7 +1575,7 @@ mod tests {
             ("aws_session_token", aws_session_token.clone()),
             ("aws_unsigned_payload", "true".to_string()),
             ("aws_checksum_algorithm", "sha256".to_string()),
-            ("aws_capabilities", "ordered-listing".to_string()),
+            ("aws_capabilities", "ordered_listing".to_string()),
         ]);
 
         let builder = options

@@ -697,6 +697,7 @@ impl GoogleCloudStorageBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Capability;
     use std::collections::HashMap;
     use std::io::Write;
     use tempfile::NamedTempFile;
@@ -723,6 +724,7 @@ mod tests {
         let options = HashMap::from([
             ("google_service_account", google_service_account.clone()),
             ("google_bucket_name", google_bucket_name.clone()),
+            ("google_capabilities", "ordered_listing".to_string()),
         ]);
 
         let builder = options
@@ -736,6 +738,14 @@ mod tests {
             google_service_account.as_str()
         );
         assert_eq!(builder.bucket_name.unwrap(), google_bucket_name.as_str());
+        assert!(
+            builder
+                .capabilities
+                .unwrap()
+                .get()
+                .unwrap()
+                .has(Capability::OrderedListing)
+        );
     }
 
     #[tokio::test]
@@ -893,6 +903,12 @@ mod tests {
                 .get_config_value(&GoogleConfigKey::BearerToken)
                 .unwrap(),
             google_bearer_token
+        );
+        assert_eq!(
+            builder
+                .get_config_value(&"google_capabilities".parse().unwrap())
+                .unwrap(),
+            "ordered_listing"
         );
     }
 

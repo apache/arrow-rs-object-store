@@ -23,7 +23,10 @@ use crate::azure::credential::{
 use crate::azure::{AzureCredential, AzureCredentialProvider, MicrosoftAzure, STORE};
 use crate::client::{HttpConnector, TokenCredentialProvider, http_connector};
 use crate::config::ConfigValue;
-use crate::{Capabilities, ClientConfigKey, ClientOptions, ObjectStoreExt, Result, RetryConfig, StaticCredentialProvider};
+use crate::{
+    Capabilities, ClientConfigKey, ClientOptions, ObjectStoreExt, Result, RetryConfig,
+    StaticCredentialProvider,
+};
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -1117,6 +1120,7 @@ pub fn split_sas(sas: &str) -> Result<Vec<(String, String)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Capability;
     use std::collections::HashMap;
 
     #[test]
@@ -1264,6 +1268,7 @@ mod tests {
             ("azure_client_id", azure_client_id),
             ("azure_storage_account_name", azure_storage_account_name),
             ("azure_storage_token", azure_storage_token),
+            ("azure_capabilities", "ordered_listing"),
         ]);
 
         let builder = options
@@ -1274,6 +1279,26 @@ mod tests {
         assert_eq!(builder.client_id.unwrap(), azure_client_id);
         assert_eq!(builder.account_name.unwrap(), azure_storage_account_name);
         assert_eq!(builder.bearer_token.unwrap(), azure_storage_token);
+        assert!(
+            builder
+                .capabilities
+                .unwrap()
+                .get()
+                .unwrap()
+                .has(Capability::OrderedListing)
+        );
+    }
+
+    #[test]
+    fn azure_test_config_get_value() {
+        let builder = MicrosoftAzureBuilder::new()
+            .with_config(AzureConfigKey::Capabilities, "ordered_listing");
+        assert_eq!(
+            builder
+                .get_config_value(&"azure_capabilities".parse().unwrap())
+                .unwrap(),
+            "ordered_listing"
+        );
     }
 
     #[test]

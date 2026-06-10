@@ -551,6 +551,7 @@ mod tests {
     #[tokio::test]
     async fn in_memory_test() {
         let integration = InMemory::new();
+        assert!(integration.capabilities().has(Capability::OrderedListing));
 
         put_get_delete_list(&integration).await;
         list_with_offset_exclusivity(&integration).await;
