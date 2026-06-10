@@ -540,11 +540,6 @@ impl GoogleCloudStorageBuilder {
     }
 
     /// Override the [`Capabilities`] advertised by this store.
-    ///
-    /// By default the store reports `ordered_listing: true` because GCS
-    /// returns list results in lexicographic order. Use this method if you
-    /// are connecting to an endpoint whose behaviour differs from the
-    /// standard GCS API.
     pub fn with_capabilities(mut self, capabilities: Capabilities) -> Self {
         self.capabilities = Some(capabilities);
         self

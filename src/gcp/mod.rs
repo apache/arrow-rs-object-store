@@ -66,6 +66,7 @@ mod credential;
 
 const STORE: &str = "GCS";
 
+// OrderedListing is supported by all GCP bucket types.
 fn get_default_capabilities() -> Capabilities {
     Capabilities::new([Capability::OrderedListing])
 }

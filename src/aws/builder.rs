@@ -1119,11 +1119,6 @@ impl AmazonS3Builder {
     }
 
     /// Override the [`Capabilities`] advertised by this store.
-    ///
-    /// By default the store reports `ordered_listing: true` because S3
-    /// `ListObjectsV2` returns results in lexicographic order. Use this
-    /// method if you are connecting to an S3-compatible endpoint whose
-    /// behaviour differs from the standard S3 API.
     pub fn with_capabilities(mut self, capabilities: Capabilities) -> Self {
         self.capabilities = Some(ConfigValue::Parsed(capabilities));
         self

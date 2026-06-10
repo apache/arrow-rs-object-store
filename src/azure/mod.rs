@@ -58,8 +58,9 @@ pub use credential::AzureCredential;
 
 const STORE: &str = "MicrosoftAzure";
 
+// OrderedListing capability is not supported by with Azure Storage Hierarchical Namespace is enabled.
 fn get_default_capabilities() -> Capabilities {
-    Capabilities::new([Capability::OrderedListing])
+    Capabilities::new([])
 }
 
 /// Interface for [Microsoft Azure Blob Storage](https://azure.microsoft.com/en-us/services/storage/blobs/).

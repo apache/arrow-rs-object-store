@@ -26,8 +26,9 @@ const ORDERED_LISTING: &str = "ordered-listing";
 /// An individual capability that an [`ObjectStore`] implementation may support.
 ///
 /// Used together with [`Capabilities`] to advertise optional backend features.
-/// Obtain the set of supported capabilities via [`ObjectStore::capabilities`].
+/// Get the set of supported capabilities via [`ObjectStore::capabilities`].
 #[derive(Hash, Eq, PartialEq, Copy, Clone, Debug)]
+#[non_exhaustive]
 pub enum Capability {
     /// List results from [`ObjectStore::list`] and
     /// [`ObjectStore::list_with_offset`] are returned in ascending

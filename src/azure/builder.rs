@@ -911,11 +911,6 @@ impl MicrosoftAzureBuilder {
     }
 
     /// Override the [`Capabilities`] advertised by this store.
-    ///
-    /// By default the store reports `ordered_listing: true` because Azure Blob
-    /// Storage returns list results in lexicographic order. Use this method if
-    /// you are connecting to an endpoint whose behaviour differs from the
-    /// standard Azure Blob Storage API.
     pub fn with_capabilities(mut self, capabilities: Capabilities) -> Self {
         self.capabilities = Some(capabilities);
         self

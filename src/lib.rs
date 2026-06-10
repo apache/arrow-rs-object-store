@@ -1136,7 +1136,7 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
 
     /// Return the [`Capabilities`] supported by this store.
     ///
-    /// All capability fields default to `false`. Individual store
+    /// By default, an empty set of capabilities is returned. Individual store
     /// implementations override this to advertise the features they support.
     fn capabilities(&self) -> Capabilities {
         Capabilities::new([])
