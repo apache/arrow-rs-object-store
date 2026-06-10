@@ -66,9 +66,8 @@ impl std::fmt::Display for Capability {
 
 /// Optional features supported by an [`ObjectStore`] implementation.
 ///
-/// Obtain the capabilities of a store by calling [`ObjectStore::capabilities`].
-/// All fields default to `false`; a store sets a field to `true` when it
-/// natively supports that feature.
+/// Get the capabilities of a store by calling [`ObjectStore::capabilities`].
+/// Check whether [`Capability`] is supported by calling [`Capabilities::has`] method.
 ///
 /// The struct is `#[non_exhaustive]` so that new capability flags can be added
 /// in future versions without breaking existing code.
