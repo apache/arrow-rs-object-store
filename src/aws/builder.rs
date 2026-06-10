@@ -24,7 +24,7 @@ use crate::aws::{
     AmazonS3, AwsCredential, AwsCredentialProvider, Checksum, S3ConditionalPut, S3CopyIfNotExists,
     STORE,
 };
-use crate::client::{HttpConnector, TokenCredentialProvider, http_connector};
+use crate::client::{CryptoProvider, HttpConnector, TokenCredentialProvider, http_connector};
 use crate::config::ConfigValue;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use base64::Engine;
@@ -173,6 +173,8 @@ pub struct AmazonS3Builder {
     client_options: ClientOptions,
     /// Credentials
     credentials: Option<AwsCredentialProvider>,
+    /// The [`CryptoProvider`] to use
+    crypto: Option<Arc<dyn CryptoProvider>>,
     /// Skip signing requests
     skip_signature: ConfigValue<bool>,
     /// Copy if not exists
@@ -894,6 +896,12 @@ impl AmazonS3Builder {
         self
     }
 
+    /// The [`CryptoProvider`] to use
+    pub fn with_crypto_provider(mut self, provider: Arc<dyn CryptoProvider>) -> Self {
+        self.crypto = Some(provider);
+        self
+    }
+
     /// Sets what protocol is allowed.
     ///
     /// If `allow_http` is :
@@ -1226,6 +1234,7 @@ impl AmazonS3Builder {
                             endpoint: endpoint.clone(),
                             region: region.clone(),
                             credentials: Arc::clone(&credentials),
+                            crypto: self.crypto.clone(),
                         },
                         http.connect(&self.client_options)?,
                         self.retry_config.clone(),
@@ -1269,6 +1278,7 @@ impl AmazonS3Builder {
             bucket,
             bucket_endpoint,
             credentials,
+            crypto: self.crypto,
             session_provider,
             retry_config: self.retry_config,
             client_options: self.client_options,

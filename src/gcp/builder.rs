@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::client::{HttpConnector, TokenCredentialProvider, http_connector};
+use crate::client::{
+    CryptoProvider, HttpConnector, TokenCredentialProvider, crypto_provider, http_connector,
+};
 use crate::config::ConfigValue;
 use crate::gcp::client::{GoogleCloudStorageClient, GoogleCloudStorageConfig};
 use crate::gcp::credential::{
@@ -114,6 +116,8 @@ pub struct GoogleCloudStorageBuilder {
     credentials: Option<GcpCredentialProvider>,
     /// Explicit bearer token, if configured
     bearer_token: Option<String>,
+    /// The [`CryptoProvider`] to use
+    crypto: Option<Arc<dyn CryptoProvider>>,
     /// Skip signing requests
     skip_signature: ConfigValue<bool>,
     /// Credentials for sign url
@@ -254,6 +258,7 @@ impl Default for GoogleCloudStorageBuilder {
             base_url: None,
             credentials: None,
             bearer_token: None,
+            crypto: None,
             skip_signature: Default::default(),
             signing_credentials: None,
             http_connector: None,
@@ -494,6 +499,12 @@ impl GoogleCloudStorageBuilder {
         self
     }
 
+    /// The [`CryptoProvider`] to use
+    pub fn with_crypto_provider(mut self, provider: Arc<dyn CryptoProvider>) -> Self {
+        self.crypto = Some(provider);
+        self
+    }
+
     /// Set the retry configuration
     pub fn with_retry(mut self, retry_config: RetryConfig) -> Self {
         self.retry_config = retry_config;
@@ -542,7 +553,6 @@ impl GoogleCloudStorageBuilder {
         }
 
         let bucket_name = self.bucket_name.ok_or(Error::MissingBucketName {})?;
-
         let http = http_connector(self.http_connector)?;
 
         // First try to initialize from the service account information.
@@ -592,8 +602,9 @@ impl GoogleCloudStorageBuilder {
                 bearer: "".to_string(),
             })) as _
         } else if let Some(credentials) = service_account_credentials.clone() {
+            let crypto = crypto_provider(self.crypto.as_deref())?;
             Arc::new(TokenCredentialProvider::new(
-                credentials.token_provider()?,
+                credentials.token_provider(crypto)?,
                 http.connect(&self.client_options)?,
                 self.retry_config.clone(),
             )) as _
@@ -608,8 +619,9 @@ impl GoogleCloudStorageBuilder {
                     .with_min_ttl(TOKEN_MIN_TTL),
                 ) as _,
                 ApplicationDefaultCredentials::ServiceAccount(token) => {
+                    let crypto = crypto_provider(self.crypto.as_deref())?;
                     Arc::new(TokenCredentialProvider::new(
-                        token.token_provider()?,
+                        token.token_provider(crypto)?,
                         http.connect(&self.client_options)?,
                         self.retry_config.clone(),
                     )) as _
@@ -634,7 +646,8 @@ impl GoogleCloudStorageBuilder {
                 private_key: None,
             })) as _
         } else if let Some(credentials) = service_account_credentials.clone() {
-            credentials.signing_credentials()?
+            let crypto = crypto_provider(self.crypto.as_deref())?;
+            credentials.signing_credentials(crypto)?
         } else if let Some(credentials) = application_default_credentials.clone() {
             match credentials {
                 ApplicationDefaultCredentials::AuthorizedUser(token) => {
@@ -645,7 +658,8 @@ impl GoogleCloudStorageBuilder {
                     )) as _
                 }
                 ApplicationDefaultCredentials::ServiceAccount(token) => {
-                    token.signing_credentials()?
+                    let crypto = crypto_provider(self.crypto.as_deref())?;
+                    token.signing_credentials(crypto)?
                 }
             }
         } else {
@@ -661,6 +675,7 @@ impl GoogleCloudStorageBuilder {
             credentials,
             signing_credentials,
             bucket_name,
+            crypto: self.crypto,
             retry_config: self.retry_config,
             client_options: self.client_options,
             skip_signature: self.skip_signature.get()?,

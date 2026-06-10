@@ -38,7 +38,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::CopyOptions;
-use crate::client::CredentialProvider;
+use crate::client::{CredentialProvider, crypto_provider};
 use crate::gcp::credential::GCSAuthorizer;
 use crate::signer::Signer;
 use crate::{
@@ -277,8 +277,9 @@ impl Signer for GoogleCloudStorage {
         let signing_credentials = self.signing_credentials().get_credential().await?;
         let authorizer = GCSAuthorizer::new(signing_credentials);
 
+        let crypto = crypto_provider(self.client.config().crypto.as_deref())?;
         authorizer
-            .sign(method, &mut url, expires_in, &self.client)
+            .sign(crypto, method, &mut url, expires_in, &self.client)
             .await?;
 
         Ok(url)
