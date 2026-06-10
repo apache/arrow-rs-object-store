@@ -23,9 +23,7 @@ use crate::azure::credential::{
 use crate::azure::{AzureCredential, AzureCredentialProvider, MicrosoftAzure, STORE};
 use crate::client::{HttpConnector, TokenCredentialProvider, http_connector};
 use crate::config::ConfigValue;
-use crate::{
-    Capabilities, ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider,
-};
+use crate::{Capabilities, ClientConfigKey, ClientOptions, ObjectStoreExt, Result, RetryConfig, StaticCredentialProvider};
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -183,7 +181,7 @@ pub struct MicrosoftAzureBuilder {
     /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
     /// Capabilities to advertise for this store instance
-    capabilities: Option<Capabilities>,
+    capabilities: Option<ConfigValue<Capabilities>>,
 }
 
 /// Configuration keys for [`MicrosoftAzureBuilder`]
@@ -386,6 +384,9 @@ pub enum AzureConfigKey {
 
     /// Client options
     Client(ClientConfigKey),
+
+    /// Override the capabilities advertised by this store.
+    Capabilities,
 }
 
 impl AsRef<str> for AzureConfigKey {
@@ -415,6 +416,7 @@ impl AsRef<str> for AzureConfigKey {
             Self::FabricSessionToken => "azure_fabric_session_token",
             Self::FabricClusterIdentifier => "azure_fabric_cluster_identifier",
             Self::Client(key) => key.as_ref(),
+            Self::Capabilities => "azure_capabilities",
         }
     }
 }
@@ -472,6 +474,7 @@ impl FromStr for AzureConfigKey {
             }
             // Backwards compatibility
             "azure_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
+            "azure_capabilities" => Ok(Self::Capabilities),
             _ => match s.strip_prefix("azure_").unwrap_or(s).parse() {
                 Ok(key) => Ok(Self::Client(key)),
                 Err(_) => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
@@ -598,6 +601,9 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::FabricClusterIdentifier => {
                 self.fabric_cluster_identifier = Some(value.into())
             }
+            AzureConfigKey::Capabilities => {
+                self.capabilities = Some(ConfigValue::Deferred(value.into()))
+            }
         };
         self
     }
@@ -639,6 +645,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::FabricWorkloadHost => self.fabric_workload_host.clone(),
             AzureConfigKey::FabricSessionToken => self.fabric_session_token.clone(),
             AzureConfigKey::FabricClusterIdentifier => self.fabric_cluster_identifier.clone(),
+            AzureConfigKey::Capabilities => self.capabilities.as_ref().map(ToString::to_string),
         }
     }
 
@@ -912,7 +919,7 @@ impl MicrosoftAzureBuilder {
 
     /// Override the [`Capabilities`] advertised by this store.
     pub fn with_capabilities(mut self, capabilities: Capabilities) -> Self {
-        self.capabilities = Some(capabilities);
+        self.capabilities = Some(ConfigValue::Parsed(capabilities));
         self
     }
 
@@ -1066,7 +1073,7 @@ impl MicrosoftAzureBuilder {
 
         Ok(MicrosoftAzure {
             client,
-            capabilities: self.capabilities,
+            capabilities: self.capabilities.map(|x| x.get()).transpose()?,
         })
     }
 }
