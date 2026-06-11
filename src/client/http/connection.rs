@@ -136,6 +136,22 @@ impl HttpError {
     pub fn kind(&self) -> HttpErrorKind {
         self.kind
     }
+
+    /// Build an [`HttpError`] from a [`reqwest_middleware::Error`].
+    ///
+    /// `Reqwest(_)` variants delegate to [`HttpError::reqwest`] for the
+    /// existing classification logic; opaque `Middleware(_)` variants
+    /// fall back to [`HttpErrorKind::Unknown`].
+    #[cfg(all(feature = "reqwest-middleware", not(target_arch = "wasm32")))]
+    pub(crate) fn reqwest_middleware(e: reqwest_middleware::Error) -> Self {
+        match e {
+            reqwest_middleware::Error::Reqwest(re) => Self::reqwest(re),
+            reqwest_middleware::Error::Middleware(me) => Self {
+                kind: HttpErrorKind::Unknown,
+                source: me.into(),
+            },
+        }
+    }
 }
 
 /// An asynchronous function from a [`HttpRequest`] to a [`HttpResponse`].
