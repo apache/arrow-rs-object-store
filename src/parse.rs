@@ -76,6 +76,8 @@ pub enum ObjectStoreScheme {
     MicrosoftAzure,
     /// Url corresponding to [`HttpStore`](crate::http::HttpStore)
     Http,
+    /// Url corresponding to [`CloudflareR2`](crate::cloudflare::CloudflareR2)
+    CloudflareR2,
 }
 
 impl ObjectStoreScheme {
@@ -113,6 +115,7 @@ impl ObjectStoreScheme {
             ("az" | "adl" | "azure" | "abfs" | "abfss", Some(_)) => {
                 (Self::MicrosoftAzure, url.path())
             }
+            ("r2", Some(_)) => (Self::CloudflareR2, url.path()),
             ("http", Some(_)) => (Self::Http, url.path()),
             ("https", Some(host)) => {
                 if host.ends_with("dfs.core.windows.net")
@@ -218,12 +221,17 @@ where
             let url = &url[..url::Position::BeforePath];
             builder_opts!(crate::http::HttpBuilder, url, _options)
         }
+        #[cfg(feature = "cloudflare")]
+        ObjectStoreScheme::CloudflareR2 => {
+            builder_opts!(crate::cloudflare::CloudflareR2Builder, url, _options)
+        }
         #[cfg(not(all(
             feature = "fs",
             feature = "aws",
             feature = "azure",
             feature = "gcp",
             feature = "http",
+            feature = "cloudflare",
             not(target_arch = "wasm32")
         )))]
         s => {
@@ -338,6 +346,10 @@ mod tests {
             (
                 "gs://test.example.com/path",
                 (ObjectStoreScheme::GoogleCloudStorage, "path"),
+            ),
+            (
+                "r2://my-bucket/path",
+                (ObjectStoreScheme::CloudflareR2, "path"),
             ),
             ("http://mydomain/path", (ObjectStoreScheme::Http, "path")),
             ("https://mydomain/path", (ObjectStoreScheme::Http, "path")),
