@@ -82,18 +82,35 @@ futures-channel = {version = "0.3", features = ["sink"]}
 
 [features]
 default = ["fs"]
-cloud = ["cloud-base", "reqwest"]
+
+# Shared cloud/provider implementation dependencies.
+# This intentionally does NOT include reqwest.
 cloud-base = ["serde", "serde_json", "quick-xml", "hyper", "chrono/serde", "base64", "rand", "ring", "http-body-util", "form_urlencoded", "serde_urlencoded", "tokio"]
-azure = ["azure-base", "reqwest"]
-azure-base = ["cloud-base", "httparse"]
-fs = ["walkdir", "tokio", "nix", "windows-sys"]
-gcp = ["gcp-base", "reqwest"]
-gcp-base = ["cloud-base", "rustls-pki-types"]
-aws = ["aws-base", "reqwest"]
-aws-base = ["cloud-base", "crc-fast", "md-5"]
-http = ["http-base", "reqwest"]
-http-base = ["cloud-base"]
+
+# Built-in reqwest-based HTTP transport.
 reqwest = ["dep:reqwest", "reqwest/stream"]
+
+# Compatibility/convenience alias.
+# Historically, cloud meant "common cloud support", including reqwest.
+# Keep that behavior for existing users.
+cloud = ["cloud-base", "reqwest"]
+
+# Provider base features.
+# These compile provider logic without forcing reqwest.
+azure-base = ["cloud-base", "httparse"]
+gcp-base = ["cloud-base", "rustls-pki-types"]
+aws-base = ["cloud-base", "crc-fast", "md-5"]
+http-base = ["cloud-base"]
+
+# Batteries-included provider features.
+# These preserve existing behavior: enabling aws/azure/gcp/http gives
+# the default reqwest transport.
+azure = ["azure-base", "reqwest"]
+gcp = ["gcp-base", "reqwest"]
+aws = ["aws-base", "reqwest"]
+http = ["http-base", "reqwest"]
+
+fs = ["walkdir", "tokio", "nix", "windows-sys"]
 tls-webpki-roots = ["reqwest?/rustls-tls-webpki-roots"]
 integration = ["rand", "tokio"]
 tokio = ["dep:tokio", "dep:tracing"]
