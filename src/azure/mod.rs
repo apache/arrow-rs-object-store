@@ -24,7 +24,7 @@
 //! Unused blocks will automatically be dropped after 7 days.
 //!
 use crate::{
-    Capabilities, Capability, CopyMode, CopyOptions, GetOptions, GetResult, ListResult,
+    Capabilities, CopyMode, CopyOptions, GetOptions, GetResult, ListResult,
     MultipartId, MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions,
     PutPayload, PutResult, Result, UploadPart,
     multipart::{MultipartStore, PartId},

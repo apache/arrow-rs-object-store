@@ -127,15 +127,9 @@ impl std::str::FromStr for Capabilities {
 
 impl std::fmt::Display for Capabilities {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut caps: Vec<_> = self.supported.iter().collect();
-        caps.sort_by_key(|cap| cap.to_string());
-        if let Some(cap) = caps.first() {
-            write!(f, "{}", cap)?;
-        }
-        for cap in caps[1..].iter() {
-            write!(f, ", {}", cap)?;
-        }
-        Ok(())
+        let mut caps: Vec<_> = self.supported.iter().map(ToString::to_string).collect();
+        caps.sort();
+        write!(f, "{}", caps.join(", "))
     }
 }
 

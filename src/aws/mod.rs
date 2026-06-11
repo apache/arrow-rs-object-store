@@ -79,8 +79,8 @@ use crate::client::parts::Parts;
 use crate::list::{PaginatedListOptions, PaginatedListResult, PaginatedListStore};
 pub use credential::{AwsAuthorizer, AwsCredential};
 
-/// OrderedListing capability depends on the bucket type, it's not enabled for directory bucket.
-/// https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html
+// OrderedListing capability depends on the bucket type, it's not enabled for directory bucket.
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html
 fn get_default_capabilities() -> Capabilities {
     return Capabilities::new([]);
 }
