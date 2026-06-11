@@ -181,6 +181,8 @@ pub struct AmazonS3Builder {
     conditional_put: ConfigValue<S3ConditionalPut>,
     /// Ignore tags
     disable_tagging: ConfigValue<bool>,
+    /// Disable bulk delete
+    disable_bulk_delete: ConfigValue<bool>,
     /// Encryption (See [`S3EncryptionConfigKey`])
     encryption_type: Option<ConfigValue<S3EncryptionType>>,
     encryption_kms_key_id: Option<String>,
@@ -429,6 +431,19 @@ pub enum AmazonS3ConfigKey {
     /// - `disable_tagging`
     DisableTagging,
 
+    /// Disable bulk delete (`DeleteObjects`, `POST /?delete`)
+    ///
+    /// If set to `true`, [`delete`](crate::ObjectStoreExt::delete) and
+    /// [`delete_stream`](crate::ObjectStore::delete_stream) will issue
+    /// single-object `DELETE /key` requests instead of the bulk `DeleteObjects`
+    /// API (`POST /?delete`). Use this for S3-compatible providers that do not
+    /// implement `DeleteObjects` (e.g. Alibaba Cloud OSS).
+    ///
+    /// Supported keys:
+    /// - `aws_disable_bulk_delete`
+    /// - `disable_bulk_delete`
+    DisableBulkDelete,
+
     /// Enable Support for S3 Express One Zone
     ///
     /// Supported keys:
@@ -478,6 +493,7 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::CopyIfNotExists => "aws_copy_if_not_exists",
             Self::ConditionalPut => "aws_conditional_put",
             Self::DisableTagging => "aws_disable_tagging",
+            Self::DisableBulkDelete => "aws_disable_bulk_delete",
             Self::RequestPayer => "aws_request_payer",
             Self::Client(opt) => opt.as_ref(),
             Self::Encryption(opt) => opt.as_ref(),
@@ -525,6 +541,7 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_copy_if_not_exists" | "copy_if_not_exists" => Ok(Self::CopyIfNotExists),
             "aws_conditional_put" | "conditional_put" => Ok(Self::ConditionalPut),
             "aws_disable_tagging" | "disable_tagging" => Ok(Self::DisableTagging),
+            "aws_disable_bulk_delete" | "disable_bulk_delete" => Ok(Self::DisableBulkDelete),
             "aws_request_payer" | "request_payer" => Ok(Self::RequestPayer),
             // Backwards compatibility
             "aws_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
@@ -672,6 +689,7 @@ impl AmazonS3Builder {
             }
             AmazonS3ConfigKey::SkipSignature => self.skip_signature.parse(value),
             AmazonS3ConfigKey::DisableTagging => self.disable_tagging.parse(value),
+            AmazonS3ConfigKey::DisableBulkDelete => self.disable_bulk_delete.parse(value),
             AmazonS3ConfigKey::CopyIfNotExists => {
                 self.copy_if_not_exists = Some(ConfigValue::Deferred(value.into()))
             }
@@ -745,6 +763,7 @@ impl AmazonS3Builder {
             }
             AmazonS3ConfigKey::ConditionalPut => Some(self.conditional_put.to_string()),
             AmazonS3ConfigKey::DisableTagging => Some(self.disable_tagging.to_string()),
+            AmazonS3ConfigKey::DisableBulkDelete => Some(self.disable_bulk_delete.to_string()),
             AmazonS3ConfigKey::RequestPayer => Some(self.request_payer.to_string()),
             AmazonS3ConfigKey::Encryption(key) => match key {
                 S3EncryptionConfigKey::ServerSideEncryption => {
@@ -1018,6 +1037,21 @@ impl AmazonS3Builder {
         self
     }
 
+    /// If set to `true`, [`delete`](crate::ObjectStoreExt::delete) and
+    /// [`delete_stream`](crate::ObjectStore::delete_stream) will issue
+    /// single-object `DELETE /key` requests instead of the bulk `DeleteObjects`
+    /// API (`POST /?delete`).
+    ///
+    /// The bulk `DeleteObjects` API is more efficient but is not implemented by
+    /// all S3-compatible providers (e.g. Alibaba Cloud OSS). Setting this to
+    /// `true` restores the single-object delete behaviour that works against
+    /// every S3-compatible provider, at the cost of throughput when deleting
+    /// many objects via [`delete_stream`](crate::ObjectStore::delete_stream).
+    pub fn with_disable_bulk_delete(mut self, disable: bool) -> Self {
+        self.disable_bulk_delete = disable.into();
+        self
+    }
+
     /// Use SSE-KMS for server side encryption.
     pub fn with_sse_kms_encryption(mut self, kms_key_id: impl Into<String>) -> Self {
         self.encryption_type = Some(ConfigValue::Parsed(S3EncryptionType::SseKms));
@@ -1241,6 +1275,7 @@ impl AmazonS3Builder {
             sign_payload: !self.unsigned_payload.get()?,
             skip_signature: self.skip_signature.get()?,
             disable_tagging: self.disable_tagging.get()?,
+            disable_bulk_delete: self.disable_bulk_delete.get()?,
             checksum,
             copy_if_not_exists,
             conditional_put: self.conditional_put.get()?,

@@ -205,6 +205,7 @@ pub(crate) struct S3Config {
     pub sign_payload: bool,
     pub skip_signature: bool,
     pub disable_tagging: bool,
+    pub disable_bulk_delete: bool,
     pub checksum: Option<Checksum>,
     pub copy_if_not_exists: Option<S3CopyIfNotExists>,
     pub conditional_put: S3ConditionalPut,
@@ -578,7 +579,9 @@ impl S3Client {
             .header(CONTENT_TYPE, "application/xml")
             .body(body)
             .with_aws_sigv4(credential.authorizer(), Some(digest.as_ref()))
-            .send_retry(&self.config.retry_config)
+            .retryable(&self.config.retry_config)
+            .retry_error_body(true)
+            .send()
             .await
             .map_err(|source| Error::DeleteObjectsRequest {
                 source,
@@ -611,6 +614,16 @@ impl S3Client {
         }
 
         Ok(results)
+    }
+
+    /// Make a single-object S3 Delete request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObject.html>
+    ///
+    /// Unlike [`bulk_delete_request`](Self::bulk_delete_request), this issues a
+    /// plain `DELETE /key` request, which is part of the core S3 API and is
+    /// supported by every S3-compatible provider.
+    pub(crate) async fn delete_request(&self, path: &Path) -> Result<()> {
+        self.request(Method::DELETE, path).send().await?;
+        Ok(())
     }
 
     /// Make an S3 Copy request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html>
@@ -1006,10 +1019,13 @@ fn encode_path(path: &Path) -> PercentEncode<'_> {
 mod tests {
     use super::*;
     use crate::GetOptions;
+    use crate::ObjectStore;
+    use crate::aws::{AmazonS3, AmazonS3Builder};
     use crate::client::HttpClient;
     use crate::client::get::GetClient;
     use crate::client::mock_server::MockServer;
     use crate::client::retry::RetryContext;
+    use futures_util::{StreamExt, TryStreamExt};
     use http::Response;
     use http::header::{AUTHORIZATION, CONTENT_LENGTH};
     use hyper::Request;
@@ -1048,6 +1064,7 @@ mod tests {
             retry_config: Default::default(),
             sign_payload: false,
             disable_tagging: false,
+            disable_bulk_delete: false,
             checksum: None,
             copy_if_not_exists: None,
             conditional_put: Default::default(),
@@ -1103,6 +1120,7 @@ mod tests {
             retry_config: Default::default(),
             sign_payload: false,
             disable_tagging: false,
+            disable_bulk_delete: false,
             checksum: None,
             copy_if_not_exists: None,
             conditional_put: Default::default(),
@@ -1153,6 +1171,163 @@ mod tests {
         let result = client.bulk_delete_request(vec![Path::from("test")]).await;
 
         assert!(result.is_ok());
+        mock.shutdown().await;
+    }
+
+    /// `(method, path, query)` captured for assertion outside the mock closure.
+    ///
+    /// `MockServer` swallows panics raised inside its response handler (the
+    /// connection just resets and the S3 retry logic can still surface an `Ok`
+    /// result), so assertions placed inside the closure are silently ignored.
+    /// We capture into shared state and assert in the test body instead.
+    type CapturedRequest = (Method, String, Option<String>);
+
+    fn capture(captured: &Arc<std::sync::Mutex<Vec<CapturedRequest>>>, req: &Request<Incoming>) {
+        captured.lock().unwrap().push((
+            req.method().clone(),
+            req.uri().path().to_string(),
+            req.uri().query().map(|s| s.to_string()),
+        ));
+    }
+
+    /// Build an `AmazonS3` via the public builder so that `bucket_endpoint`
+    /// is computed by the library from the addressing-style option — i.e.
+    /// the option under test actually drives the URL the client emits.
+    fn make_store(mock: &MockServer, virtual_hosted: bool, disable_bulk_delete: bool) -> AmazonS3 {
+        AmazonS3Builder::new()
+            .with_endpoint(mock.url())
+            .with_bucket_name("test-bucket")
+            .with_region("us-east-1")
+            .with_allow_http(true)
+            .with_skip_signature(true)
+            .with_virtual_hosted_style_request(virtual_hosted)
+            .with_disable_bulk_delete(disable_bulk_delete)
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_delete_default() {
+        // Default: path-style + bulk delete enabled.
+        // `delete_stream` must issue a single `POST /{bucket}?delete`.
+        let mock = MockServer::new().await;
+        let captured: Arc<std::sync::Mutex<Vec<CapturedRequest>>> = Default::default();
+        let c = Arc::clone(&captured);
+        mock.push_fn(move |req| {
+            capture(&c, &req);
+            Response::builder()
+                .status(200)
+                .body("<DeleteResult><Deleted><Key>foo</Key></Deleted></DeleteResult>".to_string())
+                .unwrap()
+        });
+
+        let store = make_store(&mock, false, false);
+        let locations = futures_util::stream::iter(vec![Ok(Path::from("foo"))]).boxed();
+        let deleted: Vec<_> = store.delete_stream(locations).try_collect().await.unwrap();
+        assert_eq!(deleted.len(), 1);
+
+        let captured = captured.lock().unwrap().clone();
+        assert_eq!(captured.len(), 1, "expected one bulk delete request");
+        assert_eq!(captured[0].0, Method::POST);
+        assert_eq!(captured[0].1, "/test-bucket");
+        assert_eq!(captured[0].2.as_deref(), Some("delete"));
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_delete_default_with_disable_bulk() {
+        // Path-style + bulk delete disabled.
+        // `delete_stream` must fan out into `DELETE /{bucket}/{key}` (one per
+        // object, no `?delete` query).
+        let mock = MockServer::new().await;
+        let captured: Arc<std::sync::Mutex<Vec<CapturedRequest>>> = Default::default();
+        for _ in 0..2 {
+            let c = Arc::clone(&captured);
+            mock.push_fn(move |req| {
+                capture(&c, &req);
+                Response::builder().status(204).body(String::new()).unwrap()
+            });
+        }
+
+        let store = make_store(&mock, false, true);
+        let locations =
+            futures_util::stream::iter(vec![Ok(Path::from("foo")), Ok(Path::from("bar"))]).boxed();
+        let deleted: Vec<_> = store.delete_stream(locations).try_collect().await.unwrap();
+        assert_eq!(deleted.len(), 2);
+
+        let mut captured = captured.lock().unwrap().clone();
+        captured.sort_by(|a, b| a.1.cmp(&b.1));
+        assert_eq!(captured.len(), 2, "expected one DELETE per object");
+        assert_eq!(
+            captured[0],
+            (Method::DELETE, "/test-bucket/bar".to_string(), None)
+        );
+        assert_eq!(
+            captured[1],
+            (Method::DELETE, "/test-bucket/foo".to_string(), None)
+        );
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_delete_virtual_hosted() {
+        // Virtual-hosted style + bulk delete enabled.
+        // `delete_stream` must issue a single `POST /?delete` (bucket is in
+        // the host, not the path).
+        let mock = MockServer::new().await;
+        let captured: Arc<std::sync::Mutex<Vec<CapturedRequest>>> = Default::default();
+        let c = Arc::clone(&captured);
+        mock.push_fn(move |req| {
+            capture(&c, &req);
+            Response::builder()
+                .status(200)
+                .body("<DeleteResult><Deleted><Key>foo</Key></Deleted></DeleteResult>".to_string())
+                .unwrap()
+        });
+
+        let store = make_store(&mock, true, false);
+        let locations = futures_util::stream::iter(vec![Ok(Path::from("foo"))]).boxed();
+        let deleted: Vec<_> = store.delete_stream(locations).try_collect().await.unwrap();
+        assert_eq!(deleted.len(), 1);
+
+        let captured = captured.lock().unwrap().clone();
+        assert_eq!(captured.len(), 1, "expected one bulk delete request");
+        assert_eq!(captured[0].0, Method::POST);
+        assert_eq!(captured[0].1, "/");
+        assert_eq!(captured[0].2.as_deref(), Some("delete"));
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_delete_virtual_hosted_with_disable_bulk() {
+        // Virtual-hosted style + bulk delete disabled.
+        // `delete_stream` must fan out into `DELETE /{key}` (no bucket in
+        // path, no `?delete` query).
+        let mock = MockServer::new().await;
+        let captured: Arc<std::sync::Mutex<Vec<CapturedRequest>>> = Default::default();
+        for _ in 0..2 {
+            let c = Arc::clone(&captured);
+            mock.push_fn(move |req| {
+                capture(&c, &req);
+                Response::builder().status(204).body(String::new()).unwrap()
+            });
+        }
+
+        let store = make_store(&mock, true, true);
+        let locations =
+            futures_util::stream::iter(vec![Ok(Path::from("foo")), Ok(Path::from("bar"))]).boxed();
+        let deleted: Vec<_> = store.delete_stream(locations).try_collect().await.unwrap();
+        assert_eq!(deleted.len(), 2);
+
+        let mut captured = captured.lock().unwrap().clone();
+        captured.sort_by(|a, b| a.1.cmp(&b.1));
+        assert_eq!(captured.len(), 2, "expected one DELETE per object");
+        assert_eq!(captured[0], (Method::DELETE, "/bar".to_string(), None));
+        assert_eq!(captured[1], (Method::DELETE, "/foo".to_string(), None));
+
         mock.shutdown().await;
     }
 

@@ -37,10 +37,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::CopyOptions;
 use crate::client::CredentialProvider;
 use crate::gcp::credential::GCSAuthorizer;
 use crate::signer::Signer;
-use crate::{CopyMode, CopyOptions};
 use crate::{
     GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
     PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart, multipart::PartId,
@@ -221,10 +221,7 @@ impl ObjectStore for GoogleCloudStorage {
             extensions: _,
         } = options;
 
-        match mode {
-            CopyMode::Overwrite => self.client.copy_request(from, to, true).await,
-            CopyMode::Create => self.client.copy_request(from, to, false).await,
-        }
+        self.client.copy_request(from, to, mode).await
     }
 }
 

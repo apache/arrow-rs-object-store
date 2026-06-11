@@ -22,6 +22,8 @@ use std::ops::Range;
 
 use crate::multipart::{MultipartStore, PartId};
 use crate::path::Path;
+#[cfg(feature = "cloud")]
+use crate::signer::Signer;
 use crate::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
     ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result,
@@ -234,6 +236,36 @@ impl<T: MultipartStore> MultipartStore for PrefixStore<T> {
     }
 }
 
+#[cfg(feature = "cloud")]
+#[async_trait::async_trait]
+impl<T: Signer> Signer for PrefixStore<T> {
+    async fn signed_url(
+        &self,
+        method: http::Method,
+        path: &Path,
+        expires_in: std::time::Duration,
+    ) -> Result<url::Url> {
+        self.inner
+            .signed_url(method, &self.full_path(path), expires_in)
+            .await
+    }
+
+    async fn signed_urls(
+        &self,
+        method: http::Method,
+        paths: &[Path],
+        expires_in: std::time::Duration,
+    ) -> Result<Vec<url::Url>> {
+        self.inner
+            .signed_urls(
+                method,
+                &paths.iter().map(|p| self.full_path(p)).collect::<Vec<_>>(),
+                expires_in,
+            )
+            .await
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod tests {
@@ -362,5 +394,47 @@ mod tests {
         multipart_put_part_out_of_order(&store, &store).await;
         multipart_out_of_order(&store).await;
         multipart_race_condition(&store, true).await;
+    }
+
+    #[cfg(feature = "cloud")]
+    #[tokio::test]
+    async fn signer() {
+        #[derive(Debug)]
+        struct Foo;
+
+        #[async_trait::async_trait]
+        impl Signer for Foo {
+            async fn signed_url(
+                &self,
+                method: http::Method,
+                path: &Path,
+                _expires_in: std::time::Duration,
+            ) -> Result<url::Url> {
+                Ok(url::Url::parse(&format!("ex:{path}?method={method}")).unwrap())
+            }
+        }
+
+        assert_eq!(
+            PrefixStore::new(Foo, "prefix")
+                .signed_url(
+                    http::Method::GET,
+                    &"foo".into(),
+                    std::time::Duration::from_secs(1)
+                )
+                .await
+                .unwrap(),
+            url::Url::parse("ex:prefix/foo?method=GET").unwrap()
+        );
+        assert_eq!(
+            PrefixStore::new(Foo, "prefix")
+                .signed_urls(
+                    http::Method::GET,
+                    &["foo".into()],
+                    std::time::Duration::from_secs(1)
+                )
+                .await
+                .unwrap(),
+            vec![url::Url::parse("ex:prefix/foo?method=GET").unwrap()]
+        );
     }
 }

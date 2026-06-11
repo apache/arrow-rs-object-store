@@ -109,7 +109,7 @@ impl LineDelimiter {
                 }
             },
         };
-        let end_offset = record_ends.next_back().unwrap_or(start_offset);
+        let end_offset = record_ends.last().unwrap_or(start_offset);
         if start_offset != end_offset {
             self.complete.push_back(val.slice(start_offset..end_offset));
         }
@@ -267,6 +267,40 @@ mod tests {
                 Bytes::from("hello\nworld\n"),
                 Bytes::from("bingo\n"),
                 Bytes::from("cupcakes")
+            ]
+        )
+    }
+
+    #[tokio::test]
+    async fn test_delimiter_quotes_stream() {
+        let input = vec!["x,y,z\n,\"new\nline\",\"with ", "space\""];
+        let input_stream =
+            futures_util::stream::iter(input.into_iter().map(|s| Ok(Bytes::from(s))));
+        let stream = newline_delimited_stream(input_stream);
+
+        let results: Vec<_> = stream.try_collect().await.unwrap();
+        assert_eq!(
+            results,
+            vec![
+                Bytes::from("x,y,z\n"),
+                Bytes::from(",\"new\nline\",\"with space\"")
+            ]
+        )
+    }
+
+    #[tokio::test]
+    async fn test_delimiter_escape_stream() {
+        let input = vec!["hello\n\n\"\\ttabulated\"", "world"];
+        let input_stream =
+            futures_util::stream::iter(input.into_iter().map(|s| Ok(Bytes::from(s))));
+        let stream = newline_delimited_stream(input_stream);
+
+        let results: Vec<_> = stream.try_collect().await.unwrap();
+        assert_eq!(
+            results,
+            vec![
+                Bytes::from("hello\n\n"),
+                Bytes::from("\"\\ttabulated\"world")
             ]
         )
     }

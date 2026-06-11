@@ -240,6 +240,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use url::Url;
 
     #[test]
     fn test_parse() {
@@ -420,6 +421,23 @@ mod tests {
         assert_eq!(url.path(), "/my%20file%20with%20spaces");
         let (_, path) = parse_url(&url).unwrap();
         assert_eq!(path.as_ref(), "my file with spaces");
+    }
+
+    #[test]
+    #[cfg(feature = "gcp")]
+    fn test_url_gcs_bearer_token_opts() {
+        let url = Url::parse("gs://bucket/path").unwrap();
+
+        for alias in ["google_bearer_token", "bearer_token"] {
+            let opts = [
+                (alias, "test-token"),
+                ("google_proxy_url", "https://example.com"),
+            ];
+
+            let (store, path) = parse_url_opts(&url, opts).unwrap();
+            assert_eq!(path.as_ref(), "path");
+            assert_eq!(store.to_string(), "GoogleCloudStorage(bucket)");
+        }
     }
 
     #[tokio::test]

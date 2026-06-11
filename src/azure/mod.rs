@@ -53,7 +53,7 @@ pub type AzureCredentialProvider = Arc<dyn CredentialProvider<Credential = Azure
 use crate::azure::client::AzureClient;
 use crate::client::parts::Parts;
 use crate::list::{PaginatedListOptions, PaginatedListResult, PaginatedListStore};
-pub use builder::{AzureConfigKey, MicrosoftAzureBuilder};
+pub use builder::{AzureConfigKey, MicrosoftAzureBuilder, split_sas};
 pub use credential::AzureCredential;
 
 const STORE: &str = "MicrosoftAzure";
