@@ -61,6 +61,7 @@ rustls-pki-types = { version = "1.9", default-features = false, features = ["std
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
 serde_urlencoded = { version = "0.7", optional = true }
+tower = { version = "0.5", default-features = false, features = ["util"], optional = true }
 
 # Optional tokio feature
 tokio = { version = "1.29.0", features = ["sync", "macros", "rt", "time", "io-util"], optional = true }
@@ -91,6 +92,7 @@ http = ["cloud"]
 tls-webpki-roots = ["reqwest?/rustls-tls-webpki-roots"]
 integration = ["rand", "tokio"]
 tokio = ["dep:tokio", "dep:tracing"]
+tower = ["dep:tower"]
 
 [dev-dependencies] # In alphabetical order
 futures-executor = "0.3"
