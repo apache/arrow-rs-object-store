@@ -65,6 +65,18 @@ jobs:
         run: cargo clippy --no-default-features --features gcp-base -- -D warnings
       - name: Run clippy with http-base feature
         run: cargo clippy --no-default-features --features http-base -- -D warnings
+      - name: Verify base features do not enable reqwest
+        run: |
+          if cargo tree \
+            --no-default-features \
+            --features aws-base,azure-base,gcp-base,http-base \
+            --edges normal \
+            --prefix none \
+            -f '{p}' \
+            | grep -E '^reqwest v'; then
+            echo "reqwest must not be enabled by *-base features"
+            exit 1
+          fi
       - name: Run clippy with integration feature
         run: cargo clippy --no-default-features --features integration -- -D warnings
       - name: Run clippy with all features
