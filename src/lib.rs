@@ -96,6 +96,17 @@
     doc = "* [`http`]: [HTTP/WebDAV Storage](https://datatracker.ietf.org/doc/html/rfc2518). See [`HttpBuilder`](http::HttpBuilder)"
 )]
 //!
+//! ## Feature Flags
+//!
+//! Each cloud provider has two feature flags: a "batteries-included" feature that bundles
+//! the default `reqwest`-based HTTP transport, and a `*-base` feature that omits `reqwest`
+//! so you can plug in your own HTTP client via [`HttpConnector`](client::HttpConnector).
+//!
+//! | Feature | Description |
+//! | --- | --- |
+//! | `aws`, `azure`, `gcp`, `http` | Provider with the built-in `reqwest` HTTP transport. The typical choice. |
+//! | `aws-base`, `azure-base`, `gcp-base`, `http-base` | Provider only -- bring your own [`HttpConnector`](client::HttpConnector). Useful when your application already has its own HTTP client, or to keep `reqwest` out of your dependency tree. |
+//!
 //! # Why not a Filesystem Interface?
 //!
 //! The [`ObjectStore`] interface is designed to mirror the APIs
@@ -533,7 +544,8 @@
 //! Many [`ObjectStore`] implementations permit customization of the HTTP client via
 //! the [`HttpConnector`] trait and utilities in the [`client`] module.
 //! Examples include injecting custom HTTP headers or using an alternate
-//! tokio Runtime I/O requests.
+//! tokio Runtime I/O requests. To use a custom connector without bundling
+//! `reqwest`, see [Feature Flags](#feature-flags).
 //!
 //! [`HttpConnector`]: client::HttpConnector
 

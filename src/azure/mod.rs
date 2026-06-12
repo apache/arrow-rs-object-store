@@ -17,6 +17,9 @@
 
 //! An object store implementation for Azure blob storage
 //!
+//! See the [Feature Flags](crate#feature-flags) section for the difference
+//! between the `azure` and `azure-base` features.
+//!
 //! ## Streaming uploads
 //!
 //! [`ObjectStore::put_multipart_opts`] will upload data in blocks and write a blob from those blocks.

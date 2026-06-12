@@ -19,6 +19,9 @@
 //!
 //! This follows [rfc2518] commonly known as [WebDAV]
 //!
+//! See the [Feature Flags](crate#feature-flags) section for the difference
+//! between the `http` and `http-base` features.
+//!
 //! Basic get support will work out of the box with most HTTP servers,
 //! even those that don't explicitly support [rfc2518]
 //!

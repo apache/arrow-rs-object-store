@@ -17,6 +17,9 @@
 
 //! An object store implementation for S3
 //!
+//! See the [Feature Flags](crate#feature-flags) section for the difference
+//! between the `aws` and `aws-base` features.
+//!
 //! ## Multipart uploads
 //!
 //! Multipart uploads can be initiated with the [`ObjectStore::put_multipart_opts`] method.

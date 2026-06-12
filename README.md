@@ -50,6 +50,12 @@ It's possible to build `object_store` for the `wasm32-unknown-unknown` target, h
 cargo build -p object_store --target wasm32-unknown-unknown
 ```
 
+For `wasm32-wasip1`, where `reqwest` does not compile, use the `*-base` provider features (`aws-base`, `azure-base`, `gcp-base`, `http-base`) and supply your own HTTP client via [`HttpConnector`](https://docs.rs/object_store/latest/object_store/client/trait.HttpConnector.html).
+
+```
+cargo build -p object_store --no-default-features --features aws-base --target wasm32-wasip1
+```
+
 ## Related Apache Crates
 
 Here are several related crates in different repositories from other Apache projects.

@@ -17,6 +17,9 @@
 
 //! An object store implementation for Google Cloud Storage
 //!
+//! See the [Feature Flags](crate#feature-flags) section for the difference
+//! between the `gcp` and `gcp-base` features.
+//!
 //! ## Multipart uploads
 //!
 //! [Multipart uploads](https://cloud.google.com/storage/docs/multipart-uploads)
