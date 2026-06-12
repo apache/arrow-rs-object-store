@@ -90,11 +90,6 @@ cloud-base = ["serde", "serde_json", "quick-xml", "hyper", "chrono/serde", "base
 # Built-in reqwest-based HTTP transport.
 reqwest = ["dep:reqwest", "reqwest/stream"]
 
-# Compatibility/convenience alias.
-# Historically, cloud meant "common cloud support", including reqwest.
-# Keep that behavior for existing users.
-cloud = ["cloud-base", "reqwest"]
-
 # Provider base features.
 # These compile provider logic without forcing reqwest.
 azure-base = ["cloud-base", "httparse"]
