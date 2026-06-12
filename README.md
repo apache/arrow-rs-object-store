@@ -52,22 +52,17 @@ cargo build -p object_store --target wasm32-unknown-unknown
 
 ## Disabling `reqwest`
 
-The `aws`, `azure`, `gcp`, and `http` features each bundle a [`reqwest`]-based HTTP transport. To supply your own HTTP client instead — for example to target [`wasm32-wasip1`] (where `reqwest` does not compile), to share an existing client, or to keep `reqwest` out of your dependency tree — depend on the matching `*-base` feature and provide an [`HttpConnector`] at builder time:
-
-```toml
-[dependencies]
-object_store = { version = "0.13", default-features = false, features = ["aws-base"] }
-```
+The `aws`, `azure`, `gcp`, and `http` features each bundle a [`reqwest`]-based HTTP transport. To target [`wasm32-wasip1`] (where `reqwest` does not compile) or otherwise supply your own HTTP client, build against the matching `*-base` feature instead:
 
 ```
 cargo build -p object_store --no-default-features --features aws-base --target wasm32-wasip1
 ```
 
-See the [Feature Flags](https://docs.rs/object_store/latest/object_store/#feature-flags) section in the crate docs for the full set of flags.
+See [Disabling `reqwest`] in the crate docs for full details.
 
 [`reqwest`]: https://crates.io/crates/reqwest
 [`wasm32-wasip1`]: https://doc.rust-lang.org/rustc/platform-support/wasm32-wasip1.html
-[`HttpConnector`]: https://docs.rs/object_store/latest/object_store/client/trait.HttpConnector.html
+[Disabling `reqwest`]: https://docs.rs/object_store/latest/object_store/#disabling-reqwest
 
 ## Related Apache Crates
 

@@ -552,9 +552,9 @@
 //! | Feature | Description |
 //! | --- | --- |
 //! | `reqwest` | Enables the default [`reqwest`]-based [`HttpConnector`]. Pulled in automatically by `aws`, `azure`, `gcp`, and `http`. |
+//! | `tls-webpki-roots` | When `reqwest` is enabled, also bundle Mozilla's [`webpki-roots`] CA certificates. See [TLS Certificates](#tls-certificates). |
 //! | `cloud-base` | Shared cloud-provider implementation. Pulled in automatically by every `*-base` feature; usually not enabled directly. |
 //! | `cloud` | Back-compat alias for `cloud-base` + `reqwest`. Kept for users that previously depended on the `cloud` umbrella feature. |
-//! | `tls-webpki-roots` | When `reqwest` is enabled, also bundle Mozilla's [`webpki-roots`] CA certificates. See [TLS Certificates](#tls-certificates). |
 //!
 //! ## Other features
 //!
