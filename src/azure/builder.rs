@@ -87,6 +87,18 @@ enum Error {
 
     #[error("Configuration key: '{}' is not known.", key)]
     UnknownConfigurationKey { key: String },
+
+    #[error(
+        "Unknown credential type: '{}'. Supported values: auto, bearer_token, access_key, client_secret, workload_identity, sas_token, azure_cli, managed_identity",
+        credential_type
+    )]
+    UnknownCredentialType { credential_type: String },
+
+    #[error(
+        "Credential type '{}' was requested but required configuration is missing",
+        credential_type
+    )]
+    MissingCredentialConfig { credential_type: String },
 }
 
 impl From<Error> for crate::Error {
@@ -178,6 +190,8 @@ pub struct MicrosoftAzureBuilder {
     fabric_session_token: Option<String>,
     /// Fabric cluster identifier
     fabric_cluster_identifier: Option<String>,
+    /// Credential type override
+    credential_type: Option<String>,
     /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
 }
@@ -380,6 +394,27 @@ pub enum AzureConfigKey {
     /// - `fabric_cluster_identifier`
     FabricClusterIdentifier,
 
+    /// Credential type to use for authentication
+    ///
+    /// When multiple credential configurations are present, this key forces
+    /// the builder to use a specific credential type instead of relying on
+    /// the default resolution order.
+    ///
+    /// Supported values:
+    /// - `auto` (default) — use the built-in priority chain
+    /// - `bearer_token` — use a static bearer token
+    /// - `access_key` — use an access key
+    /// - `client_secret` — use client secret (service principal) OAuth
+    /// - `workload_identity` — use workload identity federation
+    /// - `sas_token` — use a shared access signature
+    /// - `azure_cli` — use Azure CLI
+    /// - `managed_identity` — use IMDS managed identity
+    ///
+    /// Supported keys:
+    /// - `azure_credential_type`
+    /// - `credential_type`
+    CredentialType,
+
     /// Client options
     Client(ClientConfigKey),
 }
@@ -410,6 +445,7 @@ impl AsRef<str> for AzureConfigKey {
             Self::FabricWorkloadHost => "azure_fabric_workload_host",
             Self::FabricSessionToken => "azure_fabric_session_token",
             Self::FabricClusterIdentifier => "azure_fabric_cluster_identifier",
+            Self::CredentialType => "azure_credential_type",
             Self::Client(key) => key.as_ref(),
         }
     }
@@ -466,6 +502,7 @@ impl FromStr for AzureConfigKey {
             "azure_fabric_cluster_identifier" | "fabric_cluster_identifier" => {
                 Ok(Self::FabricClusterIdentifier)
             }
+            "azure_credential_type" | "credential_type" => Ok(Self::CredentialType),
             // Backwards compatibility
             "azure_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
             _ => match s.strip_prefix("azure_").unwrap_or(s).parse() {
@@ -594,6 +631,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::FabricClusterIdentifier => {
                 self.fabric_cluster_identifier = Some(value.into())
             }
+            AzureConfigKey::CredentialType => self.credential_type = Some(value.into()),
         };
         self
     }
@@ -635,6 +673,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::FabricWorkloadHost => self.fabric_workload_host.clone(),
             AzureConfigKey::FabricSessionToken => self.fabric_session_token.clone(),
             AzureConfigKey::FabricClusterIdentifier => self.fabric_cluster_identifier.clone(),
+            AzureConfigKey::CredentialType => self.credential_type.clone(),
         }
     }
 
@@ -924,6 +963,19 @@ impl MicrosoftAzureBuilder {
         self
     }
 
+    /// Set the credential type to use for authentication.
+    ///
+    /// When multiple credential configurations are present (e.g. both workload identity
+    /// and client secret), this forces the builder to use a specific credential type
+    /// instead of relying on the default resolution order.
+    ///
+    /// Supported values: `auto`, `bearer_token`, `access_key`, `client_secret`,
+    /// `workload_identity`, `sas_token`, `azure_cli`, `managed_identity`.
+    pub fn with_credential_type(mut self, credential_type: impl Into<String>) -> Self {
+        self.credential_type = Some(credential_type.into());
+        self
+    }
+
     /// If enabled, [`MicrosoftAzure`] will not fetch credentials and will not sign requests
     ///
     /// This can be useful when interacting with public containers
@@ -946,19 +998,201 @@ impl MicrosoftAzureBuilder {
         self
     }
 
+    fn resolve_credential_auto(
+        &mut self,
+        http: &Arc<dyn HttpConnector>,
+    ) -> Result<AzureCredentialProvider> {
+        if let (
+            Some(fabric_token_service_url),
+            Some(fabric_workload_host),
+            Some(fabric_session_token),
+            Some(fabric_cluster_identifier),
+        ) = (
+            &self.fabric_token_service_url,
+            &self.fabric_workload_host,
+            &self.fabric_session_token,
+            &self.fabric_cluster_identifier,
+        ) {
+            let fabric_credential = FabricTokenOAuthProvider::new(
+                fabric_token_service_url,
+                fabric_workload_host,
+                fabric_session_token,
+                fabric_cluster_identifier,
+                self.bearer_token.clone(),
+            );
+            Ok(Arc::new(TokenCredentialProvider::new(
+                fabric_credential,
+                http.connect(&self.client_options)?,
+                self.retry_config.clone(),
+            )) as _)
+        } else if self.bearer_token.is_some() {
+            self.resolve_bearer_token()
+        } else if self.access_key.is_some() {
+            self.resolve_access_key()
+        } else if self.client_id.is_some()
+            && self.tenant_id.is_some()
+            && self.federated_token_file.is_some()
+        {
+            self.resolve_workload_identity(http)
+        } else if self.client_id.is_some()
+            && self.client_secret.is_some()
+            && self.tenant_id.is_some()
+        {
+            self.resolve_client_secret(http)
+        } else if self.sas_query_pairs.is_some() || self.sas_key.is_some() {
+            self.resolve_sas_token()
+        } else if self.use_azure_cli.get()? {
+            Ok(Arc::new(AzureCliCredential::new()) as _)
+        } else {
+            self.resolve_managed_identity(http)
+        }
+    }
+
+    fn resolve_bearer_token(&mut self) -> Result<AzureCredentialProvider> {
+        let bearer_token = self
+            .bearer_token
+            .take()
+            .ok_or(Error::MissingCredentialConfig {
+                credential_type: "bearer_token".to_string(),
+            })?;
+        Ok(Arc::new(StaticCredentialProvider::new(
+            AzureCredential::BearerToken(bearer_token),
+        )))
+    }
+
+    fn resolve_access_key(&mut self) -> Result<AzureCredentialProvider> {
+        let access_key = self
+            .access_key
+            .take()
+            .ok_or(Error::MissingCredentialConfig {
+                credential_type: "access_key".to_string(),
+            })?;
+        let key = AzureAccessKey::try_new(&access_key)?;
+        Ok(Arc::new(StaticCredentialProvider::new(
+            AzureCredential::AccessKey(key),
+        )))
+    }
+
+    fn resolve_client_secret(
+        &mut self,
+        http: &Arc<dyn HttpConnector>,
+    ) -> Result<AzureCredentialProvider> {
+        let client_id = self
+            .client_id
+            .take()
+            .ok_or(Error::MissingCredentialConfig {
+                credential_type: "client_secret".to_string(),
+            })?;
+        let client_secret = self
+            .client_secret
+            .take()
+            .ok_or(Error::MissingCredentialConfig {
+                credential_type: "client_secret".to_string(),
+            })?;
+        let tenant_id = self
+            .tenant_id
+            .take()
+            .ok_or(Error::MissingCredentialConfig {
+                credential_type: "client_secret".to_string(),
+            })?;
+        let client_credential = ClientSecretOAuthProvider::new(
+            client_id,
+            client_secret,
+            &tenant_id,
+            self.authority_host.take(),
+        );
+        Ok(Arc::new(TokenCredentialProvider::new(
+            client_credential,
+            http.connect(&self.client_options)?,
+            self.retry_config.clone(),
+        )) as _)
+    }
+
+    fn resolve_workload_identity(
+        &mut self,
+        http: &Arc<dyn HttpConnector>,
+    ) -> Result<AzureCredentialProvider> {
+        let client_id = self
+            .client_id
+            .take()
+            .ok_or(Error::MissingCredentialConfig {
+                credential_type: "workload_identity".to_string(),
+            })?;
+        let tenant_id = self
+            .tenant_id
+            .take()
+            .ok_or(Error::MissingCredentialConfig {
+                credential_type: "workload_identity".to_string(),
+            })?;
+        let federated_token_file =
+            self.federated_token_file
+                .take()
+                .ok_or(Error::MissingCredentialConfig {
+                    credential_type: "workload_identity".to_string(),
+                })?;
+        let client_credential = WorkloadIdentityOAuthProvider::new(
+            &client_id,
+            federated_token_file,
+            &tenant_id,
+            self.authority_host.take(),
+        );
+        Ok(Arc::new(TokenCredentialProvider::new(
+            client_credential,
+            http.connect(&self.client_options)?,
+            self.retry_config.clone(),
+        )) as _)
+    }
+
+    fn resolve_sas_token(&mut self) -> Result<AzureCredentialProvider> {
+        if let Some(query_pairs) = self.sas_query_pairs.take() {
+            Ok(Arc::new(StaticCredentialProvider::new(
+                AzureCredential::SASToken(query_pairs),
+            )))
+        } else if let Some(sas) = self.sas_key.take() {
+            Ok(Arc::new(StaticCredentialProvider::new(
+                AzureCredential::SASToken(split_sas(&sas)?),
+            )))
+        } else {
+            Err(Error::MissingCredentialConfig {
+                credential_type: "sas_token".to_string(),
+            }
+            .into())
+        }
+    }
+
+    fn resolve_managed_identity(
+        &mut self,
+        http: &Arc<dyn HttpConnector>,
+    ) -> Result<AzureCredentialProvider> {
+        let msi_credential = ImdsManagedIdentityProvider::new(
+            self.client_id.take(),
+            self.object_id.take(),
+            self.msi_resource_id.take(),
+            self.msi_endpoint.take(),
+        );
+        Ok(Arc::new(TokenCredentialProvider::new(
+            msi_credential,
+            http.connect(&self.client_options.metadata_options())?,
+            self.retry_config.clone(),
+        )) as _)
+    }
+
     /// Configure a connection to container with given name on Microsoft Azure Blob store.
     pub fn build(mut self) -> Result<MicrosoftAzure> {
         if let Some(url) = self.url.take() {
             self.parse_url(&url)?;
         }
 
-        let container = self.container_name.ok_or(Error::MissingContainerName {})?;
+        let container = self
+            .container_name
+            .take()
+            .ok_or(Error::MissingContainerName {})?;
 
         let static_creds = |credential: AzureCredential| -> AzureCredentialProvider {
             Arc::new(StaticCredentialProvider::new(credential))
         };
 
-        let http = http_connector(self.http_connector)?;
+        let http = http_connector(self.http_connector.take())?;
 
         let (is_emulator, storage_url, auth, account) = if self.use_emulator.get()? {
             let account_name = self
@@ -982,8 +1216,8 @@ impl MicrosoftAzureBuilder {
             self.client_options = self.client_options.with_allow_http(true);
             (true, url, static_creds(credential), account_name)
         } else {
-            let account_name = self.account_name.ok_or(Error::MissingAccount {})?;
-            let account_url = match self.endpoint {
+            let account_name = self.account_name.take().ok_or(Error::MissingAccount {})?;
+            let account_url = match self.endpoint.take() {
                 Some(account_url) => account_url,
                 None => match self.use_fabric_endpoint.get()? {
                     true => {
@@ -1000,81 +1234,25 @@ impl MicrosoftAzureBuilder {
 
             let credential = if let Some(credential) = self.credentials {
                 credential
-            } else if let (
-                Some(fabric_token_service_url),
-                Some(fabric_workload_host),
-                Some(fabric_session_token),
-                Some(fabric_cluster_identifier),
-            ) = (
-                &self.fabric_token_service_url,
-                &self.fabric_workload_host,
-                &self.fabric_session_token,
-                &self.fabric_cluster_identifier,
-            ) {
-                // This case should precede the bearer token case because it is more specific and will utilize the bearer token.
-                let fabric_credential = FabricTokenOAuthProvider::new(
-                    fabric_token_service_url,
-                    fabric_workload_host,
-                    fabric_session_token,
-                    fabric_cluster_identifier,
-                    self.bearer_token.clone(),
-                );
-                Arc::new(TokenCredentialProvider::new(
-                    fabric_credential,
-                    http.connect(&self.client_options)?,
-                    self.retry_config.clone(),
-                )) as _
-            } else if let Some(bearer_token) = self.bearer_token {
-                static_creds(AzureCredential::BearerToken(bearer_token))
-            } else if let Some(access_key) = self.access_key {
-                let key = AzureAccessKey::try_new(&access_key)?;
-                static_creds(AzureCredential::AccessKey(key))
-            } else if let (Some(client_id), Some(tenant_id), Some(federated_token_file)) =
-                (&self.client_id, &self.tenant_id, self.federated_token_file)
-            {
-                let client_credential = WorkloadIdentityOAuthProvider::new(
-                    client_id,
-                    federated_token_file,
-                    tenant_id,
-                    self.authority_host,
-                );
-                Arc::new(TokenCredentialProvider::new(
-                    client_credential,
-                    http.connect(&self.client_options)?,
-                    self.retry_config.clone(),
-                )) as _
-            } else if let (Some(client_id), Some(client_secret), Some(tenant_id)) =
-                (&self.client_id, self.client_secret, &self.tenant_id)
-            {
-                let client_credential = ClientSecretOAuthProvider::new(
-                    client_id.clone(),
-                    client_secret,
-                    tenant_id,
-                    self.authority_host,
-                );
-                Arc::new(TokenCredentialProvider::new(
-                    client_credential,
-                    http.connect(&self.client_options)?,
-                    self.retry_config.clone(),
-                )) as _
-            } else if let Some(query_pairs) = self.sas_query_pairs {
-                static_creds(AzureCredential::SASToken(query_pairs))
-            } else if let Some(sas) = self.sas_key {
-                static_creds(AzureCredential::SASToken(split_sas(&sas)?))
-            } else if self.use_azure_cli.get()? {
-                Arc::new(AzureCliCredential::new()) as _
             } else {
-                let msi_credential = ImdsManagedIdentityProvider::new(
-                    self.client_id,
-                    self.object_id,
-                    self.msi_resource_id,
-                    self.msi_endpoint,
-                );
-                Arc::new(TokenCredentialProvider::new(
-                    msi_credential,
-                    http.connect(&self.client_options.metadata_options())?,
-                    self.retry_config.clone(),
-                )) as _
+                let credential_type = self.credential_type.as_deref().unwrap_or("auto");
+
+                match credential_type {
+                    "auto" => self.resolve_credential_auto(&http)?,
+                    "bearer_token" => self.resolve_bearer_token()?,
+                    "access_key" => self.resolve_access_key()?,
+                    "client_secret" => self.resolve_client_secret(&http)?,
+                    "workload_identity" => self.resolve_workload_identity(&http)?,
+                    "sas_token" => self.resolve_sas_token()?,
+                    "azure_cli" => Arc::new(AzureCliCredential::new()) as _,
+                    "managed_identity" => self.resolve_managed_identity(&http)?,
+                    other => {
+                        return Err(Error::UnknownCredentialType {
+                            credential_type: other.to_string(),
+                        }
+                        .into());
+                    }
+                }
             };
             (false, url, credential, account_name)
         };
@@ -1376,6 +1554,74 @@ mod tests {
         assert_eq!(builder.client_id.unwrap(), azure_client_id);
         assert_eq!(builder.account_name.unwrap(), azure_storage_account_name);
         assert_eq!(builder.bearer_token.unwrap(), azure_storage_token);
+    }
+
+    #[test]
+    fn azure_test_credential_type_config() {
+        let builder = MicrosoftAzureBuilder::new()
+            .with_config(AzureConfigKey::CredentialType, "client_secret");
+        assert_eq!(builder.credential_type, Some("client_secret".to_string()));
+        assert_eq!(
+            builder
+                .get_config_value(&AzureConfigKey::CredentialType)
+                .unwrap(),
+            "client_secret"
+        );
+
+        let builder =
+            MicrosoftAzureBuilder::new().with_config("credential_type".parse().unwrap(), "auto");
+        assert_eq!(builder.credential_type, Some("auto".to_string()));
+    }
+
+    #[test]
+    fn azure_test_credential_type_client_secret() {
+        let builder = MicrosoftAzureBuilder::new()
+            .with_account("account")
+            .with_container_name("container")
+            .with_client_id("client_id")
+            .with_client_secret("client_secret")
+            .with_tenant_id("tenant_id")
+            .with_federated_token_file("/tmp/token")
+            .with_credential_type("client_secret");
+        // Should succeed — client_secret is forced even though workload_identity fields are present
+        let result = builder.build();
+        // Build will fail because it can't actually connect, but it should not fail with
+        // a MissingCredentialConfig error — it should get past credential resolution
+        assert!(
+            result.is_ok(),
+            "Expected build to succeed with credential_type=client_secret, got: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn azure_test_credential_type_unknown() {
+        let builder = MicrosoftAzureBuilder::new()
+            .with_account("account")
+            .with_container_name("container")
+            .with_credential_type("invalid_type");
+        let result = builder.build();
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("Unknown credential type"),
+            "Expected unknown credential type error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn azure_test_credential_type_missing_config() {
+        let builder = MicrosoftAzureBuilder::new()
+            .with_account("account")
+            .with_container_name("container")
+            .with_credential_type("client_secret");
+        let result = builder.build();
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("required configuration is missing"),
+            "Expected missing config error, got: {err}"
+        );
     }
 
     #[test]
