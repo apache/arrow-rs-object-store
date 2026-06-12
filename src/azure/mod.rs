@@ -24,9 +24,9 @@
 //! Unused blocks will automatically be dropped after 7 days.
 //!
 use crate::{
-    CopyMode, CopyOptions, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
-    UploadPart,
+    Capabilities, CopyMode, CopyOptions, GetOptions, GetResult, ListResult,
+    MultipartId, MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions,
+    PutPayload, PutResult, Result, UploadPart,
     multipart::{MultipartStore, PartId},
     path::Path,
     signer::Signer,
@@ -58,10 +58,17 @@ pub use credential::AzureCredential;
 
 const STORE: &str = "MicrosoftAzure";
 
+// OrderedListing capability is not supported by with Azure Storage Hierarchical Namespace is enabled.
+// https://learn.microsoft.com/en-us/rest/api/storageservices/list-blobs
+fn get_default_capabilities() -> Capabilities {
+    Capabilities::new([])
+}
+
 /// Interface for [Microsoft Azure Blob Storage](https://azure.microsoft.com/en-us/services/storage/blobs/).
 #[derive(Debug)]
 pub struct MicrosoftAzure {
     client: Arc<AzureClient>,
+    capabilities: Option<Capabilities>,
 }
 
 impl MicrosoftAzure {
@@ -179,6 +186,12 @@ impl ObjectStore for MicrosoftAzure {
             CopyMode::Overwrite => self.client.copy_request(from, to, true).await,
             CopyMode::Create => self.client.copy_request(from, to, false).await,
         }
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.capabilities
+            .clone()
+            .unwrap_or_else(get_default_capabilities)
     }
 }
 
@@ -369,6 +382,7 @@ mod tests {
         tagging(
             Arc::new(MicrosoftAzure {
                 client: Arc::clone(&integration.client),
+                capabilities: None,
             }),
             validate,
             |p| {

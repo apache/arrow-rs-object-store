@@ -37,15 +37,15 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::CopyOptions;
 use crate::client::CredentialProvider;
 use crate::gcp::credential::GCSAuthorizer;
 use crate::signer::Signer;
 use crate::{
-    GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart, multipart::PartId,
-    path::Path,
+    Capabilities, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
+    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart,
+    multipart::PartId, path::Path,
 };
+use crate::{Capability, CopyOptions};
 use async_trait::async_trait;
 use client::GoogleCloudStorageClient;
 use futures_util::stream::{BoxStream, StreamExt};
@@ -66,6 +66,12 @@ mod credential;
 
 const STORE: &str = "GCS";
 
+// OrderedListing is supported by all GCP bucket types.
+// https://docs.cloud.google.com/storage/docs/listing-objects
+fn get_default_capabilities() -> Capabilities {
+    Capabilities::new([Capability::OrderedListing])
+}
+
 /// [`CredentialProvider`] for [`GoogleCloudStorage`]
 pub type GcpCredentialProvider = Arc<dyn CredentialProvider<Credential = GcpCredential>>;
 
@@ -77,6 +83,7 @@ pub type GcpSigningCredentialProvider =
 #[derive(Debug, Clone)]
 pub struct GoogleCloudStorage {
     client: Arc<GoogleCloudStorageClient>,
+    capabilities: Option<Capabilities>,
 }
 
 impl std::fmt::Display for GoogleCloudStorage {
@@ -222,6 +229,12 @@ impl ObjectStore for GoogleCloudStorage {
         } = options;
 
         self.client.copy_request(from, to, mode).await
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.capabilities
+            .clone()
+            .unwrap_or_else(get_default_capabilities)
     }
 }
 

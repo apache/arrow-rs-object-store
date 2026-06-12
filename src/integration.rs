@@ -24,6 +24,7 @@
 //!
 //! They are intended solely for testing purposes.
 
+use crate::capabilities::Capability;
 use crate::list::{PaginatedListOptions, PaginatedListStore};
 use crate::multipart::MultipartStore;
 use crate::path::Path;
@@ -396,6 +397,27 @@ pub async fn put_get_delete_list(storage: &DynObjectStore) {
             .collect();
 
         assert_eq!(actual, expected, "{prefix:?} - {offset:?}");
+    }
+
+    if storage.capabilities().has(Capability::OrderedListing) {
+        let mut sorted_files = files.clone();
+        sorted_files.sort();
+
+        let actual: Vec<_> = storage
+            .list(None)
+            .map_ok(|x| x.location)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert_eq!(actual, sorted_files);
+
+        let actual: Vec<_> = storage
+            .list_with_offset(None, &sorted_files[1])
+            .map_ok(|x| x.location)
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert_eq!(actual, sorted_files[2..]);
     }
 
     // Test bulk delete

@@ -24,10 +24,7 @@ use crate::multipart::{MultipartStore, PartId};
 use crate::path::Path;
 #[cfg(feature = "cloud")]
 use crate::signer::Signer;
-use crate::{
-    CopyOptions, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result,
-};
+use crate::{Capabilities, CopyOptions, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result};
 
 /// Store wrapper that applies a constant prefix to all paths handled by the store.
 #[derive(Debug, Clone)]
@@ -200,6 +197,10 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
         let full_from = self.full_path(from);
         let full_to = self.full_path(to);
         self.inner.rename_opts(&full_from, &full_to, options).await
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
     }
 }
 

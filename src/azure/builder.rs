@@ -23,7 +23,10 @@ use crate::azure::credential::{
 use crate::azure::{AzureCredential, AzureCredentialProvider, MicrosoftAzure, STORE};
 use crate::client::{HttpConnector, TokenCredentialProvider, http_connector};
 use crate::config::ConfigValue;
-use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
+use crate::{
+    Capabilities, ClientConfigKey, ClientOptions, ObjectStoreExt, Result, RetryConfig,
+    StaticCredentialProvider,
+};
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -180,6 +183,8 @@ pub struct MicrosoftAzureBuilder {
     fabric_cluster_identifier: Option<String>,
     /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
+    /// Capabilities to advertise for this store instance
+    capabilities: Option<ConfigValue<Capabilities>>,
 }
 
 /// Configuration keys for [`MicrosoftAzureBuilder`]
@@ -382,6 +387,9 @@ pub enum AzureConfigKey {
 
     /// Client options
     Client(ClientConfigKey),
+
+    /// Override the capabilities advertised by this store.
+    Capabilities,
 }
 
 impl AsRef<str> for AzureConfigKey {
@@ -411,6 +419,7 @@ impl AsRef<str> for AzureConfigKey {
             Self::FabricSessionToken => "azure_fabric_session_token",
             Self::FabricClusterIdentifier => "azure_fabric_cluster_identifier",
             Self::Client(key) => key.as_ref(),
+            Self::Capabilities => "azure_capabilities",
         }
     }
 }
@@ -468,6 +477,7 @@ impl FromStr for AzureConfigKey {
             }
             // Backwards compatibility
             "azure_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
+            "azure_capabilities" => Ok(Self::Capabilities),
             _ => match s.strip_prefix("azure_").unwrap_or(s).parse() {
                 Ok(key) => Ok(Self::Client(key)),
                 Err(_) => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
@@ -594,6 +604,9 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::FabricClusterIdentifier => {
                 self.fabric_cluster_identifier = Some(value.into())
             }
+            AzureConfigKey::Capabilities => {
+                self.capabilities = Some(ConfigValue::Deferred(value.into()))
+            }
         };
         self
     }
@@ -635,6 +648,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::FabricWorkloadHost => self.fabric_workload_host.clone(),
             AzureConfigKey::FabricSessionToken => self.fabric_session_token.clone(),
             AzureConfigKey::FabricClusterIdentifier => self.fabric_cluster_identifier.clone(),
+            AzureConfigKey::Capabilities => self.capabilities.as_ref().map(ToString::to_string),
         }
     }
 
@@ -946,6 +960,12 @@ impl MicrosoftAzureBuilder {
         self
     }
 
+    /// Override the [`Capabilities`] advertised by this store.
+    pub fn with_capabilities(mut self, capabilities: Capabilities) -> Self {
+        self.capabilities = Some(ConfigValue::Parsed(capabilities));
+        self
+    }
+
     /// Configure a connection to container with given name on Microsoft Azure Blob store.
     pub fn build(mut self) -> Result<MicrosoftAzure> {
         if let Some(url) = self.url.take() {
@@ -1094,7 +1114,10 @@ impl MicrosoftAzureBuilder {
         let http_client = http.connect(&config.client_options)?;
         let client = Arc::new(AzureClient::new(config, http_client));
 
-        Ok(MicrosoftAzure { client })
+        Ok(MicrosoftAzure {
+            client,
+            capabilities: self.capabilities.map(|x| x.get()).transpose()?,
+        })
     }
 }
 
@@ -1137,6 +1160,7 @@ pub fn split_sas(sas: &str) -> Result<Vec<(String, String)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Capability;
     use std::collections::HashMap;
 
     #[test]
@@ -1366,6 +1390,7 @@ mod tests {
             ("azure_client_id", azure_client_id),
             ("azure_storage_account_name", azure_storage_account_name),
             ("azure_storage_token", azure_storage_token),
+            ("azure_capabilities", "ordered_listing"),
         ]);
 
         let builder = options
@@ -1376,6 +1401,26 @@ mod tests {
         assert_eq!(builder.client_id.unwrap(), azure_client_id);
         assert_eq!(builder.account_name.unwrap(), azure_storage_account_name);
         assert_eq!(builder.bearer_token.unwrap(), azure_storage_token);
+        assert!(
+            builder
+                .capabilities
+                .unwrap()
+                .get()
+                .unwrap()
+                .has(Capability::OrderedListing)
+        );
+    }
+
+    #[test]
+    fn azure_test_config_get_value() {
+        let builder = MicrosoftAzureBuilder::new()
+            .with_config(AzureConfigKey::Capabilities, "ordered_listing");
+        assert_eq!(
+            builder
+                .get_config_value(&"azure_capabilities".parse().unwrap())
+                .unwrap(),
+            "ordered_listing"
+        );
     }
 
     #[test]

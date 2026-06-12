@@ -21,7 +21,7 @@ use std::ops::Range;
 use std::{convert::TryInto, sync::Arc};
 
 use crate::multipart::{MultipartStore, PartId};
-use crate::{CopyOptions, GetOptions, RenameOptions, UploadPart};
+use crate::{Capabilities, CopyOptions, GetOptions, RenameOptions, UploadPart};
 use crate::{
     GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
     PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, path::Path,
@@ -262,6 +262,10 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         sleep(self.config().wait_put_per_call).await;
 
         self.inner.rename_opts(from, to, options).await
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
     }
 }
 

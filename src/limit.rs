@@ -18,9 +18,9 @@
 //! An object store that limits the maximum concurrency of the wrapped implementation
 
 use crate::{
-    BoxStream, CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload,
-    ObjectMeta, ObjectStore, Path, PutMultipartOptions, PutOptions, PutPayload, PutResult,
-    RenameOptions, Result, StreamExt, UploadPart,
+    BoxStream, Capabilities, CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult,
+    MultipartUpload, ObjectMeta, ObjectStore, Path, PutMultipartOptions, PutOptions, PutPayload,
+    PutResult, RenameOptions, Result, StreamExt, UploadPart,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -161,6 +161,10 @@ impl<T: ObjectStore> ObjectStore for LimitStore<T> {
     async fn rename_opts(&self, from: &Path, to: &Path, options: RenameOptions) -> Result<()> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.inner.rename_opts(from, to, options).await
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
     }
 }
 

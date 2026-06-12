@@ -26,12 +26,13 @@ use chrono::{DateTime, Utc};
 use futures_util::{StreamExt, stream::BoxStream};
 use parking_lot::RwLock;
 
+use crate::capabilities::Capability;
 use crate::multipart::{MultipartStore, PartId};
 use crate::util::InvalidGetRange;
 use crate::{
-    Attributes, GetRange, GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutResult, Result,
-    UpdateVersion, UploadPart, path::Path,
+    Attributes, Capabilities, GetRange, GetResult, GetResultPayload, ListResult, MultipartId,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutResult,
+    Result, UpdateVersion, UploadPart, path::Path,
 };
 use crate::{CopyMode, CopyOptions, GetOptions, PutPayload};
 
@@ -415,6 +416,10 @@ impl ObjectStore for InMemory {
 
         Ok(())
     }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::new([Capability::OrderedListing])
+    }
 }
 
 #[async_trait]
@@ -551,6 +556,7 @@ mod tests {
     #[tokio::test]
     async fn in_memory_test() {
         let integration = InMemory::new();
+        assert!(integration.capabilities().has(Capability::OrderedListing));
 
         put_get_delete_list(&integration).await;
         list_with_offset_exclusivity(&integration).await;
