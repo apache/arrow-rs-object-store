@@ -50,11 +50,24 @@ It's possible to build `object_store` for the `wasm32-unknown-unknown` target, h
 cargo build -p object_store --target wasm32-unknown-unknown
 ```
 
-For `wasm32-wasip1`, where `reqwest` does not compile, use the `*-base` provider features (`aws-base`, `azure-base`, `gcp-base`, `http-base`) and supply your own HTTP client via [`HttpConnector`](https://docs.rs/object_store/latest/object_store/client/trait.HttpConnector.html).
+## Disabling `reqwest`
+
+The `aws`, `azure`, `gcp`, and `http` features each bundle a [`reqwest`]-based HTTP transport. To supply your own HTTP client instead — for example to target [`wasm32-wasip1`] (where `reqwest` does not compile), to share an existing client, or to keep `reqwest` out of your dependency tree — depend on the matching `*-base` feature and provide an [`HttpConnector`] at builder time:
+
+```toml
+[dependencies]
+object_store = { version = "0.13", default-features = false, features = ["aws-base"] }
+```
 
 ```
 cargo build -p object_store --no-default-features --features aws-base --target wasm32-wasip1
 ```
+
+See the [Feature Flags](https://docs.rs/object_store/latest/object_store/#feature-flags) section in the crate docs for the full set of flags.
+
+[`reqwest`]: https://crates.io/crates/reqwest
+[`wasm32-wasip1`]: https://doc.rust-lang.org/rustc/platform-support/wasm32-wasip1.html
+[`HttpConnector`]: https://docs.rs/object_store/latest/object_store/client/trait.HttpConnector.html
 
 ## Related Apache Crates
 

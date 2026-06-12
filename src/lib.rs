@@ -96,16 +96,35 @@
     doc = "* [`http`]: [HTTP/WebDAV Storage](https://datatracker.ietf.org/doc/html/rfc2518). See [`HttpBuilder`](http::HttpBuilder)"
 )]
 //!
-//! ## Feature Flags
+//! ## Disabling `reqwest`
 //!
-//! Each cloud provider has two feature flags: a "batteries-included" feature that bundles
-//! the default `reqwest`-based HTTP transport, and a `*-base` feature that omits `reqwest`
-//! so you can plug in your own HTTP client via [`HttpConnector`](client::HttpConnector).
+//! The `aws`, `azure`, `gcp`, and `http` features each bundle a
+//! [`reqwest`]-based HTTP transport, which is the right choice for most
+//! applications. If you would rather supply your own HTTP client -- for example
+//! to share an existing client, to target a platform where `reqwest` does not
+//! compile (such as `wasm32-wasip1`), or to keep `reqwest` out of your
+//! dependency tree -- use the matching `*-base` feature and provide an
+//! [`HttpConnector`](client::HttpConnector) at builder time.
 //!
-//! | Feature | Description |
-//! | --- | --- |
-//! | `aws`, `azure`, `gcp`, `http` | Provider with the built-in `reqwest` HTTP transport. The typical choice. |
-//! | `aws-base`, `azure-base`, `gcp-base`, `http-base` | Provider only -- bring your own [`HttpConnector`](client::HttpConnector). Useful when your application already has its own HTTP client, or to keep `reqwest` out of your dependency tree. |
+//! ```toml
+//! [dependencies]
+//! object_store = { version = "0.13", default-features = false, features = ["aws-base"] }
+//! ```
+//!
+//! ```ignore
+//! use object_store::aws::AmazonS3Builder;
+//!
+//! let store = AmazonS3Builder::from_env()
+//!     .with_bucket_name("my-bucket")
+//!     // `my_connector` is your own `impl HttpConnector`
+//!     .with_http_connector(my_connector)
+//!     .build()?;
+//! ```
+//!
+//! See the [Feature Flags](#feature-flags) reference below for the full set
+//! of flags.
+//!
+//! [`reqwest`]: https://crates.io/crates/reqwest
 //!
 //! # Why not a Filesystem Interface?
 //!
@@ -545,9 +564,56 @@
 //! the [`HttpConnector`] trait and utilities in the [`client`] module.
 //! Examples include injecting custom HTTP headers or using an alternate
 //! tokio Runtime I/O requests. To use a custom connector without bundling
-//! `reqwest`, see [Feature Flags](#feature-flags).
+//! `reqwest`, see [Disabling `reqwest`](#disabling-reqwest).
 //!
 //! [`HttpConnector`]: client::HttpConnector
+//!
+//! # Feature Flags
+//!
+//! The feature set is layered so that you can pick a provider independently
+//! of its HTTP transport:
+//!
+//! * `cloud-base` holds the shared provider implementation (XML/JSON parsing,
+//!   credentials, retry, etc.) and intentionally does *not* depend on
+//!   `reqwest`.
+//! * `reqwest` enables the built-in [`reqwest`]-based [`HttpConnector`].
+//! * `<provider>-base` (`aws-base`, `azure-base`, `gcp-base`, `http-base`)
+//!   adds the per-provider logic on top of `cloud-base` without pulling in
+//!   `reqwest`.
+//! * `<provider>` (`aws`, `azure`, `gcp`, `http`) is the batteries-included
+//!   alias for `<provider>-base` + `reqwest` and is the typical choice.
+//!
+//! ## Provider features
+//!
+//! | Feature | Enables | Notes |
+//! | --- | --- | --- |
+//! | `aws` | `aws-base` + `reqwest` | Amazon S3 with the built-in HTTP transport. |
+//! | `azure` | `azure-base` + `reqwest` | Azure Blob Storage with the built-in HTTP transport. |
+//! | `gcp` | `gcp-base` + `reqwest` | Google Cloud Storage with the built-in HTTP transport. |
+//! | `http` | `http-base` + `reqwest` | HTTP/WebDAV with the built-in HTTP transport. |
+//! | `aws-base` | provider only | S3 provider without `reqwest`; supply your own [`HttpConnector`]. |
+//! | `azure-base` | provider only | Azure provider without `reqwest`; supply your own [`HttpConnector`]. |
+//! | `gcp-base` | provider only | GCS provider without `reqwest`; supply your own [`HttpConnector`]. |
+//! | `http-base` | provider only | HTTP/WebDAV provider without `reqwest`; supply your own [`HttpConnector`]. |
+//!
+//! ## Transport and shared features
+//!
+//! | Feature | Description |
+//! | --- | --- |
+//! | `reqwest` | Enables the default [`reqwest`]-based [`HttpConnector`]. Pulled in automatically by `aws`, `azure`, `gcp`, and `http`. |
+//! | `cloud-base` | Shared cloud-provider implementation. Pulled in automatically by every `*-base` feature; usually not enabled directly. |
+//! | `cloud` | Back-compat alias for `cloud-base` + `reqwest`. Kept for users that previously depended on the `cloud` umbrella feature. |
+//! | `tls-webpki-roots` | When `reqwest` is enabled, also bundle Mozilla's [`webpki-roots`] CA certificates. See [TLS Certificates](#tls-certificates). |
+//!
+//! ## Other features
+//!
+//! | Feature | Description |
+//! | --- | --- |
+//! | `fs` *(default)* | Local filesystem store via [`LocalFileSystem`](local::LocalFileSystem). |
+//! | `tokio` | Enables Tokio-based utilities such as [`BufReader`](buffered::BufReader) and [`BufWriter`](buffered::BufWriter). Pulled in automatically by `fs` and the `*-base` features. |
+//! | `integration` | Test helpers used by this crate's own integration tests; not intended for downstream use. |
+//!
+//! [`webpki-roots`]: https://crates.io/crates/webpki-roots
 
 #[cfg(feature = "aws-base")]
 pub mod aws;
