@@ -96,35 +96,7 @@
     doc = "* [`http`]: [HTTP/WebDAV Storage](https://datatracker.ietf.org/doc/html/rfc2518). See [`HttpBuilder`](http::HttpBuilder)"
 )]
 //!
-//! ## Disabling `reqwest`
-//!
-//! The `aws`, `azure`, `gcp`, and `http` features each bundle a
-//! [`reqwest`]-based HTTP transport, which is the right choice for most
-//! applications. If you would rather supply your own HTTP client -- for example
-//! to share an existing client, to target a platform where `reqwest` does not
-//! compile (such as `wasm32-wasip1`), or to keep `reqwest` out of your
-//! dependency tree -- use the matching `*-base` feature and provide an
-//! [`HttpConnector`](client::HttpConnector) at builder time.
-//!
-//! ```toml
-//! [dependencies]
-//! object_store = { version = "0.13", default-features = false, features = ["aws-base"] }
-//! ```
-//!
-//! ```ignore
-//! use object_store::aws::AmazonS3Builder;
-//!
-//! let store = AmazonS3Builder::from_env()
-//!     .with_bucket_name("my-bucket")
-//!     // `my_connector` is your own `impl HttpConnector`
-//!     .with_http_connector(my_connector)
-//!     .build()?;
-//! ```
-//!
-//! See the [Feature Flags](#feature-flags) reference below for the full set
-//! of flags.
-//!
-//! [`reqwest`]: https://crates.io/crates/reqwest
+//! See [Feature Flags](#feature-flags) for the full set of flags.
 //!
 //! # Why not a Filesystem Interface?
 //!
@@ -547,27 +519,6 @@
 //! [Apache Iceberg]: https://iceberg.apache.org/
 //! [Delta Lake]: https://delta.io/
 //!
-//! # TLS Certificates
-//!
-//! Stores that use HTTPS/TLS (this is true for most cloud stores) can choose the source of their [CA]
-//! certificates. By default the system-bundled certificates are used (see
-//! [`rustls-native-certs`]). The `tls-webpki-roots` feature switch can be used to also bundle Mozilla's
-//! root certificates with the library/application (see [`webpki-roots`]).
-//!
-//! [CA]: https://en.wikipedia.org/wiki/Certificate_authority
-//! [`rustls-native-certs`]: https://crates.io/crates/rustls-native-certs/
-//! [`webpki-roots`]: https://crates.io/crates/webpki-roots
-//!
-//! # Customizing HTTP Clients
-//!
-//! Many [`ObjectStore`] implementations permit customization of the HTTP client via
-//! the [`HttpConnector`] trait and utilities in the [`client`] module.
-//! Examples include injecting custom HTTP headers or using an alternate
-//! tokio Runtime I/O requests. To use a custom connector without bundling
-//! `reqwest`, see [Disabling `reqwest`](#disabling-reqwest).
-//!
-//! [`HttpConnector`]: client::HttpConnector
-//!
 //! # Feature Flags
 //!
 //! The feature set is layered so that you can pick a provider independently
@@ -611,9 +562,59 @@
 //! | --- | --- |
 //! | `fs` *(default)* | Local filesystem store via [`LocalFileSystem`](local::LocalFileSystem). |
 //! | `tokio` | Enables Tokio-based utilities such as [`BufReader`](buffered::BufReader) and [`BufWriter`](buffered::BufWriter). Pulled in automatically by `fs` and the `*-base` features. |
-//! | `integration` | Test helpers used by this crate's own integration tests; not intended for downstream use. |
+//! | `integration` | Exposes the [`integration`] module, a reusable test suite for verifying custom [`ObjectStore`] implementations. Not API-stable. |
 //!
+//! # TLS Certificates
+//!
+//! Stores that use HTTPS/TLS (this is true for most cloud stores) can choose the source of their [CA]
+//! certificates. By default the system-bundled certificates are used (see
+//! [`rustls-native-certs`]). The `tls-webpki-roots` feature switch can be used to also bundle Mozilla's
+//! root certificates with the library/application (see [`webpki-roots`]).
+//!
+//! [CA]: https://en.wikipedia.org/wiki/Certificate_authority
+//! [`rustls-native-certs`]: https://crates.io/crates/rustls-native-certs/
 //! [`webpki-roots`]: https://crates.io/crates/webpki-roots
+//!
+//! # Customizing HTTP Clients
+//!
+//! Many [`ObjectStore`] implementations permit customization of the HTTP client via
+//! the [`HttpConnector`] trait and utilities in the [`client`] module.
+//! Examples include injecting custom HTTP headers or using an alternate
+//! tokio Runtime for I/O requests. To replace `reqwest` entirely (rather than
+//! tweak the bundled transport) see [Disabling `reqwest`](#disabling-reqwest).
+//!
+//! [`HttpConnector`]: client::HttpConnector
+//!
+//! # Disabling `reqwest`
+//!
+//! The `aws`, `azure`, `gcp`, and `http` features each bundle a
+//! [`reqwest`]-based HTTP transport, which is the right choice for most
+//! applications. If you would rather supply your own HTTP client — for example
+//! to share an existing client, to target a platform where `reqwest` does not
+//! compile (such as `wasm32-wasip1`), or to keep `reqwest` out of your
+//! dependency tree — use the matching `*-base` feature and provide an
+//! [`HttpConnector`](client::HttpConnector) at builder time.
+//!
+//! Remember to disable the default features so that `fs` (and its transitive
+//! dependencies) is not pulled in:
+//!
+//! ```toml
+//! [dependencies]
+//! object_store = { version = "0.13", default-features = false, features = ["aws-base"] }
+//! ```
+//!
+//! ```ignore
+//! use object_store::aws::AmazonS3Builder;
+//!
+//! let store = AmazonS3Builder::from_env()
+//!     // `my_connector` is your own `impl HttpConnector`
+//!     .with_http_connector(my_connector)
+//!     .build()?;
+//! ```
+//!
+//! See [Feature Flags](#feature-flags) above for the full set of flags.
+//!
+//! [`reqwest`]: https://crates.io/crates/reqwest
 
 #[cfg(feature = "aws-base")]
 pub mod aws;
