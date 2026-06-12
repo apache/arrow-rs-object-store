@@ -305,9 +305,12 @@ mod tests {
         maybe_skip_integration!();
         let url = std::env::var("HTTP_URL").expect("HTTP_URL must be set");
         let options = ClientOptions::new().with_allow_http(true);
+        // tag the extensions of every HTTP response with a marker,
+        // allowing response_extensions to verify their propagation
         let integration = HttpBuilder::new()
             .with_url(url)
             .with_client_options(options)
+            .with_http_connector(MarkerHttpConnector::default())
             .build()
             .unwrap();
 
@@ -316,5 +319,6 @@ mod tests {
         list_with_delimiter(&integration).await;
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
+        response_extensions(&integration, false).await;
     }
 }
