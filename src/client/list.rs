@@ -85,9 +85,7 @@ impl<T: ListClient + Clone> ListClientExt for T {
                         },
                     )
                     .await?;
-                let mut result = r.result;
-                result.extensions.extend(r.extensions);
-                Ok((result, (prefix, offset), r.page_token))
+                Ok((r.result, (prefix, offset), r.page_token))
             },
         )
         .boxed()

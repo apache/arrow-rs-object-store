@@ -1014,10 +1014,12 @@ impl ListClient for Arc<AzureClient> {
             }
         }
 
+        let mut result = to_list_result(response, prefix)?;
+        result.extensions = parts.extensions;
+
         Ok(PaginatedListResult {
-            result: to_list_result(response, prefix)?,
+            result,
             page_token: token,
-            extensions: parts.extensions,
         })
     }
 }

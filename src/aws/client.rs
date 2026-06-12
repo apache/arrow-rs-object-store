@@ -36,8 +36,8 @@ use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpResponse};
 use crate::list::{PaginatedListOptions, PaginatedListResult};
 use crate::multipart::PartId;
 use crate::{
-    Attribute, Attributes, ClientOptions, GetOptions, MultipartId, Path, PutMultipartOptions,
-    PutPayload, PutResult, Result, RetryConfig, TagSet,
+    Attribute, Attributes, ClientOptions, GetOptions, ListResult, MultipartId, Path,
+    PutMultipartOptions, PutPayload, PutResult, Result, RetryConfig, TagSet,
 };
 use async_trait::async_trait;
 use base64::Engine;
@@ -1011,10 +1011,12 @@ impl ListClient for Arc<S3Client> {
 
         let token = response.next_continuation_token.take();
 
+        let mut result: ListResult = response.try_into()?;
+        result.extensions = parts.extensions;
+
         Ok(PaginatedListResult {
-            result: response.try_into()?,
+            result,
             page_token: token,
-            extensions: parts.extensions,
         })
     }
 }
@@ -1482,7 +1484,7 @@ mod tests {
             .list_request(None, PaginatedListOptions::default())
             .await
             .unwrap();
-        assert_eq!(page.extensions.get::<Marker>(), Some(&Marker(42)));
+        assert_eq!(page.result.extensions.get::<Marker>(), Some(&Marker(42)));
 
         mock.push_fn(|_| {
             Response::builder()
