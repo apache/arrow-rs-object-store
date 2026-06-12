@@ -192,6 +192,7 @@ impl<T: GetClient> GetContext<T> {
             meta,
             range,
             attributes,
+            extensions: parts.extensions,
         })
     }
 

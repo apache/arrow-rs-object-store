@@ -52,6 +52,7 @@ impl TryFrom<ListResponse> for ListResult {
         Ok(Self {
             common_prefixes,
             objects,
+            extensions: Default::default(),
         })
     }
 }

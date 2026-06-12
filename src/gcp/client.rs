@@ -32,7 +32,7 @@ use crate::multipart::PartId;
 use crate::path::Path;
 use crate::util::hex_encode;
 use crate::{
-    Attribute, Attributes, ClientOptions, CopyMode, GetOptions, MultipartId, PutMode,
+    Attribute, Attributes, ClientOptions, CopyMode, GetOptions, ListResult, MultipartId, PutMode,
     PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, RetryConfig,
 };
 use async_trait::async_trait;
@@ -250,8 +250,10 @@ impl Request<'_> {
 
     async fn do_put(self) -> Result<PutResult> {
         let response = self.send().await?;
-        Ok(get_put_result(response.headers(), VERSION_HEADER)
-            .map_err(|source| Error::Metadata { source })?)
+        Ok(
+            get_put_result(response, VERSION_HEADER)
+                .map_err(|source| Error::Metadata { source })?,
+        )
     }
 }
 
@@ -541,11 +543,12 @@ impl GoogleCloudStorageClient {
             .await
             .map_err(|source| Error::CompleteMultipartRequest { source })?;
 
-        let version = get_version(response.headers(), VERSION_HEADER)
+        let (parts, body) = response.into_parts();
+
+        let version = get_version(&parts.headers, VERSION_HEADER)
             .map_err(|source| Error::Metadata { source })?;
 
-        let data = response
-            .into_body()
+        let data = body
             .bytes()
             .await
             .map_err(|source| Error::CompleteMultipartResponseBody { source })?;
@@ -556,6 +559,7 @@ impl GoogleCloudStorageClient {
         Ok(PutResult {
             e_tag: Some(response.e_tag),
             version,
+            extensions: parts.extensions,
         })
     }
 
@@ -705,8 +709,11 @@ impl ListClient for Arc<GoogleCloudStorageClient> {
             .with_bearer_auth(credential.as_deref())
             .send_retry(&self.config.retry_config)
             .await
-            .map_err(|source| Error::ListRequest { source })?
-            .into_body()
+            .map_err(|source| Error::ListRequest { source })?;
+
+        let (parts, body) = response.into_parts();
+
+        let response = body
             .bytes()
             .await
             .map_err(|source| Error::ListResponseBody { source })?;
@@ -715,8 +722,12 @@ impl ListClient for Arc<GoogleCloudStorageClient> {
             .map_err(|source| Error::InvalidListResponse { source })?;
 
         let token = response.next_continuation_token.take();
+
+        let mut result: ListResult = response.try_into()?;
+        result.extensions = parts.extensions;
+
         Ok(PaginatedListResult {
-            result: response.try_into()?,
+            result,
             page_token: token,
         })
     }

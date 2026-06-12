@@ -36,8 +36,8 @@ use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpResponse};
 use crate::list::{PaginatedListOptions, PaginatedListResult};
 use crate::multipart::PartId;
 use crate::{
-    Attribute, Attributes, ClientOptions, GetOptions, MultipartId, Path, PutMultipartOptions,
-    PutPayload, PutResult, Result, RetryConfig, TagSet,
+    Attribute, Attributes, ClientOptions, GetOptions, ListResult, MultipartId, Path,
+    PutMultipartOptions, PutPayload, PutResult, Result, RetryConfig, TagSet,
 };
 use async_trait::async_trait;
 use base64::Engine;
@@ -470,8 +470,10 @@ impl Request<'_> {
 
     pub(crate) async fn do_put(self) -> Result<PutResult> {
         let response = self.send().await?;
-        Ok(get_put_result(response.headers(), VERSION_HEADER)
-            .map_err(|source| Error::Metadata { source })?)
+        Ok(
+            get_put_result(response, VERSION_HEADER)
+                .map_err(|source| Error::Metadata { source })?,
+        )
     }
 }
 
@@ -857,11 +859,12 @@ impl S3Client {
                 path: location.as_ref().to_string(),
             })?;
 
-        let version = get_version(response.headers(), VERSION_HEADER)
+        let (parts, body) = response.into_parts();
+
+        let version = get_version(&parts.headers, VERSION_HEADER)
             .map_err(|source| Error::Metadata { source })?;
 
-        let data = response
-            .into_body()
+        let data = body
             .bytes()
             .await
             .map_err(|source| Error::CompleteMultipartResponseBody { source })?;
@@ -872,6 +875,7 @@ impl S3Client {
         Ok(PutResult {
             e_tag: Some(response.e_tag),
             version,
+            extensions: parts.extensions,
         })
     }
 
@@ -993,8 +997,11 @@ impl ListClient for Arc<S3Client> {
             .with_aws_sigv4(credential.authorizer(), None)
             .send_retry(&self.config.retry_config)
             .await
-            .map_err(|source| Error::ListRequest { source })?
-            .into_body()
+            .map_err(|source| Error::ListRequest { source })?;
+
+        let (parts, body) = response.into_parts();
+
+        let response = body
             .bytes()
             .await
             .map_err(|source| Error::ListResponseBody { source })?;
@@ -1004,8 +1011,11 @@ impl ListClient for Arc<S3Client> {
 
         let token = response.next_continuation_token.take();
 
+        let mut result: ListResult = response.try_into()?;
+        result.extensions = parts.extensions;
+
         Ok(PaginatedListResult {
-            result: response.try_into()?,
+            result,
             page_token: token,
         })
     }

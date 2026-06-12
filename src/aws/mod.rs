@@ -680,7 +680,10 @@ mod tests {
     #[tokio::test]
     async fn s3_test() {
         maybe_skip_integration!();
-        let config = AmazonS3Builder::from_env();
+        // tag the extensions of every HTTP response with a marker,
+        // allowing response_extensions to verify their propagation
+        let config =
+            AmazonS3Builder::from_env().with_http_connector(MarkerHttpConnector::default());
 
         let integration = config.build().unwrap();
         let config = &integration.client.config;
@@ -702,6 +705,7 @@ mod tests {
         s3_encryption(&integration).await;
         put_get_attributes(&integration).await;
         list_paginated(&integration, &integration).await;
+        response_extensions(&integration, true).await;
 
         // Object tagging is not supported by S3 Express One Zone
         if config.session_provider.is_none() {

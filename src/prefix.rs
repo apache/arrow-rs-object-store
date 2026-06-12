@@ -186,6 +186,7 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
                     .into_iter()
                     .map(|meta| self.strip_meta(meta))
                     .collect(),
+                extensions: lst.extensions,
             })
     }
 

@@ -256,12 +256,15 @@ impl Client {
             .send()
             .await;
 
-        let response = match result {
-            Ok(result) => result
-                .into_body()
-                .bytes()
-                .await
-                .map_err(|source| Error::Reqwest { source })?,
+        let (response, extensions) = match result {
+            Ok(result) => {
+                let (parts, body) = result.into_parts();
+                let body = body
+                    .bytes()
+                    .await
+                    .map_err(|source| Error::Reqwest { source })?;
+                (body, parts.extensions)
+            }
             Err(e) if matches!(e.status(), Some(StatusCode::NOT_FOUND)) => {
                 return match depth {
                     "0" => {
@@ -286,8 +289,9 @@ impl Client {
             }
         };
 
-        let status = quick_xml::de::from_reader(response.reader())
+        let mut status: MultiStatus = quick_xml::de::from_reader(response.reader())
             .map_err(|source| Error::InvalidPropFind { source })?;
+        status.extensions = extensions;
 
         Ok(status)
     }
@@ -415,6 +419,9 @@ impl GetClient for Client {
 #[derive(Deserialize, Default)]
 pub(crate) struct MultiStatus {
     pub response: Vec<MultiStatusResponse>,
+    /// The extensions of the HTTP response this was parsed from
+    #[serde(skip)]
+    pub extensions: ::http::Extensions,
 }
 
 #[derive(Deserialize)]

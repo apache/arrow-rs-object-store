@@ -311,7 +311,12 @@ mod test {
     #[tokio::test]
     async fn gcs_test() {
         maybe_skip_integration!();
-        let integration = GoogleCloudStorageBuilder::from_env().build().unwrap();
+        // tag the extensions of every HTTP response with a marker,
+        // allowing response_extensions to verify their propagation
+        let integration = GoogleCloudStorageBuilder::from_env()
+            .with_http_connector(MarkerHttpConnector::default())
+            .build()
+            .unwrap();
 
         put_get_delete_list(&integration).await;
         list_with_offset_exclusivity(&integration).await;
@@ -336,6 +341,10 @@ mod test {
             // Fake GCS server doesn't currently support attributes
             put_get_attributes(&integration).await;
         }
+
+        // Fake GCS server does not yet implement XML Multipart uploads
+        let test_multipart = integration.client.config().base_url == DEFAULT_GCS_BASE_URL;
+        response_extensions(&integration, test_multipart).await;
     }
 
     #[cfg(feature = "reqwest")]
