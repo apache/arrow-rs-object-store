@@ -1438,7 +1438,7 @@ pub async fn list_with_offset_exclusivity(storage: &DynObjectStore) {
 }
 
 #[cfg(all(
-    feature = "cloud",
+    feature = "reqwest",
     not(all(target_arch = "wasm32", target_os = "wasi"))
 ))]
 mod marker {
@@ -1521,7 +1521,7 @@ mod marker {
 }
 
 #[cfg(all(
-    feature = "cloud",
+    feature = "reqwest",
     not(all(target_arch = "wasm32", target_os = "wasi"))
 ))]
 pub use marker::{MarkerHttpConnector, response_extensions};
