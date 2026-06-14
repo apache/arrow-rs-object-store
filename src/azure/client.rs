@@ -70,11 +70,14 @@ static SOURCE_ENCRYPTION_KEY_SHA256_HEADER: HeaderName =
     HeaderName::from_static("x-ms-source-encryption-key-sha256");
 static SOURCE_ENCRYPTION_ALGORITHM_HEADER: HeaderName =
     HeaderName::from_static("x-ms-source-encryption-algorithm");
+static COPY_SOURCE_AUTHORIZATION: HeaderName =
+    HeaderName::from_static("x-ms-copy-source-authorization");
 // Put Blob From URL added source CPK headers in 2026-02-06.
 // https://learn.microsoft.com/en-us/rest/api/storageservices/version-2026-02-06
 // before this version you could only specify CPK headers for the destination.
 // we only upgrade to this version if you are applying CPK headers to a copy request.
 const PUT_BLOB_FROM_URL_SOURCE_CPK_VERSION: &str = "2026-02-06";
+const COPY_SOURCE_SAS_EXPIRES_IN: Duration = Duration::from_secs(3600);
 
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, thiserror::Error)]
@@ -208,11 +211,9 @@ impl AzureConfig {
     /// query parameters.
     ///
     /// CPK material lives in request *headers* (`x-ms-encryption-key` etc.),
-    /// not in the URL, so today's URL-only redaction does not actively hide
-    /// it. The flag is still set for CPK requests so that any future
-    /// expansion of the redaction surface (headers, response bodies) covers
-    /// CPK without further changes here, and so that operators have a single
-    /// "this request touches secret material" signal for both auth modes.
+    /// not in the URL. Those header values are marked sensitive when added to
+    /// the request, while this flag ensures retry/error formatting also treats
+    /// the whole request as sensitive.
     ///
     /// [`RetryableRequestBuilder::sensitive`]: crate::client::retry::RetryableRequestBuilder
     fn is_sensitive(&self, credential: &Option<Arc<AzureCredential>>) -> bool {
@@ -283,7 +284,7 @@ impl AzureEncryptionHeaders {
         })
     }
 
-    fn is_enabled(&self) -> bool {
+    pub(crate) fn is_enabled(&self) -> bool {
         self.encryption_key.is_some()
     }
 }
@@ -880,6 +881,7 @@ impl AzureClient {
         let credential = self.get_credential().await?;
         let url = self.config.path_url(to);
         let mut source = self.config.path_url(from);
+        let mut source_authorization = None;
 
         // If using SAS authorization must include the headers in the URL
         // <https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob#request-headers>
@@ -887,11 +889,33 @@ impl AzureClient {
             source.query_pairs_mut().extend_pairs(pairs);
         }
 
+        if self.config.encryption_headers.is_enabled() {
+            match credential.as_deref() {
+                Some(AzureCredential::AccessKey(key)) => {
+                    let signed_start = Utc::now();
+                    let signed_expiry = signed_start + COPY_SOURCE_SAS_EXPIRES_IN;
+                    AzureSigner::new(
+                        key.clone(),
+                        self.config.account.clone(),
+                        signed_start,
+                        signed_expiry,
+                        None,
+                    )
+                    .sign(&Method::GET, &mut source)?;
+                }
+                Some(AzureCredential::BearerToken(token)) => {
+                    source_authorization = Some(format!("Bearer {token}"));
+                }
+                _ => {}
+            }
+        }
+
         let mut builder = self
             .client
             .request(Method::PUT, url.as_str())
-            .header(&COPY_SOURCE, source.to_string())
             .header(CONTENT_LENGTH, HeaderValue::from_static("0"));
+
+        builder = builder.sensitive_header(&COPY_SOURCE, source.to_string());
 
         if self.config.encryption_headers.is_enabled() {
             builder = builder
@@ -899,6 +923,10 @@ impl AzureClient {
                 .with_azure_encryption_headers(&self.config.encryption_headers)
                 .with_azure_source_encryption_headers(&self.config.encryption_headers)
                 .with_azure_version(PUT_BLOB_FROM_URL_SOURCE_CPK_VERSION);
+        }
+
+        if let Some(source_authorization) = source_authorization {
+            builder = builder.sensitive_header(&COPY_SOURCE_AUTHORIZATION, source_authorization);
         }
 
         if !overwrite {
@@ -1594,9 +1622,6 @@ Content-ID: 0\r
 \r
 DELETE /testcontainer/a HTTP/1.1\r
 Content-Length: 0\r
-X-Ms-Encryption-Key: BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\r
-X-Ms-Encryption-Key-Sha256: S7Bvjk46dxXSAdVz0KpCN2LlXavWGiwCJ4+lbMbSlOA=\r
-X-Ms-Encryption-Algorithm: AES256\r
 Date: Tue, 05 Nov 2024 15:01:15 GMT\r
 X-Ms-Version: 2023-11-03\r
 Authorization: Bearer static-token\r
@@ -1609,9 +1634,6 @@ Content-ID: 1\r
 \r
 DELETE /testcontainer/b HTTP/1.1\r
 Content-Length: 0\r
-X-Ms-Encryption-Key: BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\r
-X-Ms-Encryption-Key-Sha256: S7Bvjk46dxXSAdVz0KpCN2LlXavWGiwCJ4+lbMbSlOA=\r
-X-Ms-Encryption-Algorithm: AES256\r
 Date: Tue, 05 Nov 2024 15:01:15 GMT\r
 X-Ms-Version: 2023-11-03\r
 Authorization: Bearer static-token\r
@@ -1624,9 +1646,6 @@ Content-ID: 2\r
 \r
 DELETE /testcontainer/c HTTP/1.1\r
 Content-Length: 0\r
-X-Ms-Encryption-Key: BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=\r
-X-Ms-Encryption-Key-Sha256: S7Bvjk46dxXSAdVz0KpCN2LlXavWGiwCJ4+lbMbSlOA=\r
-X-Ms-Encryption-Algorithm: AES256\r
 Date: Tue, 05 Nov 2024 15:01:15 GMT\r
 X-Ms-Version: 2023-11-03\r
 Authorization: Bearer static-token\r
@@ -1649,6 +1668,60 @@ Authorization: Bearer static-token\r
         assert!(!debug.contains(&encryption_key));
         assert!(!debug.contains(&encryption_key_sha256));
         assert!(debug.contains("key_configured: true"));
+    }
+
+    #[test]
+    fn test_azure_sensitive_headers_redact_client_request_debug() {
+        let encryption_key = BASE64_STANDARD.encode([7_u8; 32]);
+        let headers = AzureEncryptionHeaders::try_new(Some(encryption_key.clone())).unwrap();
+        let encryption_key_sha256 = headers.encryption_key_sha256.clone().unwrap();
+        let copy_source = "http://example.com/source.txt?sig=secret-source-sas";
+        let source_authorization = "Bearer static-token";
+
+        let request = HttpClient::new(Client::new())
+            .request(Method::PUT, "http://example.com/dest.txt")
+            .with_azure_encryption_headers(&headers)
+            .with_azure_source_encryption_headers(&headers)
+            .sensitive_header(&COPY_SOURCE, copy_source)
+            .sensitive_header(&COPY_SOURCE_AUTHORIZATION, source_authorization)
+            .into_parts()
+            .1
+            .unwrap();
+
+        assert_eq!(
+            request
+                .headers()
+                .get("x-ms-encryption-key")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            encryption_key
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get("x-ms-source-encryption-key")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            encryption_key
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get("x-ms-copy-source")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            copy_source
+        );
+
+        let debug = format!("{:?}", request.headers());
+        assert!(!debug.contains(&encryption_key));
+        assert!(!debug.contains(&encryption_key_sha256));
+        assert!(!debug.contains(copy_source));
+        assert!(!debug.contains(source_authorization));
+        assert!(debug.contains("Sensitive"));
     }
 
     #[tokio::test]
@@ -1732,14 +1805,19 @@ Authorization: Bearer static-token\r
 
         server.push_fn(move |req| {
             assert_eq!(req.method(), Method::PUT);
-            assert_eq!(
-                req.headers()
-                    .get("x-ms-copy-source")
-                    .unwrap()
-                    .to_str()
-                    .unwrap(),
-                expected_source
-            );
+            let copy_source = req
+                .headers()
+                .get("x-ms-copy-source")
+                .unwrap()
+                .to_str()
+                .unwrap();
+            let mut parsed_source = Url::parse(copy_source).unwrap();
+            let query: HashMap<_, _> = parsed_source.query_pairs().into_owned().collect();
+            parsed_source.set_query(None);
+            assert_eq!(parsed_source.to_string(), expected_source);
+            assert_eq!(query.get("sp").map(String::as_str), Some("r"));
+            assert_eq!(query.get("sr").map(String::as_str), Some("b"));
+            assert!(query.contains_key("sig"));
             assert_eq!(
                 req.headers()
                     .get("x-ms-source-encryption-key")
@@ -1811,6 +1889,100 @@ Authorization: Bearer static-token\r
             .copy(&Path::from("source.txt"), &Path::from("dest.txt"))
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_copy_request_uses_source_authorization_for_bearer_cpk() {
+        let server = crate::client::mock_server::MockServer::new().await;
+        let endpoint = server.url().to_string();
+        let expected_source = format!("{endpoint}/testcontainer/source.txt");
+
+        let store = crate::azure::MicrosoftAzureBuilder::new()
+            .with_account("testaccount")
+            .with_container_name("testcontainer")
+            .with_bearer_token_authorization("static-token")
+            .with_allow_http(true)
+            .with_endpoint(endpoint)
+            .with_encryption_key(BASE64_STANDARD.encode([7_u8; 32]))
+            .build()
+            .unwrap();
+
+        server.push_fn(move |req| {
+            assert_eq!(req.method(), Method::PUT);
+            assert_eq!(
+                req.headers()
+                    .get("x-ms-copy-source")
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+                expected_source
+            );
+            assert_eq!(
+                req.headers()
+                    .get("x-ms-copy-source-authorization")
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+                "Bearer static-token"
+            );
+            assert_eq!(
+                req.headers()
+                    .get("x-ms-source-encryption-key")
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+                "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc="
+            );
+            assert_eq!(
+                req.headers()
+                    .get("x-ms-encryption-key")
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+                "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc="
+            );
+
+            http::Response::builder()
+                .status(201)
+                .body(String::new())
+                .unwrap()
+        });
+
+        store
+            .copy(&Path::from("source.txt"), &Path::from("dest.txt"))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_cpk_errors_redact_request_url() {
+        let server = crate::client::mock_server::MockServer::new().await;
+        let endpoint = server.url().to_string();
+
+        let store = crate::azure::MicrosoftAzureBuilder::new()
+            .with_account("testaccount")
+            .with_container_name("testcontainer")
+            .with_access_key("Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==")
+            .with_allow_http(true)
+            .with_endpoint(endpoint.clone())
+            .with_encryption_key(BASE64_STANDARD.encode([7_u8; 32]))
+            .build()
+            .unwrap();
+
+        server.push_fn(|_req| {
+            http::Response::builder()
+                .status(409)
+                .body(String::from("conflict"))
+                .unwrap()
+        });
+
+        let err = store
+            .get_range(&Path::from("file.txt"), 0..1)
+            .await
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("REDACTED"), "{msg}");
+        assert!(!msg.contains(&endpoint), "{msg}");
     }
 
     #[tokio::test]

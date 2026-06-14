@@ -218,6 +218,12 @@ impl Signer for MicrosoftAzure {
     /// # }
     /// ```
     async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
+        if self.client.config().encryption_headers.is_enabled() {
+            return Err(crate::Error::NotSupported {
+                source: "Azure signed URLs cannot be used with customer-provided keys because CPK values must be supplied as request headers".into(),
+            });
+        }
+
         let mut url = self.path_url(path);
         let signer = self.client.signer(expires_in).await?;
         signer.sign(&method, &mut url)?;
@@ -230,6 +236,12 @@ impl Signer for MicrosoftAzure {
         paths: &[Path],
         expires_in: Duration,
     ) -> Result<Vec<Url>> {
+        if self.client.config().encryption_headers.is_enabled() {
+            return Err(crate::Error::NotSupported {
+                source: "Azure signed URLs cannot be used with customer-provided keys because CPK values must be supplied as request headers".into(),
+            });
+        }
+
         let mut urls = Vec::with_capacity(paths.len());
         let signer = self.client.signer(expires_in).await?;
         for path in paths {
@@ -483,6 +495,39 @@ mod tests {
 
         encrypted.delete(&copy_path).await.unwrap();
         encrypted.delete(&path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn azure_signed_url_rejects_cpk_configuration() {
+        let store = MicrosoftAzureBuilder::new()
+            .with_account("testaccount")
+            .with_container_name("testcontainer")
+            .with_access_key("Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==")
+            .with_encryption_key(BASE64_STANDARD.encode([7_u8; 32]))
+            .build()
+            .unwrap();
+
+        let err = store
+            .signed_url(
+                Method::GET,
+                &Path::from("file.txt"),
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, crate::Error::NotSupported { .. }));
+        assert!(err.to_string().contains("customer-provided keys"));
+
+        let err = store
+            .signed_urls(
+                Method::GET,
+                &[Path::from("file.txt")],
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, crate::Error::NotSupported { .. }));
+        assert!(err.to_string().contains("customer-provided keys"));
     }
 
     #[ignore = "Used for manual testing against a real storage account."]
