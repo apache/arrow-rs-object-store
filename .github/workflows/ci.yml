@@ -70,9 +70,9 @@ jobs:
       - name: Run clippy with http-base feature
         run: cargo clippy --no-default-features --features http-base -- -D warnings
       - name: Run clippy with base features, reqwest and ring crypto
-        run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base,reqwest,reqwest/rustls,ring -- -D warnings
+        run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base,reqwest,ring -- -D warnings
       - name: Run clippy with base features and reqwest but no bundled crypto
-        run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base,reqwest,reqwest/rustls -- -D warnings
+        run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base,reqwest -- -D warnings
       - name: Verify base features do not enable reqwest
         run: |
           if cargo tree \
@@ -188,6 +188,12 @@ jobs:
           AWS_CONDITIONAL_PUT: etag
           AWS_COPY_IF_NOT_EXISTS: multipart
 
+      # Exercise the `ring` crypto provider at runtime (the other jobs only
+      # compile it; the default `aws`/etc. features use `aws-lc-rs`).
+      # object_store's signing uses ring here (the `aws-lc-rs` feature is off);
+      - name: Run object_store tests with ring crypto provider
+        run: cargo test --lib --tests --no-default-features --features fs,aws-base,azure-base,gcp-base,http-base,reqwest,ring
+
       - name: GCS Output
         if: ${{ !cancelled() }}
         run: docker logs $GCS_CONTAINER
@@ -220,6 +226,10 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
       - name: Build wasm32-unknown-unknown
         run: cargo build --target wasm32-unknown-unknown
+      - name: Build wasm32-unknown-unknown with ring crypto provider
+        # aws-lc-rs does not build for wasm32, so use the ring crypto provider here.
+        # Includes aws/gcp/azure-base so the RingCryptoProvider is compiled.
+        run: cargo build --no-default-features --features aws-base,gcp-base,azure-base,http-base,reqwest,ring --target wasm32-unknown-unknown
       - name: Install wasm32-wasip1
         run: rustup target add wasm32-wasip1
       - name: Use reqwest 0.13.2 for wasm32-wasip1

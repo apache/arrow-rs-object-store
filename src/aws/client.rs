@@ -299,7 +299,7 @@ impl From<RequestError> for crate::Error {
     }
 }
 
-/// A builder for a request allowing customisation of the headers and query string
+/// A builder for a request allowing customization of the headers and query string
 pub(crate) struct Request<'a> {
     path: &'a Path,
     config: &'a S3Config,

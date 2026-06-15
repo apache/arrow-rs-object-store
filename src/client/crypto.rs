@@ -80,6 +80,8 @@ pub trait Signer: Send + Sync {
 /// Attempts to find a [`CryptoProvider`]
 ///
 /// If `custom` is `Some(v)` returns `v` otherwise returns the compile-time default
+///
+/// If both `ring` and `aws-lc-rs` are enabled, the `aws-lc-rs` provider is used.
 pub(crate) fn crypto_provider(custom: Option<&dyn CryptoProvider>) -> Result<&dyn CryptoProvider> {
     if let Some(x) = custom {
         return Ok(x);

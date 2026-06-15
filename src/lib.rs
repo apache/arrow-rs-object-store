@@ -603,13 +603,14 @@
 //! If you wish to use [`ring`] (e.g. to support WASM targets), use the
 //! `*-base` feature flags, e.g. `aws-base`, and then enable the `ring` feature.
 //!
+//! If both `ring` and `aws-lc-rs` are enabled, `aws-lc-rs` is used by default.
+//!
 //! Note: for TLS to work you will additionally need to register your chosen provider as the
 //! default rustls cryptography provider, e.g.
 //! `rustls::crypto::aws_lc_rs::default_provider().install_default()` (or
 //! `rustls::crypto::ring::default_provider().install_default()`) in your main function.
 //!
-//! The various builders can also accept a custom [`client::CryptoProvider`] for maximum
-//! flexibility.
+//! You can also implement a custom [`client::CryptoProvider`] to use your own cryptographic library.
 //!
 //! [`aws-lc-rs`]: https://crates.io/crates/aws-lc-rs/
 //! [`ring`]: https://crates.io/crates/ring/

@@ -97,17 +97,15 @@ reqwest = ["dep:reqwest", "reqwest/stream"]
 aws-lc-rs = ["dep:aws-lc-rs", "rustls-pki-types"]
 ring = ["dep:ring", "rustls-pki-types"]
 
-# Provider base features.
+# Implementation base features.
 # These compile provider logic without forcing reqwest or a crypto provider.
 azure-base = ["cloud-base", "httparse"]
 gcp-base = ["cloud-base"]
 aws-base = ["cloud-base", "crc-fast", "md-5"]
 http-base = ["cloud-base"]
 
-# Batteries-included provider features.
-# These preserve existing behavior: enabling aws/azure/gcp/http gives
-# the default reqwest transport (with rustls) and the default aws-lc-rs
-# crypto provider.
+# "Batteries-included" implementation features.
+# Each enables the default `reqwest` transport (with rustls) and `aws-lc-rs`
 azure = ["azure-base", "reqwest", "reqwest/rustls", "aws-lc-rs"]
 gcp = ["gcp-base", "reqwest", "reqwest/rustls", "aws-lc-rs"]
 aws = ["aws-base", "reqwest", "reqwest/rustls", "aws-lc-rs"]
