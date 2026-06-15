@@ -117,7 +117,7 @@ pub enum ClientConfigKey {
     ///
     /// Supported keys:
     ///
-    /// - `no_system_certificates`
+    /// - `disable_system_certificates`
     NoSystemCertificates,
     /// Timeout for only the connect phase of a Client
     ///

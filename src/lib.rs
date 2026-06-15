@@ -629,7 +629,7 @@
 //! By default [`rustls-platform-verifier`] is used to verify certificates using the system's certificate
 //! facilities. Alternatively, this functionality can be disabled using
 //! [`ClientOptions::with_no_system_certificates`] and certificates manually registered using
-//! [`ClientOptions::with_root_certificate].
+//! [`ClientOptions::with_root_certificate`].
 //!
 //! These could be a custom CA chain, or alternatively an alternative trust store, e.g. [`webpki-roots`].
 //!
