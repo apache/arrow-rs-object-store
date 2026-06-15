@@ -83,26 +83,37 @@ futures-channel = {version = "0.3", features = ["sink"]}
 
 [features]
 default = ["fs"]
-cloud-no-crypto = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/stream", "chrono/serde", "base64", "rand","http-body-util", "form_urlencoded", "serde_urlencoded", "tokio"]
-cloud = ["aws-lc-rs", "reqwest/rustls", "cloud-no-crypto"]
 
+# Shared cloud/provider implementation dependencies.
+# This intentionally does NOT include reqwest or a bundled crypto provider.
+cloud-base = ["serde", "serde_json", "quick-xml", "hyper", "chrono/serde", "base64", "rand", "http-body-util", "form_urlencoded", "serde_urlencoded", "tokio"]
+
+# Built-in reqwest-based HTTP transport.
+reqwest = ["dep:reqwest", "reqwest/stream"]
+
+# Bundled crypto providers.
+# Selecting one provides the default `CryptoProvider`; otherwise a custom
+# provider must be supplied at runtime.
 aws-lc-rs = ["dep:aws-lc-rs", "rustls-pki-types"]
 ring = ["dep:ring", "rustls-pki-types"]
 
-azure-no-crypto = ["cloud-no-crypto", "httparse"]
-azure = ["cloud", "azure-no-crypto"]
+# Provider base features.
+# These compile provider logic without forcing reqwest or a crypto provider.
+azure-base = ["cloud-base", "httparse"]
+gcp-base = ["cloud-base"]
+aws-base = ["cloud-base", "crc-fast", "md-5"]
+http-base = ["cloud-base"]
+
+# Batteries-included provider features.
+# These preserve existing behavior: enabling aws/azure/gcp/http gives
+# the default reqwest transport (with rustls) and the default aws-lc-rs
+# crypto provider.
+azure = ["azure-base", "reqwest", "reqwest/rustls", "aws-lc-rs"]
+gcp = ["gcp-base", "reqwest", "reqwest/rustls", "aws-lc-rs"]
+aws = ["aws-base", "reqwest", "reqwest/rustls", "aws-lc-rs"]
+http = ["http-base", "reqwest", "reqwest/rustls", "aws-lc-rs"]
 
 fs = ["walkdir", "tokio", "nix", "windows-sys"]
-
-gcp-no-crypto = ["cloud-no-crypto"]
-gcp = ["cloud", "gcp-no-crypto"]
-
-aws-no-crypto = ["cloud-no-crypto", "crc-fast", "md-5"]
-aws = ["cloud", "aws-no-crypto"]
-
-http-no-crypto = ["cloud-no-crypto"]
-http = ["cloud", "http-no-crypto"]
-
 integration = ["rand", "tokio"]
 tokio = ["dep:tokio", "dep:tracing"]
 

@@ -28,12 +28,12 @@ use bytes::Bytes;
 use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
 use http::StatusCode;
+use http::header::ToStrError;
 use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_RANGE,
     CONTENT_TYPE,
 };
 use http_body_util::BodyExt;
-use reqwest::header::ToStrError;
 use std::ops::Range;
 use std::sync::Arc;
 use tracing::info;
@@ -192,6 +192,7 @@ impl<T: GetClient> GetContext<T> {
             meta,
             range,
             attributes,
+            extensions: parts.extensions,
         })
     }
 
@@ -522,7 +523,7 @@ mod tests {
         );
     }
 }
-#[cfg(all(test, feature = "http-no-crypto", not(target_arch = "wasm32")))]
+#[cfg(all(test, feature = "http-base", not(target_arch = "wasm32")))]
 mod http_tests {
     use crate::client::mock_server::MockServer;
     use crate::client::{HttpError, HttpErrorKind, HttpResponseBody};
@@ -589,6 +590,7 @@ mod http_tests {
         }
     }
 
+    #[cfg(feature = "reqwest")]
     #[tokio::test]
     async fn test_stream_retry() {
         let mock = MockServer::new().await;
@@ -814,6 +816,7 @@ mod http_tests {
         );
     }
 
+    #[cfg(feature = "reqwest")]
     #[tokio::test]
     async fn test_retry_validate_content_range() {
         let mock = MockServer::new().await;

@@ -139,7 +139,7 @@ impl ObjectStoreScheme {
     }
 }
 
-#[cfg(feature = "cloud-no-crypto")]
+#[cfg(feature = "cloud-base")]
 macro_rules! builder_opts {
     ($builder:ty, $url:expr, $options:expr) => {{
         let builder = $options.into_iter().fold(
@@ -201,29 +201,29 @@ where
         #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
         ObjectStoreScheme::Local => Box::new(LocalFileSystem::new()) as _,
         ObjectStoreScheme::Memory => Box::new(InMemory::new()) as _,
-        #[cfg(feature = "aws-no-crypto")]
+        #[cfg(feature = "aws-base")]
         ObjectStoreScheme::AmazonS3 => {
             builder_opts!(crate::aws::AmazonS3Builder, url, _options)
         }
-        #[cfg(feature = "gcp-no-crypto")]
+        #[cfg(feature = "gcp-base")]
         ObjectStoreScheme::GoogleCloudStorage => {
             builder_opts!(crate::gcp::GoogleCloudStorageBuilder, url, _options)
         }
-        #[cfg(feature = "azure-no-crypto")]
+        #[cfg(feature = "azure-base")]
         ObjectStoreScheme::MicrosoftAzure => {
             builder_opts!(crate::azure::MicrosoftAzureBuilder, url, _options)
         }
-        #[cfg(feature = "http-no-crypto")]
+        #[cfg(feature = "http-base")]
         ObjectStoreScheme::Http => {
             let url = &url[..url::Position::BeforePath];
             builder_opts!(crate::http::HttpBuilder, url, _options)
         }
         #[cfg(not(all(
             feature = "fs",
-            feature = "aws-no-crypto",
-            feature = "azure-no-crypto",
-            feature = "gcp-no-crypto",
-            feature = "http-no-crypto",
+            feature = "aws-base",
+            feature = "azure-base",
+            feature = "gcp-base",
+            feature = "http-base",
             not(target_arch = "wasm32")
         )))]
         s => {
@@ -441,7 +441,11 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(all(feature = "http-no-crypto", not(target_arch = "wasm32")))]
+    #[cfg(all(
+        feature = "reqwest",
+        feature = "http-base",
+        not(target_arch = "wasm32")
+    ))]
     async fn test_url_http() {
         use crate::{ObjectStoreExt, client::mock_server::MockServer};
         use http::{Response, header::USER_AGENT};

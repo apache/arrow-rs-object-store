@@ -17,6 +17,9 @@
 
 //! An object store implementation for Azure blob storage
 //!
+//! See the [Feature Flags](crate#feature-flags) section for the difference
+//! between the `azure` and `azure-base` features.
+//!
 //! ## Streaming uploads
 //!
 //! [`ObjectStore::put_multipart_opts`] will upload data in blocks and write a blob from those blocks.
@@ -33,7 +36,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use futures_util::stream::{BoxStream, StreamExt, TryStreamExt};
-use reqwest::Method;
+use http::Method;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
@@ -197,7 +200,7 @@ impl Signer for MicrosoftAzure {
     /// ```
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # use object_store::{azure::MicrosoftAzureBuilder, path::Path, signer::Signer};
-    /// # use reqwest::Method;
+    /// # use http::Method;
     /// # use std::time::Duration;
     /// #
     /// let azure = MicrosoftAzureBuilder::new()
@@ -343,7 +346,12 @@ mod tests {
     #[tokio::test]
     async fn azure_blob_test() {
         maybe_skip_integration!();
-        let integration = MicrosoftAzureBuilder::from_env().build().unwrap();
+        // tag the extensions of every HTTP response with a marker,
+        // allowing response_extensions to verify their propagation
+        let integration = MicrosoftAzureBuilder::from_env()
+            .with_http_connector(MarkerHttpConnector::default())
+            .build()
+            .unwrap();
 
         put_get_delete_list(&integration).await;
         list_with_offset_exclusivity(&integration).await;
@@ -360,6 +368,7 @@ mod tests {
         multipart_out_of_order(&integration).await;
         signing(&integration).await;
         list_paginated(&integration, &integration).await;
+        response_extensions(&integration, true).await;
 
         let validate = !integration.client.config().disable_tagging;
         tagging(
@@ -378,6 +387,47 @@ mod tests {
         if !integration.client.config().is_emulator {
             put_get_attributes(&integration).await;
         }
+    }
+
+    #[ignore = "Used for manual testing against a real Workspace Private Link Endpoint."]
+    #[tokio::test]
+    async fn azure_onelake_wspl_test() {
+        maybe_skip_integration!();
+
+        let url =
+            std::env::var("AZURE_ONELAKE_URL").expect("Set AZURE_ONELAKE_URL to a WS-PL FQDN");
+        let parsed = url::Url::parse(&url).unwrap();
+
+        let path = match parsed.scheme() {
+            "abfss" | "abfs" => {
+                // abfss://<container>@<host>/<path...>
+                // container is in username, entire path is the object path
+                let segments: Vec<&str> = parsed.path_segments().unwrap().collect();
+                Path::from(segments.join("/"))
+            }
+            _ => {
+                // https://<host>/<container>/<path...>
+                // first segment is container, rest is the object path
+                let segments: Vec<&str> = parsed.path_segments().unwrap().collect();
+                Path::from(segments[1..].join("/"))
+            }
+        };
+
+        let store = MicrosoftAzureBuilder::new()
+            .with_url(&url)
+            .with_bearer_token_authorization(
+                std::env::var("AZURE_STORAGE_TOKEN").expect("Set AZURE_STORAGE_TOKEN"),
+            )
+            .build()
+            .unwrap();
+
+        let data = Bytes::from("Hello OneLake WSPL");
+
+        store.put(&path, data.clone().into()).await.unwrap();
+        let result = store.get(&path).await.unwrap();
+        let loaded = result.bytes().await.unwrap();
+        assert_eq!(data, loaded);
+        store.delete(&path).await.unwrap();
     }
 
     #[ignore = "Used for manual testing against a real storage account."]

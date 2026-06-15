@@ -22,9 +22,9 @@ use crate::client::backoff::{Backoff, BackoffConfig};
 use crate::client::builder::HttpRequestBuilder;
 use crate::client::{HttpClient, HttpError, HttpErrorKind, HttpRequest, HttpResponse};
 use futures_util::future::BoxFuture;
+use http::StatusCode;
+use http::header::LOCATION;
 use http::{Method, Uri};
-use reqwest::StatusCode;
-use reqwest::header::LOCATION;
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use std::time::{Duration, Instant};
 use tracing::info;
@@ -280,7 +280,7 @@ impl RetryableRequestBuilder {
     }
 
     /// Set whether this request should be retried on a 409 Conflict response.
-    #[cfg(feature = "aws-no-crypto")]
+    #[cfg(feature = "aws-base")]
     pub(crate) fn retry_on_conflict(mut self, retry_on_conflict: bool) -> Self {
         self.request.retry_on_conflict = retry_on_conflict;
         self
@@ -512,13 +512,15 @@ mod tests {
     use crate::client::mock_server::MockServer;
     use crate::client::retry::{RequestError, RetryContext, RetryExt, body_contains_error};
     use crate::client::{HttpClient, HttpError, HttpErrorKind, HttpResponse};
+    use http::Method;
     use http::StatusCode;
     use hyper::Response;
     use hyper::header::LOCATION;
     use hyper::server::conn::http1;
     use hyper::service::service_fn;
     use hyper_util::rt::TokioIo;
-    use reqwest::{Client, Method};
+    #[cfg(feature = "reqwest")]
+    use reqwest::Client;
     use std::convert::Infallible;
     use std::error::Error;
     use std::time::Duration;
@@ -539,6 +541,7 @@ mod tests {
         assert!(!body_contains_error(success_response));
     }
 
+    #[cfg(feature = "reqwest")]
     #[tokio::test]
     async fn test_retry() {
         let mock = MockServer::new().await;
@@ -846,6 +849,7 @@ mod tests {
         mock.shutdown().await
     }
 
+    #[cfg(feature = "reqwest")]
     #[tokio::test]
     async fn test_503_error_body_captured() {
         let mock = MockServer::new().await;
@@ -880,6 +884,7 @@ mod tests {
         mock.shutdown().await
     }
 
+    #[cfg(feature = "reqwest")]
     #[tokio::test]
     #[expect(
         deprecated,

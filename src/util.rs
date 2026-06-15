@@ -25,11 +25,11 @@ use super::Result;
 use bytes::Bytes;
 use futures_util::{Stream, TryStreamExt, stream::StreamExt};
 
-#[cfg(any(feature = "azure-no-crypto", feature = "http-no-crypto"))]
+#[cfg(any(feature = "azure-base", feature = "http-base"))]
 pub(crate) static RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
 
 // deserialize dates according to rfc1123
-#[cfg(any(feature = "azure-no-crypto", feature = "http-no-crypto"))]
+#[cfg(any(feature = "azure-base", feature = "http-base"))]
 pub(crate) fn deserialize_rfc1123<'de, D>(
     deserializer: D,
 ) -> Result<chrono::DateTime<chrono::Utc>, D::Error>
@@ -294,7 +294,7 @@ impl<T: RangeBounds<u64>> From<T> for GetRange {
 //
 // Do not URI-encode any of the unreserved characters that RFC 3986 defines:
 // A-Z, a-z, 0-9, hyphen ( - ), underscore ( _ ), period ( . ), and tilde ( ~ ).
-#[cfg(any(feature = "aws-no-crypto", feature = "gcp-no-crypto"))]
+#[cfg(any(feature = "aws-base", feature = "gcp-base"))]
 pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet = percent_encoding::NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'.')
@@ -302,7 +302,7 @@ pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet = percent_encodin
     .remove(b'~');
 
 /// Computes the SHA256 digest of `body` returned as a hex encoded string
-#[cfg(any(feature = "aws-no-crypto", feature = "gcp-no-crypto"))]
+#[cfg(any(feature = "aws-base", feature = "gcp-base"))]
 pub(crate) fn hex_digest(
     crypto: &dyn crate::client::CryptoProvider,
     bytes: &[u8],
@@ -313,7 +313,7 @@ pub(crate) fn hex_digest(
 }
 
 /// Returns `bytes` as a lower-case hex encoded string
-#[cfg(any(feature = "aws-no-crypto", feature = "gcp-no-crypto"))]
+#[cfg(any(feature = "aws-base", feature = "gcp-base"))]
 pub(crate) fn hex_encode(bytes: &[u8]) -> String {
     use std::fmt::Write;
     let mut out = String::with_capacity(bytes.len() * 2);

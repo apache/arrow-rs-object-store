@@ -63,7 +63,7 @@ impl HttpRequestBuilder {
         }
     }
 
-    #[cfg(any(feature = "aws-no-crypto", feature = "azure-no-crypto"))]
+    #[cfg(any(feature = "aws-base", feature = "azure-base"))]
     pub(crate) fn from_parts(client: HttpClient, request: HttpRequest) -> Self {
         Self {
             client,
@@ -116,7 +116,7 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(feature = "aws-no-crypto")]
+    #[cfg(feature = "aws-base")]
     pub(crate) fn headers(mut self, headers: http::HeaderMap) -> Self {
         use http::header::{Entry, OccupiedEntry};
 
@@ -151,7 +151,7 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(feature = "gcp-no-crypto")]
+    #[cfg(feature = "gcp-base")]
     pub(crate) fn bearer_auth(mut self, token: &str) -> Self {
         let value = HeaderValue::try_from(format!("Bearer {token}"));
         match (value, &mut self.request) {
@@ -165,7 +165,7 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(feature = "gcp-no-crypto")]
+    #[cfg(feature = "gcp-base")]
     pub(crate) fn json<S: serde::Serialize>(mut self, s: S) -> Self {
         match (serde_json::to_vec(&s), &mut self.request) {
             (Ok(json), Ok(request)) => {
@@ -179,9 +179,9 @@ impl HttpRequestBuilder {
 
     #[cfg(any(
         test,
-        feature = "aws-no-crypto",
-        feature = "gcp-no-crypto",
-        feature = "azure-no-crypto"
+        feature = "aws-base",
+        feature = "gcp-base",
+        feature = "azure-base"
     ))]
     pub(crate) fn query<T: serde::Serialize + ?Sized>(mut self, query: &T) -> Self {
         let mut error = None;
@@ -210,7 +210,7 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(any(feature = "gcp-no-crypto", feature = "azure-no-crypto"))]
+    #[cfg(any(feature = "gcp-base", feature = "azure-base"))]
     pub(crate) fn form<T: serde::Serialize>(mut self, form: T) -> Self {
         let mut error = None;
         if let Ok(ref mut req) = self.request {
@@ -231,11 +231,7 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(any(
-        feature = "aws-no-crypto",
-        feature = "gcp-no-crypto",
-        feature = "azure-no-crypto"
-    ))]
+    #[cfg(any(feature = "aws-base", feature = "gcp-base", feature = "azure-base"))]
     pub(crate) fn body(mut self, b: impl Into<HttpRequestBody>) -> Self {
         if let Ok(r) = &mut self.request {
             *r.body_mut() = b.into();
@@ -248,7 +244,7 @@ impl HttpRequestBuilder {
     }
 }
 
-#[cfg(any(test, feature = "azure-no-crypto"))]
+#[cfg(any(test, feature = "azure-base"))]
 pub(crate) fn add_query_pairs<I, K, V>(uri: &mut Uri, query_pairs: I)
 where
     I: IntoIterator,
@@ -309,6 +305,7 @@ mod tests {
         assert_eq!(uri.to_string(), "https://foo@example.com/?foo=1");
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn test_request_builder_query() {
         let client = HttpClient::new(reqwest::Client::new());

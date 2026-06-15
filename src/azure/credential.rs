@@ -1118,6 +1118,7 @@ mod tests {
     use crate::client::mock_server::MockServer;
     use crate::{ObjectStoreExt, Path};
 
+    #[cfg(feature = "reqwest")]
     #[tokio::test]
     async fn test_managed_identity() {
         let server = MockServer::new().await;
@@ -1176,6 +1177,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "reqwest")]
     #[tokio::test]
     async fn test_workload_identity() {
         let server = MockServer::new().await;
@@ -1228,6 +1230,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "reqwest")]
     #[tokio::test]
     async fn test_no_credentials() {
         let server = MockServer::new().await;
@@ -1261,6 +1264,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "reqwest")]
     #[tokio::test]
     async fn test_fabric_refresh_expired_token() {
         let server = MockServer::new().await;

@@ -572,8 +572,10 @@ impl AzureClient {
         };
 
         let response = builder.header(&BLOB_TYPE, "BlockBlob").send().await?;
-        Ok(get_put_result(response.headers(), VERSION_HEADER)
-            .map_err(|source| Error::Metadata { source })?)
+        Ok(
+            get_put_result(response, VERSION_HEADER)
+                .map_err(|source| Error::Metadata { source })?,
+        )
     }
 
     /// PUT a block <https://learn.microsoft.com/en-us/rest/api/storageservices/put-block>
@@ -625,8 +627,10 @@ impl AzureClient {
             .send()
             .await?;
 
-        Ok(get_put_result(response.headers(), VERSION_HEADER)
-            .map_err(|source| Error::Metadata { source })?)
+        Ok(
+            get_put_result(response, VERSION_HEADER)
+                .map_err(|source| Error::Metadata { source })?,
+        )
     }
 
     fn build_bulk_delete_body(
@@ -992,8 +996,11 @@ impl ListClient for Arc<AzureClient> {
             .sensitive(sensitive)
             .send()
             .await
-            .map_err(|source| Error::ListRequest { source })?
-            .into_body()
+            .map_err(|source| Error::ListRequest { source })?;
+
+        let (parts, body) = response.into_parts();
+
+        let response = body
             .bytes()
             .await
             .map_err(|source| Error::ListResponseBody { source })?;
@@ -1016,8 +1023,11 @@ impl ListClient for Arc<AzureClient> {
             }
         }
 
+        let mut result = to_list_result(response, prefix)?;
+        result.extensions = parts.extensions;
+
         Ok(PaginatedListResult {
-            result: to_list_result(response, prefix)?,
+            result,
             page_token: token,
         })
     }
@@ -1060,6 +1070,7 @@ fn to_list_result(value: ListResultInternal, prefix: Option<&str>) -> Result<Lis
     Ok(ListResult {
         common_prefixes,
         objects,
+        extensions: Default::default(),
     })
 }
 
@@ -1382,6 +1393,7 @@ mod tests {
             quick_xml::de::from_str(S).unwrap();
     }
 
+    #[cfg(feature = "reqwest")]
     #[tokio::test]
     async fn test_build_bulk_delete_body() {
         let credential_provider = Arc::new(StaticCredentialProvider::new(
