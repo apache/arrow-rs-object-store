@@ -554,10 +554,10 @@
 //!
 //! | Feature | Description |
 //! | --- | --- |
-//! | `reqwest` | Enables the default [`reqwest`]-based [`HttpConnector`]. Pulled in automatically by `aws`, `azure`, `gcp`, and `http`. |
+//! | `reqwest` | Enables the [`reqwest`]-based [`HttpConnector`]. Enabled automatically by `aws`, `azure`, `gcp`, and `http`. |
 //! | `aws-lc-rs` | Bundled [`aws-lc-rs`]-based [`client::CryptoProvider`]. The default for the batteries-included provider features. |
 //! | `ring` | Bundled [`ring`]-based [`client::CryptoProvider`], e.g. for WASM targets. |
-//! | `cloud-base` | Shared cloud-provider implementation. Pulled in automatically by every `*-base` feature; usually not enabled directly. |
+//! | `cloud-base` | Shared cloud-provider implementation. Enabled automatically by `*-base` features; usually not enabled directly. |
 //!
 //! ## Other features
 //!
@@ -567,36 +567,40 @@
 //! | `tokio` | Enables Tokio-based utilities such as [`BufReader`](buffered::BufReader) and [`BufWriter`](buffered::BufWriter). Pulled in automatically by `fs` and the `*-base` features. |
 //! | `integration` | Exposes the [`integration`] module, a reusable test suite for verifying custom [`ObjectStore`] implementations. Not API-stable. |
 //!
+//! ## Selecting a `reqwest` TLS backend
+//!
+//! `reqwest` needs a TLS backend to compile, so whenever you enable the `reqwest` feature directly
+//! you must also enable one of `reqwest`'s TLS features:
+//!
+//! | reqwest feature | TLS stack | Notes |
+//! | --- | --- | --- |
+//! | `reqwest/rustls` | [rustls] with [`aws-lc-rs`] | enables `aws-lc-rs`. This is what `aws`/`azure`/`gcp`/`http` enable. |
+//! | `reqwest/native-tls` | the platform's native TLS (OpenSSL / SChannel / Secure Transport) | enables neither `rustls` nor `aws-lc-rs`. |
+//! | `reqwest/rustls-no-provider` | [rustls] with no bundled provider | enables neither provider; you must install one at runtime, e.g. `rustls::crypto::ring::default_provider().install_default()`. |
+//!
 //! ## Feature examples
 //!
-//! S3 implementation only; user provides HTTP connector and crypto provider:
-//! ```yaml
-//!  object_store = { default-features = false, features = ["aws-base"] }
+//! S3 implementation only; user provides the HTTP connector and crypto provider:
+//! ```toml
+//! object_store = { default-features = false, features = ["aws-base"] }
 //! ```
 //!
-//! S3 implementation + `reqwest, user controls crypto provider
-//! ```yaml
-//! object_store = { default-features = false, features = ["aws-base", "reqwest"] }
+//! S3 implementation + `reqwest` + `aws-lc-rs` signing (equivalent to the `aws` feature):
+//! ```toml
+//! object_store = { default-features = false, features = ["aws-base", "reqwest", "reqwest/rustls", "aws-lc-rs"] }
 //! ```
 //!
-//! S3 implementation with `request` and `ring` crypto
-//! ```yaml
-//! object_store = { default-features = false, features = ["aws-base", "reqwest", "ring"] }
+//! S3 implementation + `reqwest` with native TLS + `ring` signing (no `aws-lc-rs` in the dependency tree):
+//! ```toml
+//! object_store = { default-features = false, features = ["aws-base", "reqwest", "reqwest/native-tls", "ring"] }
 //! ```
 //!
-//! S3 implementation + custom HTTP connector, but object_store provides `ring` crypto
-//! ```yaml
-//! object_store = { default-features = false, features = ["aws-base", "ring"] }
-//!
-//! S3 implementation + reqwest + explicit aws-lc-rs crypto provider
-//! ```yaml
-//! object_store = { default-features = false, features = ["aws-base", "reqwest", "aws-lc-rs"] }
-//! ```
+//! [rustls]: https://crates.io/crates/rustls/
 //!
 //! # Cryptography
 //!
 //! Request signing (e.g. AWS SigV4 or GCP service-account signing) requires a
-//! [`client::CryptoProvider`]. The `aws`, `gcp`, `azure`, features
+//! [`client::CryptoProvider`]. The `aws`, `gcp`, and `azure` features
 //! use [`aws-lc-rs`], matching `reqwest`'s default so that applications do not end up with
 //! two crypto stacks.
 //!
@@ -605,12 +609,15 @@
 //!
 //! If both `ring` and `aws-lc-rs` are enabled, `aws-lc-rs` is used by default.
 //!
-//! Note: for TLS to work you will additionally need to register your chosen provider as the
-//! default rustls cryptography provider, e.g.
-//! `rustls::crypto::aws_lc_rs::default_provider().install_default()` (or
-//! `rustls::crypto::ring::default_provider().install_default()`) in your main function.
-//!
 //! You can also implement a custom [`client::CryptoProvider`] to use your own cryptographic library.
+//!
+//! This signing provider is independent of the TLS crypto provider used by the
+//! built-in `reqwest` transport — see
+//! [Selecting a `reqwest` TLS backend](#selecting-a-reqwest-tls-backend). The
+//! only combination that needs the provider registered manually (e.g.
+//! `rustls::crypto::ring::default_provider().install_default()` in your `main`)
+//! is `reqwest/rustls-no-provider`; `reqwest/rustls` and `reqwest/native-tls`
+//! configure their TLS stack automatically.
 //!
 //! [`aws-lc-rs`]: https://crates.io/crates/aws-lc-rs/
 //! [`ring`]: https://crates.io/crates/ring/
