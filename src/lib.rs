@@ -521,22 +521,23 @@
 //!
 //! # Feature Flags
 //!
-//! The feature set is layered so that you can pick a provider, its HTTP
-//! transport, and its cryptography provider independently:
+//! The feature set is layered so that you can pick an object store
+//! implementation, its HTTP transport, and its cryptography provider
+//! independently:
 //!
-//! * `cloud-base` holds the shared provider implementation (XML/JSON parsing,
+//! * `cloud-base` shared cloud implementation (XML/JSON parsing,
 //!   credentials, retry, etc.) and intentionally does *not* depend on
 //!   `reqwest` or a cryptography provider.
 //! * `reqwest` enables the built-in [`reqwest`]-based [`HttpConnector`].
 //! * `aws-lc-rs` and `ring` each provide a bundled [`client::CryptoProvider`].
 //! * `<provider>-base` (`aws-base`, `azure-base`, `gcp-base`, `http-base`)
-//!   adds the per-provider logic on top of `cloud-base` without pulling in
+//!   adds the implementation specific logic on top of `cloud-base` without pulling in
 //!   `reqwest` or a cryptography provider.
 //! * `<provider>` (`aws`, `azure`, `gcp`, `http`) is the batteries-included
 //!   feature for `<provider>-base` + `reqwest` (with `rustls`) + the default
 //!   `aws-lc-rs` cryptography provider, and is the typical choice.
 //!
-//! ## Provider features
+//! ## Implementation specific features
 //!
 //! | Feature | Enables | Notes |
 //! | --- | --- | --- |
@@ -544,10 +545,10 @@
 //! | `azure` | `azure-base` + `reqwest` + `aws-lc-rs` | Azure Blob Storage with the built-in HTTP transport. |
 //! | `gcp` | `gcp-base` + `reqwest` + `aws-lc-rs` | Google Cloud Storage with the built-in HTTP transport. |
 //! | `http` | `http-base` + `reqwest` + `aws-lc-rs` | HTTP/WebDAV with the built-in HTTP transport. |
-//! | `aws-base` | provider only | S3 provider without `reqwest` or crypto; supply your own [`HttpConnector`] and [`client::CryptoProvider`]. |
-//! | `azure-base` | provider only | Azure provider without `reqwest` or crypto; supply your own [`HttpConnector`] and [`client::CryptoProvider`]. |
-//! | `gcp-base` | provider only | GCS provider without `reqwest` or crypto; supply your own [`HttpConnector`] and [`client::CryptoProvider`]. |
-//! | `http-base` | provider only | HTTP/WebDAV provider without `reqwest` or crypto; supply your own [`HttpConnector`] and [`client::CryptoProvider`]. |
+//! | `aws-base` |  | S3 without `reqwest` or crypto; supply your own [`HttpConnector`] and [`client::CryptoProvider`]. |
+//! | `azure-base` |  | Azure without `reqwest` or crypto; supply your own [`HttpConnector`] and [`client::CryptoProvider`]. |
+//! | `gcp-base` |  | GCS without `reqwest` or crypto; supply your own [`HttpConnector`] and [`client::CryptoProvider`]. |
+//! | `http-base` |  | HTTP/WebDAV without `reqwest` or crypto; supply your own [`HttpConnector`] and [`client::CryptoProvider`]. |
 //!
 //! ## Transport and crypto features
 //!
@@ -566,14 +567,40 @@
 //! | `tokio` | Enables Tokio-based utilities such as [`BufReader`](buffered::BufReader) and [`BufWriter`](buffered::BufWriter). Pulled in automatically by `fs` and the `*-base` features. |
 //! | `integration` | Exposes the [`integration`] module, a reusable test suite for verifying custom [`ObjectStore`] implementations. Not API-stable. |
 //!
+//! ## Feature examples
+//!
+//! S3 implementation only; user provides HTTP connector and crypto provider:
+//! ```yaml
+//!  object_store = { default-features = false, features = ["aws-base"] }
+//! ```
+//!
+//! S3 implementation + `reqwest, user controls crypto provider
+//! ```yaml
+//! object_store = { default-features = false, features = ["aws-base", "reqwest"] }
+//! ```
+//!
+//! S3 implementation with `request` and `ring` crypto
+//! ```yaml
+//! object_store = { default-features = false, features = ["aws-base", "reqwest", "ring"] }
+//! ```
+//!
+//! S3 implementation + custom HTTP connector, but object_store provides `ring` crypto
+//! ```yaml
+//! object_store = { default-features = false, features = ["aws-base", "ring"] }
+//!
+//! S3 implementation + reqwest + explicit aws-lc-rs crypto provider
+//! ```yaml
+//! object_store = { default-features = false, features = ["aws-base", "reqwest", "aws-lc-rs"] }
+//! ```
+//!
 //! # Cryptography
 //!
-//! Provider request signing (e.g. AWS SigV4 or GCP service-account signing) requires a
-//! [`client::CryptoProvider`]. The batteries-included `aws`, `gcp`, `azure`, etc. features
+//! Request signing (e.g. AWS SigV4 or GCP service-account signing) requires a
+//! [`client::CryptoProvider`]. The `aws`, `gcp`, `azure`, features
 //! use [`aws-lc-rs`], matching `reqwest`'s default so that applications do not end up with
 //! two crypto stacks.
 //!
-//! Alternatively, if you wish to use [`ring`] (e.g. to support WASM targets), use the
+//! If you wish to use [`ring`] (e.g. to support WASM targets), use the
 //! `*-base` feature flags, e.g. `aws-base`, and then enable the `ring` feature.
 //!
 //! Note: for TLS to work you will additionally need to register your chosen provider as the
@@ -599,12 +626,14 @@
 //! These could be a custom CA chain, or alternatively an alternative trust store, e.g. [`webpki-roots`].
 //!
 //! ```ignore-wasm32
+//! # #[cfg(feature = "aws")] {
 //! use object_store::{ClientOptions, Certificate};
 //!
 //! let mut options = ClientOptions::default().with_no_system_certificates(true);
 //! for root_cert in webpki_root_certs::TLS_SERVER_ROOT_CERTS {
 //!     options = options.with_root_certificate(Certificate::from_der(root_cert.as_ref()).unwrap());
 //! }
+//! # }
 //! ```
 //!
 //! [CA]: https://en.wikipedia.org/wiki/Certificate_authority
