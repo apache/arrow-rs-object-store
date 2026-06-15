@@ -961,7 +961,7 @@ fn finish_staged_hard_link(
 }
 
 /// Flushes the freshly-written `file`'s contents to disk (when `fsync` is enabled) and then
-/// closes it, checking for close errors that [`File::drop`] would silently ignore.
+/// closes it, checking for close errors that dropping the [`File`] would silently ignore.
 fn sync_and_close(file: File, path: &std::path::Path, fsync: bool) -> Result<()> {
     if fsync {
         file.sync_all().map_err(|source| Error::UnableToSyncFile {
