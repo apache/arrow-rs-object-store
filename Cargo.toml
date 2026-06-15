@@ -82,12 +82,30 @@ futures-channel = {version = "0.3", features = ["sink"]}
 
 [features]
 default = ["fs"]
-cloud = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/stream", "chrono/serde", "base64", "rand", "ring", "http-body-util", "form_urlencoded", "serde_urlencoded", "tokio"]
-azure = ["cloud", "httparse"]
+
+# Shared cloud/provider implementation dependencies.
+# This intentionally does NOT include reqwest.
+cloud-base = ["serde", "serde_json", "quick-xml", "hyper", "chrono/serde", "base64", "rand", "ring", "http-body-util", "form_urlencoded", "serde_urlencoded", "tokio"]
+
+# Built-in reqwest-based HTTP transport.
+reqwest = ["dep:reqwest", "reqwest/stream"]
+
+# Provider base features.
+# These compile provider logic without forcing reqwest.
+azure-base = ["cloud-base", "httparse"]
+gcp-base = ["cloud-base", "rustls-pki-types"]
+aws-base = ["cloud-base", "crc-fast", "md-5"]
+http-base = ["cloud-base"]
+
+# Batteries-included provider features.
+# These preserve existing behavior: enabling aws/azure/gcp/http gives
+# the default reqwest transport.
+azure = ["azure-base", "reqwest"]
+gcp = ["gcp-base", "reqwest"]
+aws = ["aws-base", "reqwest"]
+http = ["http-base", "reqwest"]
+
 fs = ["walkdir", "tokio", "nix", "windows-sys"]
-gcp = ["cloud", "rustls-pki-types"]
-aws = ["cloud", "crc-fast", "md-5"]
-http = ["cloud"]
 tls-webpki-roots = ["reqwest?/rustls-tls-webpki-roots"]
 integration = ["rand", "tokio"]
 tokio = ["dep:tokio", "dep:tracing"]

@@ -52,6 +52,7 @@ impl TryFrom<ListResponse> for ListResult {
         Ok(Self {
             common_prefixes,
             objects,
+            extensions: Default::default(),
         })
     }
 }
@@ -92,7 +93,7 @@ pub(crate) struct InitiateMultipartUploadResult {
     pub upload_id: String,
 }
 
-#[cfg(feature = "aws")]
+#[cfg(feature = "aws-base")]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub(crate) struct CopyPartResult {

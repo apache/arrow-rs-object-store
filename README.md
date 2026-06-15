@@ -50,6 +50,20 @@ It's possible to build `object_store` for the `wasm32-unknown-unknown` target, h
 cargo build -p object_store --target wasm32-unknown-unknown
 ```
 
+## Disabling `reqwest`
+
+The `aws`, `azure`, `gcp`, and `http` features each bundle a [`reqwest`]-based HTTP transport. To target [`wasm32-wasip1`] (where `reqwest` does not compile) or otherwise supply your own HTTP client, build against the matching `*-base` feature instead:
+
+```
+cargo build -p object_store --no-default-features --features aws-base --target wasm32-wasip1
+```
+
+See [Disabling `reqwest`] in the crate docs for full details.
+
+[`reqwest`]: https://crates.io/crates/reqwest
+[`wasm32-wasip1`]: https://doc.rust-lang.org/rustc/platform-support/wasm32-wasip1.html
+[Disabling `reqwest`]: https://docs.rs/object_store/latest/object_store/#disabling-reqwest
+
 ## Related Apache Crates
 
 Here are several related crates in different repositories from other Apache projects.

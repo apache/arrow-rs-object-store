@@ -17,6 +17,9 @@
 
 //! An object store implementation for Azure blob storage
 //!
+//! See the [Feature Flags](crate#feature-flags) section for the difference
+//! between the `azure` and `azure-base` features.
+//!
 //! ## Streaming uploads
 //!
 //! [`ObjectStore::put_multipart_opts`] will upload data in blocks and write a blob from those blocks.
@@ -33,7 +36,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use futures_util::stream::{BoxStream, StreamExt, TryStreamExt};
-use reqwest::Method;
+use http::Method;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
@@ -197,7 +200,7 @@ impl Signer for MicrosoftAzure {
     /// ```
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # use object_store::{azure::MicrosoftAzureBuilder, path::Path, signer::Signer};
-    /// # use reqwest::Method;
+    /// # use http::Method;
     /// # use std::time::Duration;
     /// #
     /// let azure = MicrosoftAzureBuilder::new()
@@ -341,7 +344,12 @@ mod tests {
     #[tokio::test]
     async fn azure_blob_test() {
         maybe_skip_integration!();
-        let integration = MicrosoftAzureBuilder::from_env().build().unwrap();
+        // tag the extensions of every HTTP response with a marker,
+        // allowing response_extensions to verify their propagation
+        let integration = MicrosoftAzureBuilder::from_env()
+            .with_http_connector(MarkerHttpConnector::default())
+            .build()
+            .unwrap();
 
         put_get_delete_list(&integration).await;
         list_with_offset_exclusivity(&integration).await;
@@ -358,6 +366,7 @@ mod tests {
         multipart_out_of_order(&integration).await;
         signing(&integration).await;
         list_paginated(&integration, &integration).await;
+        response_extensions(&integration, true).await;
 
         let validate = !integration.client.config().disable_tagging;
         tagging(

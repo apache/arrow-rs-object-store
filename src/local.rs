@@ -437,6 +437,7 @@ impl ObjectStore for LocalFileSystem {
             Ok(PutResult {
                 e_tag,
                 version: None,
+                extensions: Default::default(),
             })
         })
         .await
@@ -480,6 +481,7 @@ impl ObjectStore for LocalFileSystem {
                 attributes: Attributes::default(),
                 range,
                 meta,
+                extensions: Default::default(),
             })
         })
         .await
@@ -577,6 +579,7 @@ impl ObjectStore for LocalFileSystem {
             Ok(ListResult {
                 common_prefixes: common_prefixes.into_iter().collect(),
                 objects,
+                extensions: Default::default(),
             })
         })
         .await
@@ -1104,6 +1107,7 @@ impl MultipartUpload for LocalUpload {
             Ok(PutResult {
                 e_tag: Some(get_etag(&metadata)),
                 version: None,
+                extensions: Default::default(),
             })
         })
         .await

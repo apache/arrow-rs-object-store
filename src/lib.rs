@@ -80,21 +80,23 @@
     doc = "* Local filesystem: [`LocalFileSystem`](local::LocalFileSystem)"
 )]
 #![cfg_attr(
-    feature = "gcp",
+    feature = "gcp-base",
     doc = "* [`gcp`]: [Google Cloud Storage](https://cloud.google.com/storage/) support. See [`GoogleCloudStorageBuilder`](gcp::GoogleCloudStorageBuilder)"
 )]
 #![cfg_attr(
-    feature = "aws",
+    feature = "aws-base",
     doc = "* [`aws`]: [Amazon S3](https://aws.amazon.com/s3/). See [`AmazonS3Builder`](aws::AmazonS3Builder)"
 )]
 #![cfg_attr(
-    feature = "azure",
+    feature = "azure-base",
     doc = "* [`azure`]: [Azure Blob Storage](https://azure.microsoft.com/en-gb/services/storage/blobs/). See [`MicrosoftAzureBuilder`](azure::MicrosoftAzureBuilder)"
 )]
 #![cfg_attr(
-    feature = "http",
+    feature = "http-base",
     doc = "* [`http`]: [HTTP/WebDAV Storage](https://datatracker.ietf.org/doc/html/rfc2518). See [`HttpBuilder`](http::HttpBuilder)"
 )]
+//!
+//! See [Feature Flags](#feature-flags) for the full set of flags.
 //!
 //! # Why not a Filesystem Interface?
 //!
@@ -517,6 +519,50 @@
 //! [Apache Iceberg]: https://iceberg.apache.org/
 //! [Delta Lake]: https://delta.io/
 //!
+//! # Feature Flags
+//!
+//! The feature set is layered so that you can pick a provider independently
+//! of its HTTP transport:
+//!
+//! * `cloud-base` holds the shared provider implementation (XML/JSON parsing,
+//!   credentials, retry, etc.) and intentionally does *not* depend on
+//!   `reqwest`.
+//! * `reqwest` enables the built-in [`reqwest`]-based [`HttpConnector`].
+//! * `<provider>-base` (`aws-base`, `azure-base`, `gcp-base`, `http-base`)
+//!   adds the per-provider logic on top of `cloud-base` without pulling in
+//!   `reqwest`.
+//! * `<provider>` (`aws`, `azure`, `gcp`, `http`) is the batteries-included
+//!   alias for `<provider>-base` + `reqwest` and is the typical choice.
+//!
+//! ## Provider features
+//!
+//! | Feature | Enables | Notes |
+//! | --- | --- | --- |
+//! | `aws` | `aws-base` + `reqwest` | Amazon S3 with the built-in HTTP transport. |
+//! | `azure` | `azure-base` + `reqwest` | Azure Blob Storage with the built-in HTTP transport. |
+//! | `gcp` | `gcp-base` + `reqwest` | Google Cloud Storage with the built-in HTTP transport. |
+//! | `http` | `http-base` + `reqwest` | HTTP/WebDAV with the built-in HTTP transport. |
+//! | `aws-base` | provider only | S3 provider without `reqwest`; supply your own [`HttpConnector`]. |
+//! | `azure-base` | provider only | Azure provider without `reqwest`; supply your own [`HttpConnector`]. |
+//! | `gcp-base` | provider only | GCS provider without `reqwest`; supply your own [`HttpConnector`]. |
+//! | `http-base` | provider only | HTTP/WebDAV provider without `reqwest`; supply your own [`HttpConnector`]. |
+//!
+//! ## Transport and shared features
+//!
+//! | Feature | Description |
+//! | --- | --- |
+//! | `reqwest` | Enables the default [`reqwest`]-based [`HttpConnector`]. Pulled in automatically by `aws`, `azure`, `gcp`, and `http`. |
+//! | `tls-webpki-roots` | When `reqwest` is enabled, also bundle Mozilla's [`webpki-roots`] CA certificates. See [TLS Certificates](#tls-certificates). |
+//! | `cloud-base` | Shared cloud-provider implementation. Pulled in automatically by every `*-base` feature; usually not enabled directly. |
+//!
+//! ## Other features
+//!
+//! | Feature | Description |
+//! | --- | --- |
+//! | `fs` *(default)* | Local filesystem store via [`LocalFileSystem`](local::LocalFileSystem). |
+//! | `tokio` | Enables Tokio-based utilities such as [`BufReader`](buffered::BufReader) and [`BufWriter`](buffered::BufWriter). Pulled in automatically by `fs` and the `*-base` features. |
+//! | `integration` | Exposes the [`integration`] module, a reusable test suite for verifying custom [`ObjectStore`] implementations. Not API-stable. |
+//!
 //! # TLS Certificates
 //!
 //! Stores that use HTTPS/TLS (this is true for most cloud stores) can choose the source of their [CA]
@@ -533,22 +579,54 @@
 //! Many [`ObjectStore`] implementations permit customization of the HTTP client via
 //! the [`HttpConnector`] trait and utilities in the [`client`] module.
 //! Examples include injecting custom HTTP headers or using an alternate
-//! tokio Runtime I/O requests.
+//! tokio Runtime for I/O requests. To replace `reqwest` entirely (rather than
+//! tweak the bundled transport) see [Disabling `reqwest`](#disabling-reqwest).
 //!
 //! [`HttpConnector`]: client::HttpConnector
+//!
+//! # Disabling `reqwest`
+//!
+//! The `aws`, `azure`, `gcp`, and `http` features each bundle a
+//! [`reqwest`]-based HTTP transport, which is the right choice for most
+//! applications. If you would rather supply your own HTTP client — for example
+//! to share an existing client, to target a platform where `reqwest` does not
+//! compile (such as `wasm32-wasip1`), or to keep `reqwest` out of your
+//! dependency tree — use the matching `*-base` feature and provide an
+//! [`HttpConnector`](client::HttpConnector) at builder time.
+//!
+//! Remember to disable the default features so that `fs` (and its transitive
+//! dependencies) is not pulled in:
+//!
+//! ```toml
+//! [dependencies]
+//! object_store = { version = "0.13", default-features = false, features = ["aws-base"] }
+//! ```
+//!
+//! ```ignore
+//! use object_store::aws::AmazonS3Builder;
+//!
+//! let store = AmazonS3Builder::from_env()
+//!     // `my_connector` is your own `impl HttpConnector`
+//!     .with_http_connector(my_connector)
+//!     .build()?;
+//! ```
+//!
+//! See [Feature Flags](#feature-flags) above for the full set of flags.
+//!
+//! [`reqwest`]: https://crates.io/crates/reqwest
 
-#[cfg(feature = "aws")]
+#[cfg(feature = "aws-base")]
 pub mod aws;
-#[cfg(feature = "azure")]
+#[cfg(feature = "azure-base")]
 pub mod azure;
 #[cfg(feature = "tokio")]
 pub mod buffered;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod chunked;
 pub mod delimited;
-#[cfg(feature = "gcp")]
+#[cfg(feature = "gcp-base")]
 pub mod gcp;
-#[cfg(feature = "http")]
+#[cfg(feature = "http-base")]
 pub mod http;
 #[cfg(feature = "tokio")]
 pub mod limit;
@@ -558,24 +636,28 @@ pub mod memory;
 pub mod path;
 pub mod prefix;
 pub mod registry;
-#[cfg(feature = "cloud")]
+#[cfg(feature = "cloud-base")]
 pub mod signer;
 #[cfg(feature = "tokio")]
 pub mod throttle;
 
-#[cfg(feature = "cloud")]
+#[cfg(feature = "cloud-base")]
 pub mod client;
 
-#[cfg(feature = "cloud")]
+#[cfg(feature = "cloud-base")]
 pub use client::{
     ClientConfigKey, ClientOptions, CredentialProvider, StaticCredentialProvider,
     backoff::BackoffConfig, retry::RetryConfig,
 };
 
-#[cfg(all(feature = "cloud", not(target_arch = "wasm32")))]
+#[cfg(all(
+    feature = "cloud-base",
+    feature = "reqwest",
+    not(target_arch = "wasm32")
+))]
 pub use client::Certificate;
 
-#[cfg(feature = "cloud")]
+#[cfg(feature = "cloud-base")]
 mod config;
 
 mod tags;
@@ -1413,6 +1495,14 @@ pub struct ListResult {
     pub common_prefixes: Vec<Path>,
     /// Object metadata for the listing
     pub objects: Vec<ObjectMeta>,
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to return context-specific information (like cache status) from trait methods.
+    ///
+    /// HTTP-backed stores in this crate populate this with the extensions of the HTTP
+    /// response, allowing custom HTTP middleware to propagate information to callers.
+    /// Where a result is assembled from multiple paginated requests, the extensions of
+    /// each response are merged, with those of later responses taking precedence.
+    pub extensions: Extensions,
 }
 
 /// The metadata that describes an object.
@@ -1627,6 +1717,12 @@ pub struct GetResult {
     pub range: Range<u64>,
     /// Additional object attributes
     pub attributes: Attributes,
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to return context-specific information (like cache status) from trait methods.
+    ///
+    /// HTTP-backed stores in this crate populate this with the extensions of the HTTP
+    /// response, allowing custom HTTP middleware to propagate information to callers.
+    pub extensions: Extensions,
 }
 
 /// The kind of a [`GetResult`]
@@ -1865,7 +1961,7 @@ impl From<Attributes> for PutMultipartOptions {
 }
 
 /// Result for a put request
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct PutResult {
     /// The unique identifier for the newly created object
     ///
@@ -1873,7 +1969,33 @@ pub struct PutResult {
     pub e_tag: Option<String>,
     /// A version indicator for the newly created object
     pub version: Option<String>,
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to return context-specific information (like cache status) from trait methods.
+    ///
+    /// HTTP-backed stores in this crate populate this with the extensions of the HTTP
+    /// response, allowing custom HTTP middleware to propagate information to callers.
+    ///
+    /// These extensions are excluded from [`PartialEq`] and [`Eq`].
+    pub extensions: Extensions,
 }
+
+impl PartialEq<Self> for PutResult {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            e_tag,
+            version,
+            extensions: _,
+        } = self;
+        let Self {
+            e_tag: other_e_tag,
+            version: other_version,
+            extensions: _,
+        } = other;
+        (e_tag == other_e_tag) && (version == other_version)
+    }
+}
+
+impl Eq for PutResult {}
 
 /// Configure preconditions for the copy operation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -2173,12 +2295,12 @@ mod tests {
         store.list(Some(&path))
     }
 
-    #[cfg(any(feature = "azure", feature = "aws"))]
+    #[cfg(any(feature = "azure-base", feature = "aws-base"))]
     pub(crate) async fn signing<T>(integration: &T)
     where
         T: ObjectStore + signer::Signer,
     {
-        use reqwest::Method;
+        use ::http::Method;
         use std::time::Duration;
 
         let data = Bytes::from("hello world");
@@ -2196,7 +2318,7 @@ mod tests {
         assert_eq!(data, loaded);
     }
 
-    #[cfg(any(feature = "aws", feature = "azure"))]
+    #[cfg(any(feature = "aws-base", feature = "azure-base"))]
     pub(crate) async fn tagging<F, Fut>(storage: Arc<dyn ObjectStore>, validate: bool, get_tags: F)
     where
         F: Fn(Path) -> Fut + Send + Sync,
@@ -2369,7 +2491,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "http")]
+    #[cfg(feature = "http-base")]
     fn test_reexported_types() {
         // Test HeaderMap
         let mut headers = HeaderMap::new();

@@ -29,9 +29,9 @@ use crate::config::ConfigValue;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
+use http::header::{HeaderMap, HeaderValue};
 use itertools::Itertools;
 use md5::{Digest, Md5};
-use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -1573,6 +1573,7 @@ mod tests {
         assert!(builder.unsigned_payload.get().unwrap());
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn s3_test_endpoint_url_s3_config() {
         // Verify aws_endpoint_url_s3 parses to S3Endpoint config key
@@ -1687,6 +1688,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn s3_default_region() {
         let builder = AmazonS3Builder::new()
@@ -1696,6 +1698,7 @@ mod tests {
         assert_eq!(builder.client.config.region, "us-east-1");
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn s3_test_bucket_endpoint() {
         let builder = AmazonS3Builder::new()
@@ -1795,6 +1798,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "reqwest")]
     #[tokio::test]
     async fn s3_test_proxy_url() {
         let s3 = AmazonS3Builder::new()
@@ -1823,6 +1827,7 @@ mod tests {
         assert_eq!("Generic HTTP client error: builder error", err);
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn test_invalid_config() {
         let err = AmazonS3Builder::new()
@@ -1865,6 +1870,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn test_request_payer_config() {
         let s3 = AmazonS3Builder::new()
@@ -1938,6 +1944,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn test_builder_eks_with_config() {
         let builder = AmazonS3Builder::new()
@@ -1960,6 +1967,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn test_builder_web_identity_with_config() {
         let builder = AmazonS3Builder::new()

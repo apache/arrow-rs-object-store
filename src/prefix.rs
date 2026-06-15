@@ -22,7 +22,7 @@ use std::ops::Range;
 
 use crate::multipart::{MultipartStore, PartId};
 use crate::path::Path;
-#[cfg(feature = "cloud")]
+#[cfg(feature = "cloud-base")]
 use crate::signer::Signer;
 use crate::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
@@ -186,6 +186,7 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
                     .into_iter()
                     .map(|meta| self.strip_meta(meta))
                     .collect(),
+                extensions: lst.extensions,
             })
     }
 
@@ -236,7 +237,7 @@ impl<T: MultipartStore> MultipartStore for PrefixStore<T> {
     }
 }
 
-#[cfg(feature = "cloud")]
+#[cfg(feature = "cloud-base")]
 #[async_trait::async_trait]
 impl<T: Signer> Signer for PrefixStore<T> {
     async fn signed_url(
@@ -396,7 +397,7 @@ mod tests {
         multipart_race_condition(&store, true).await;
     }
 
-    #[cfg(feature = "cloud")]
+    #[cfg(feature = "cloud-base")]
     #[tokio::test]
     async fn signer() {
         #[derive(Debug)]
