@@ -47,7 +47,7 @@ pub trait CryptoProvider: std::fmt::Debug + Send + Sync {
 
 /// Incrementally compute a digest, see [`CryptoProvider::digest`]
 pub trait DigestContext: Send {
-    ///Updates the digest with all the data in data.
+    /// Updates the digest with all the data in data.
     ///
     /// It is implementation-defined behaviour to call this after calling [`Self::finish`]
     fn update(&mut self, data: &[u8]);
