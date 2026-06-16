@@ -91,7 +91,7 @@ jobs:
         run: cargo clippy --no-default-features --features gcp-base -- -D warnings
       - name: Run clippy with http-base feature
         run: cargo clippy --no-default-features --features http-base -- -D warnings
-      # `reqwest` needs a TLS backend to compile on non-wasm targets; use
+      # `reqwest` needs a TLS backend; use
       # `rustls-no-provider` here so these checks stay free of aws-lc-rs
       - name: Run clippy with base features, reqwest and ring crypto
         run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base,reqwest,reqwest/rustls-no-provider,ring -- -D warnings
@@ -254,11 +254,10 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
       - name: Build wasm32-unknown-unknown
         run: cargo build --target wasm32-unknown-unknown
-      # Note: a plain `cargo build` of the cloud features cannot target
-      # wasm32-unknown-unknown, because `rand`/`getrandom` require the downstream
-      # artifact to select the `wasm_js` backend (a binary/test concern, wired up
-      # via dev-dependencies). The crypto module is compiled for wasm via the
-      # wasm32-wasip1 build below.
+      # Note: we don't `cargo build` the cloud features for wasm32-unknown-unknown.
+      # They pull in `rand` -> `getrandom`, which on this target only compiles with
+      # its `wasm_js` feature enabled. We can't enable that via `--features` because
+      # `getrandom` is a transitive dependency (pulled in by `rand`), not direct
       - name: Install wasm32-wasip1
         run: rustup target add wasm32-wasip1
       - name: Use reqwest 0.13.2 for wasm32-wasip1
