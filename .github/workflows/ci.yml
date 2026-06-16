@@ -216,8 +216,11 @@ jobs:
       # compile it; the default `aws`/etc. features use `aws-lc-rs`).
       # Uses `reqwest/native-tls` so the build is pure ring with no aws-lc-rs
       # anywhere in the tree (and reqwest needs no runtime crypto-provider install).
+      # `env -u TEST_INTEGRATION` runs only the (crypto) unit tests: the emulator
+      # integration tests already ran above, and re-running them here would race
+      # on shared emulator state.
       - name: Run object_store tests with ring crypto provider
-        run: cargo test --lib --tests --no-default-features --features fs,aws-base,azure-base,gcp-base,http-base,reqwest,reqwest/native-tls,ring
+        run: env -u TEST_INTEGRATION cargo test --lib --tests --no-default-features --features fs,aws-base,azure-base,gcp-base,http-base,reqwest,reqwest/native-tls,ring
 
       - name: GCS Output
         if: ${{ !cancelled() }}
@@ -251,10 +254,11 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
       - name: Build wasm32-unknown-unknown
         run: cargo build --target wasm32-unknown-unknown
-      - name: Build wasm32-unknown-unknown with ring crypto provider
-        # aws-lc-rs does not build for wasm32, so use the ring crypto provider here.
-        # Includes aws/gcp/azure-base so the RingCryptoProvider is compiled.
-        run: cargo build --no-default-features --features aws-base,gcp-base,azure-base,http-base,reqwest,ring --target wasm32-unknown-unknown
+      # Note: a plain `cargo build` of the cloud features cannot target
+      # wasm32-unknown-unknown, because `rand`/`getrandom` require the downstream
+      # artifact to select the `wasm_js` backend (a binary/test concern, wired up
+      # via dev-dependencies). The crypto module is compiled for wasm via the
+      # wasm32-wasip1 build below.
       - name: Install wasm32-wasip1
         run: rustup target add wasm32-wasip1
       - name: Use reqwest 0.13.2 for wasm32-wasip1
