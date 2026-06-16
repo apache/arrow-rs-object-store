@@ -41,6 +41,11 @@ impl TagSet {
     pub fn encoded(&self) -> &str {
         &self.0
     }
+
+    /// Return whether this [`TagSet`] contains any tags
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 #[cfg(test)]

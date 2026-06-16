@@ -302,7 +302,7 @@ impl MultipartStore for MicrosoftAzure {
             extensions: _,
         } = opts;
 
-        if tags != Default::default() || attributes != Default::default() {
+        if !tags.is_empty() || !attributes.is_empty() {
             return Err(Error::NotSupported {
                 source: "`create_multipart_opts` with non-default options is not supported by MicrosoftAzure".into(),
             });
