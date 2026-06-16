@@ -1670,6 +1670,7 @@ Authorization: Bearer static-token\r
         assert!(debug.contains("key_configured: true"));
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn test_azure_sensitive_headers_redact_client_request_debug() {
         let encryption_key = BASE64_STANDARD.encode([7_u8; 32]);

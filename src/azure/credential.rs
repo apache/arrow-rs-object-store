@@ -1286,6 +1286,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn test_azure_authorization_preserves_explicit_version() {
         let credential = Some(Arc::new(AzureCredential::BearerToken("token".to_string())));

@@ -356,6 +356,7 @@ mod tests {
     use bytes::Bytes;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[cfg(feature = "reqwest")]
     #[tokio::test]
     async fn azure_blob_test() {
         maybe_skip_integration!();
