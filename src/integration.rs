@@ -1083,7 +1083,10 @@ pub async fn multipart_with_opts(storage: &dyn ObjectStore, multipart: &dyn Mult
 
     let result = storage.get(&path).await.unwrap();
     assert_eq!(result.meta.size, chunk_size as u64 * 2);
-    assert_eq!(result.attributes, attributes);
+    // Some providers add default attributes, e.g. S3 may report a default Content-Type.
+    for (attribute, value) in &attributes {
+        assert_eq!(result.attributes.get(attribute), Some(value));
+    }
 }
 
 /// Tests that [`MultipartStore::put_part`] may be invoked with non-sequential part indices.
