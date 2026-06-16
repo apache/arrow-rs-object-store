@@ -26,7 +26,9 @@ use crate::gcp::{
     GcpCredential, GcpCredentialProvider, GcpSigningCredential, GcpSigningCredentialProvider,
     GoogleCloudStorage, STORE, credential,
 };
-use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
+use crate::{
+    Capabilities, ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider,
+};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -120,6 +122,8 @@ pub struct GoogleCloudStorageBuilder {
     signing_credentials: Option<GcpSigningCredentialProvider>,
     /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
+    /// Capabilities to advertise for this store instance
+    capabilities: Option<ConfigValue<Capabilities>>,
 }
 
 /// Configuration keys for [`GoogleCloudStorageBuilder`]
@@ -199,6 +203,9 @@ pub enum GoogleConfigKey {
 
     /// Client options
     Client(ClientConfigKey),
+
+    /// Override the capabilities advertised by this store.
+    Capabilities,
 }
 
 impl AsRef<str> for GoogleConfigKey {
@@ -212,6 +219,7 @@ impl AsRef<str> for GoogleConfigKey {
             Self::BearerToken => "google_bearer_token",
             Self::SkipSignature => "google_skip_signature",
             Self::Client(key) => key.as_ref(),
+            Self::Capabilities => "google_capabilities",
         }
     }
 }
@@ -233,6 +241,7 @@ impl FromStr for GoogleConfigKey {
             }
             "google_bearer_token" | "bearer_token" => Ok(Self::BearerToken),
             "google_skip_signature" | "skip_signature" => Ok(Self::SkipSignature),
+            "google_capabilities" => Ok(Self::Capabilities),
             _ => match s.strip_prefix("google_").unwrap_or(s).parse() {
                 Ok(key) => Ok(Self::Client(key)),
                 Err(_) => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
@@ -257,6 +266,7 @@ impl Default for GoogleCloudStorageBuilder {
             skip_signature: Default::default(),
             signing_credentials: None,
             http_connector: None,
+            capabilities: None,
         }
     }
 }
@@ -340,7 +350,10 @@ impl GoogleCloudStorageBuilder {
             GoogleConfigKey::SkipSignature => self.skip_signature.parse(value),
             GoogleConfigKey::Client(key) => {
                 self.client_options = self.client_options.with_config(key, value)
-            }
+            },
+            GoogleConfigKey::Capabilities => {
+                self.capabilities = Some(ConfigValue::Deferred(value.into()))
+            },
         };
         self
     }
@@ -366,6 +379,7 @@ impl GoogleCloudStorageBuilder {
             GoogleConfigKey::BearerToken => self.bearer_token.clone(),
             GoogleConfigKey::SkipSignature => Some(self.skip_signature.to_string()),
             GoogleConfigKey::Client(key) => self.client_options.get_config_value(key),
+            GoogleConfigKey::Capabilities => self.capabilities.as_ref().map(|v| v.to_string()),
         }
     }
 
@@ -534,6 +548,12 @@ impl GoogleCloudStorageBuilder {
         self
     }
 
+    /// Override the [`Capabilities`] advertised by this store.
+    pub fn with_capabilities(mut self, capabilities: Capabilities) -> Self {
+        self.capabilities = Some(ConfigValue::Parsed(capabilities));
+        self
+    }
+
     /// Configure a connection to Google Cloud Storage, returning a
     /// new [`GoogleCloudStorage`] and consuming `self`
     pub fn build(mut self) -> Result<GoogleCloudStorage> {
@@ -669,6 +689,7 @@ impl GoogleCloudStorageBuilder {
         let http_client = http.connect(&config.client_options)?;
         Ok(GoogleCloudStorage {
             client: Arc::new(GoogleCloudStorageClient::new(config, http_client)?),
+            capabilities: self.capabilities.map(|x| x.get()).transpose()?,
         })
     }
 }
@@ -676,6 +697,7 @@ impl GoogleCloudStorageBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Capability;
     use std::collections::HashMap;
     use std::io::Write;
     use tempfile::NamedTempFile;
@@ -702,6 +724,7 @@ mod tests {
         let options = HashMap::from([
             ("google_service_account", google_service_account.clone()),
             ("google_bucket_name", google_bucket_name.clone()),
+            ("google_capabilities", "ordered_listing".to_string()),
         ]);
 
         let builder = options
@@ -715,6 +738,14 @@ mod tests {
             google_service_account.as_str()
         );
         assert_eq!(builder.bucket_name.unwrap(), google_bucket_name.as_str());
+        assert!(
+            builder
+                .capabilities
+                .unwrap()
+                .get()
+                .unwrap()
+                .has(Capability::OrderedListing)
+        );
     }
 
     #[tokio::test]
@@ -875,6 +906,12 @@ mod tests {
                 .get_config_value(&GoogleConfigKey::BearerToken)
                 .unwrap(),
             google_bearer_token
+        );
+        assert_eq!(
+            builder
+                .get_config_value(&"google_capabilities".parse().unwrap())
+                .unwrap(),
+            "ordered_listing"
         );
     }
 

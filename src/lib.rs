@@ -664,6 +664,7 @@ mod tags;
 
 pub use tags::TagSet;
 
+pub mod capabilities;
 pub mod list;
 pub mod multipart;
 mod parse;
@@ -691,6 +692,7 @@ use crate::path::Path;
 use crate::util::maybe_spawn_blocking;
 use async_trait::async_trait;
 use bytes::Bytes;
+pub use capabilities::{Capabilities, Capability};
 use chrono::{DateTime, Utc};
 use futures_util::{StreamExt, TryStreamExt, stream::BoxStream};
 use std::fmt::{Debug, Formatter};
@@ -1213,6 +1215,14 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
         self.delete(from).await?;
         Ok(())
     }
+
+    /// Return the [`Capabilities`] supported by this store.
+    ///
+    /// By default, an empty set of capabilities is returned. Individual store
+    /// implementations override this to advertise the features they support.
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::new([])
+    }
 }
 
 macro_rules! as_ref_impl {
@@ -1283,6 +1293,10 @@ macro_rules! as_ref_impl {
                 options: RenameOptions,
             ) -> Result<()> {
                 self.as_ref().rename_opts(from, to, options).await
+            }
+
+            fn capabilities(&self) -> Capabilities {
+                self.as_ref().capabilities()
             }
         }
     };

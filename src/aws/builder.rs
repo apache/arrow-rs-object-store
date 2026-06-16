@@ -26,7 +26,9 @@ use crate::aws::{
 };
 use crate::client::{HttpConnector, TokenCredentialProvider, http_connector};
 use crate::config::ConfigValue;
-use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
+use crate::{
+    Capabilities, ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider,
+};
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use http::header::{HeaderMap, HeaderValue};
@@ -193,6 +195,8 @@ pub struct AmazonS3Builder {
     request_payer: ConfigValue<RequesterPayer>,
     /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
+    /// Capabilities to advertise for this store instance
+    capabilities: Option<ConfigValue<Capabilities>>,
 }
 
 /// Configuration keys for [`AmazonS3Builder`]
@@ -463,6 +467,9 @@ pub enum AmazonS3ConfigKey {
 
     /// Encryption options
     Encryption(S3EncryptionConfigKey),
+
+    /// Override the capabilities advertised by this store.
+    Capabilities,
 }
 
 impl AsRef<str> for AmazonS3ConfigKey {
@@ -497,6 +504,7 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::RequestPayer => "aws_request_payer",
             Self::Client(opt) => opt.as_ref(),
             Self::Encryption(opt) => opt.as_ref(),
+            Self::Capabilities => "aws_capabilities",
         }
     }
 }
@@ -557,6 +565,7 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_sse_customer_key_base64" | "sse_customer_key_base64" => Ok(Self::Encryption(
                 S3EncryptionConfigKey::CustomerEncryptionKey,
             )),
+            "aws_capabilities" => Ok(Self::Capabilities),
             _ => match s.strip_prefix("aws_").unwrap_or(s).parse() {
                 Ok(key) => Ok(Self::Client(key)),
                 Err(_) => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
@@ -709,6 +718,9 @@ impl AmazonS3Builder {
                     self.encryption_customer_key_base64 = Some(value.into())
                 }
             },
+            AmazonS3ConfigKey::Capabilities => {
+                self.capabilities = Some(ConfigValue::Deferred(value.into()))
+            }
         };
         self
     }
@@ -765,6 +777,7 @@ impl AmazonS3Builder {
             AmazonS3ConfigKey::DisableTagging => Some(self.disable_tagging.to_string()),
             AmazonS3ConfigKey::DisableBulkDelete => Some(self.disable_bulk_delete.to_string()),
             AmazonS3ConfigKey::RequestPayer => Some(self.request_payer.to_string()),
+            AmazonS3ConfigKey::Capabilities => self.capabilities.as_ref().map(ToString::to_string),
             AmazonS3ConfigKey::Encryption(key) => match key {
                 S3EncryptionConfigKey::ServerSideEncryption => {
                     self.encryption_type.as_ref().map(ToString::to_string)
@@ -1105,6 +1118,12 @@ impl AmazonS3Builder {
         self
     }
 
+    /// Override the [`Capabilities`] advertised by this store.
+    pub fn with_capabilities(mut self, capabilities: Capabilities) -> Self {
+        self.capabilities = Some(ConfigValue::Parsed(capabilities));
+        self
+    }
+
     /// Create a [`AmazonS3`] instance from the provided values,
     /// consuming `self`.
     pub fn build(mut self) -> Result<AmazonS3> {
@@ -1286,7 +1305,10 @@ impl AmazonS3Builder {
         let http_client = http.connect(&config.client_options)?;
         let client = Arc::new(S3Client::new(config, http_client));
 
-        Ok(AmazonS3 { client })
+        Ok(AmazonS3 {
+            client,
+            capabilities: self.capabilities.map(|x| x.get()).transpose()?,
+        })
     }
 }
 
@@ -1535,6 +1557,7 @@ impl From<S3EncryptionHeaders> for HeaderMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Capability;
     use std::collections::HashMap;
 
     #[test]
@@ -1552,6 +1575,7 @@ mod tests {
             ("aws_session_token", aws_session_token.clone()),
             ("aws_unsigned_payload", "true".to_string()),
             ("aws_checksum_algorithm", "sha256".to_string()),
+            ("aws_capabilities", "ordered_listing".to_string()),
         ]);
 
         let builder = options
@@ -1571,6 +1595,14 @@ mod tests {
             Checksum::SHA256
         );
         assert!(builder.unsigned_payload.get().unwrap());
+        assert!(
+            builder
+                .capabilities
+                .unwrap()
+                .get()
+                .unwrap()
+                .has(Capability::OrderedListing)
+        );
     }
 
     #[cfg(feature = "reqwest")]
@@ -1626,7 +1658,8 @@ mod tests {
             .with_config(
                 "aws_sse_customer_key_base64".parse().unwrap(),
                 "some_customer_key",
-            );
+            )
+            .with_config(AmazonS3ConfigKey::Capabilities, "ordered_listing");
 
         assert_eq!(
             builder
@@ -1685,6 +1718,12 @@ mod tests {
                 .get_config_value(&"aws_sse_customer_key_base64".parse().unwrap())
                 .unwrap(),
             "some_customer_key"
+        );
+        assert_eq!(
+            builder
+                .get_config_value(&"aws_capabilities".parse().unwrap())
+                .unwrap(),
+            "ordered_listing"
         );
     }
 
@@ -1912,6 +1951,26 @@ mod tests {
             .build()
             .unwrap();
         assert!(s3.client.config.request_payer);
+    }
+
+    #[test]
+    fn test_parse_capabilities() {
+        // Default: ordered listing disabled
+        let s3 = AmazonS3Builder::new()
+            .with_bucket_name("bucket")
+            .with_region("region")
+            .build()
+            .unwrap();
+        assert!(!s3.capabilities.is_some());
+
+        // Explicit override via with_capabilities: no capabilities
+        let s3 = AmazonS3Builder::new()
+            .with_capabilities(Capabilities::new([Capability::OrderedListing]))
+            .with_bucket_name("bucket")
+            .with_region("region")
+            .build()
+            .unwrap();
+        assert!(s3.capabilities.unwrap().has(Capability::OrderedListing));
     }
 
     #[test]

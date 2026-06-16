@@ -21,7 +21,7 @@ use std::time::Duration;
 use http::header::HeaderValue;
 use humantime::{format_duration, parse_duration};
 
-use crate::{Error, Result};
+use crate::{Capabilities, Error, Result};
 
 /// Provides deferred parsing of a value
 ///
@@ -118,6 +118,12 @@ impl Parse for HeaderValue {
             store: "Config",
             source: format!("failed to parse \"{v}\" as HeaderValue").into(),
         })
+    }
+}
+
+impl Parse for Capabilities {
+    fn parse(v: &str) -> Result<Self> {
+        Self::from_str(v)
     }
 }
 

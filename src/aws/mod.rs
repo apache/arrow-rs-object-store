@@ -47,9 +47,9 @@ use crate::multipart::{MultipartStore, PartId};
 use crate::signer::Signer;
 use crate::util::STRICT_ENCODE_SET;
 use crate::{
-    CopyMode, CopyOptions, Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, Path, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult,
-    Result, UploadPart,
+    Capabilities, CopyMode, CopyOptions, Error, GetOptions, GetResult, ListResult, MultipartId,
+    MultipartUpload, ObjectMeta, ObjectStore, Path, PutMode, PutMultipartOptions, PutOptions,
+    PutPayload, PutResult, Result, UploadPart,
 };
 
 static TAGS_HEADER: HeaderName = HeaderName::from_static("x-amz-tagging");
@@ -82,10 +82,17 @@ use crate::client::parts::Parts;
 use crate::list::{PaginatedListOptions, PaginatedListResult, PaginatedListStore};
 pub use credential::{AwsAuthorizer, AwsCredential};
 
+// OrderedListing capability depends on the bucket type, it's not enabled for directory bucket.
+// https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html
+fn get_default_capabilities() -> Capabilities {
+    return Capabilities::new([]);
+}
+
 /// Interface for [Amazon S3](https://aws.amazon.com/s3/).
 #[derive(Debug, Clone)]
 pub struct AmazonS3 {
     client: Arc<S3Client>,
+    capabilities: Option<Capabilities>,
 }
 
 impl std::fmt::Display for AmazonS3 {
@@ -416,6 +423,12 @@ impl ObjectStore for AmazonS3 {
             }
         }
     }
+
+    fn capabilities(&self) -> Capabilities {
+        self.capabilities
+            .clone()
+            .unwrap_or_else(get_default_capabilities)
+    }
 }
 
 #[derive(Debug)]
@@ -715,6 +728,7 @@ mod tests {
             tagging(
                 Arc::new(AmazonS3 {
                     client: Arc::clone(&integration.client),
+                    capabilities: None,
                 }),
                 !config.disable_tagging,
                 |p| {
