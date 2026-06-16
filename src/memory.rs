@@ -116,6 +116,7 @@ struct Storage {
 
 #[derive(Debug, Default, Clone)]
 struct PartStorage {
+    attributes: Attributes,
     parts: Vec<Option<Bytes>>,
 }
 
@@ -417,10 +418,25 @@ impl ObjectStore for InMemory {
 #[async_trait]
 impl MultipartStore for InMemory {
     async fn create_multipart(&self, _path: &Path) -> Result<MultipartId> {
+        self.create_multipart_opts(_path, PutMultipartOptions::default())
+            .await
+    }
+
+    async fn create_multipart_opts(
+        &self,
+        _path: &Path,
+        opts: PutMultipartOptions,
+    ) -> Result<MultipartId> {
         let mut storage = self.storage.write();
         let etag = storage.next_etag;
         storage.next_etag += 1;
-        storage.uploads.insert(etag, Default::default());
+        storage.uploads.insert(
+            etag,
+            PartStorage {
+                attributes: opts.attributes,
+                parts: Default::default(),
+            },
+        );
         Ok(etag.to_string())
     }
 
@@ -459,7 +475,7 @@ impl MultipartStore for InMemory {
         for x in &upload.parts {
             buf.extend_from_slice(x.as_ref().unwrap())
         }
-        let etag = storage.insert(path, buf.into(), Default::default());
+        let etag = storage.insert(path, buf.into(), upload.attributes);
         Ok(PutResult {
             e_tag: Some(etag.to_string()),
             version: None,
@@ -557,6 +573,7 @@ mod tests {
         stream_get(&integration).await;
         put_opts(&integration, true).await;
         multipart(&integration, &integration).await;
+        multipart_with_opts(&integration, &integration).await;
         put_get_attributes(&integration).await;
         multipart_put_part_out_of_order(&integration, &integration).await;
     }

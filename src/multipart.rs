@@ -24,7 +24,7 @@
 use async_trait::async_trait;
 
 use crate::path::Path;
-use crate::{MultipartId, PutPayload, PutResult, Result};
+use crate::{Error, MultipartId, PutMultipartOptions, PutPayload, PutResult, Result};
 
 /// Represents a part of a file that has been successfully uploaded in a multipart upload process.
 #[derive(Debug, Clone)]
@@ -45,6 +45,30 @@ pub struct PartId {
 pub trait MultipartStore: Send + Sync + 'static {
     /// Creates a new multipart upload, returning the [`MultipartId`]
     async fn create_multipart(&self, path: &Path) -> Result<MultipartId>;
+
+    /// Creates a new multipart upload with the given options, returning the [`MultipartId`]
+    ///
+    /// This allows callers using the low-level multipart API to provide object attributes,
+    /// tags, or implementation-specific extensions when initiating the upload.
+    async fn create_multipart_opts(
+        &self,
+        path: &Path,
+        opts: PutMultipartOptions,
+    ) -> Result<MultipartId> {
+        let PutMultipartOptions {
+            tags,
+            attributes,
+            extensions: _,
+        } = opts;
+
+        if tags != Default::default() || attributes != Default::default() {
+            return Err(Error::NotSupported {
+                source: "create_multipart_opts with non-default options".into(),
+            });
+        }
+
+        self.create_multipart(path).await
+    }
 
     /// Uploads a new part with index `part_idx`
     ///
@@ -81,4 +105,59 @@ pub trait MultipartStore: Send + Sync + 'static {
 
     /// Aborts a multipart upload
     async fn abort_multipart(&self, path: &Path, id: &MultipartId) -> Result<()>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Extensions;
+
+    struct TestMultipartStore;
+
+    #[async_trait]
+    impl MultipartStore for TestMultipartStore {
+        async fn create_multipart(&self, _path: &Path) -> Result<MultipartId> {
+            Ok("test".into())
+        }
+
+        async fn put_part(
+            &self,
+            _path: &Path,
+            _id: &MultipartId,
+            _part_idx: usize,
+            _data: PutPayload,
+        ) -> Result<PartId> {
+            unreachable!()
+        }
+
+        async fn complete_multipart(
+            &self,
+            _path: &Path,
+            _id: &MultipartId,
+            _parts: Vec<PartId>,
+        ) -> Result<PutResult> {
+            unreachable!()
+        }
+
+        async fn abort_multipart(&self, _path: &Path, _id: &MultipartId) -> Result<()> {
+            unreachable!()
+        }
+    }
+
+    #[tokio::test]
+    async fn default_create_multipart_opts_ignores_extensions() {
+        let mut extensions = Extensions::new();
+        extensions.insert("extension");
+        let opts = PutMultipartOptions {
+            extensions,
+            ..Default::default()
+        };
+
+        let id = TestMultipartStore
+            .create_multipart_opts(&Path::from("test"), opts)
+            .await
+            .unwrap();
+
+        assert_eq!(id, "test");
+    }
 }

@@ -310,6 +310,14 @@ impl<T: MultipartStore> MultipartStore for ThrottledStore<T> {
         self.inner.create_multipart(path).await
     }
 
+    async fn create_multipart_opts(
+        &self,
+        path: &Path,
+        opts: PutMultipartOptions,
+    ) -> Result<MultipartId> {
+        self.inner.create_multipart_opts(path, opts).await
+    }
+
     async fn put_part(
         &self,
         path: &Path,
@@ -400,6 +408,7 @@ mod tests {
         copy_if_not_exists(&store).await;
         stream_get(&store).await;
         multipart(&store, &store).await;
+        multipart_with_opts(&store, &store).await;
         multipart_put_part_out_of_order(&store, &store).await;
     }
 

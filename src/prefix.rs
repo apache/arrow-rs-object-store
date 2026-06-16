@@ -209,6 +209,15 @@ impl<T: MultipartStore> MultipartStore for PrefixStore<T> {
         self.inner.create_multipart(&full_path).await
     }
 
+    async fn create_multipart_opts(
+        &self,
+        path: &Path,
+        opts: PutMultipartOptions,
+    ) -> Result<MultipartId> {
+        let full_path = self.full_path(path);
+        self.inner.create_multipart_opts(&full_path, opts).await
+    }
+
     async fn put_part(
         &self,
         path: &Path,
@@ -391,6 +400,7 @@ mod tests {
         let store = PrefixStore::new(InMemory::new(), "prefix");
 
         multipart(&store, &store).await;
+        multipart_with_opts(&store, &store).await;
         multipart_put_part_out_of_order(&store, &store).await;
         multipart_out_of_order(&store).await;
         multipart_race_condition(&store, true).await;
