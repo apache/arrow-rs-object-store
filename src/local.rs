@@ -143,23 +143,34 @@ impl From<Error> for super::Error {
 fn close_file(file: File) -> std::result::Result<(), io::Error> {
     #[cfg(target_family = "unix")]
     {
-        nix::unistd::close(file).map_err(|e| e.into())
+        use std::os::fd::IntoRawFd;
+
+        close_fd(file.into_raw_fd())
     }
     #[cfg(target_family = "windows")]
     {
         use std::os::windows::io::IntoRawHandle;
 
-        let handle = file.into_raw_handle();
-        // SAFETY: `handle` is a valid, owned handle obtained from `into_raw_handle()`.
-        match unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) } {
-            0 => Err(io::Error::last_os_error()),
-            _ => Ok(()),
-        }
+        close_handle(file.into_raw_handle())
     }
     #[cfg(not(any(target_family = "unix", target_family = "windows")))]
     {
         drop(file);
         Ok(())
+    }
+}
+
+#[cfg(target_family = "unix")]
+fn close_fd(fd: std::os::fd::RawFd) -> std::result::Result<(), io::Error> {
+    nix::unistd::close(fd).map_err(|e| e.into())
+}
+
+#[cfg(target_family = "windows")]
+fn close_handle(handle: std::os::windows::io::RawHandle) -> std::result::Result<(), io::Error> {
+    // SAFETY: `handle` must be an owned handle, except when testing invalid handle errors.
+    match unsafe { windows_sys::Win32::Foundation::CloseHandle(handle) } {
+        0 => Err(io::Error::last_os_error()),
+        _ => Ok(()),
     }
 }
 
@@ -1893,37 +1904,14 @@ mod tests {
     #[test]
     #[cfg(target_family = "unix")]
     fn test_close_file_detects_error_unix() {
-        use std::os::fd::FromRawFd;
-        use std::os::unix::io::AsRawFd;
-
-        let file = tempfile::tempfile().unwrap();
-
-        // Close and reclaim a File from the now-invalid fd
-        let file = {
-            let fd = file.as_raw_fd();
-            super::close_file(file).unwrap();
-            unsafe { std::fs::File::from_raw_fd(fd) }
-        };
-
-        let err = super::close_file(file).unwrap_err();
+        let err = super::close_fd(-1).unwrap_err();
         assert_eq!(err.raw_os_error(), Some(nix::libc::EBADF), "got: {err:?}");
     }
 
     #[test]
     #[cfg(target_family = "windows")]
     fn test_close_file_detects_error_windows() {
-        use std::os::windows::io::{AsRawHandle, FromRawHandle};
-
-        let file = tempfile::tempfile().unwrap();
-
-        // Close and reclaim a File from the now-invalid handle
-        let file = {
-            let handle = file.as_raw_handle();
-            super::close_file(file).unwrap();
-            unsafe { std::fs::File::from_raw_handle(handle) }
-        };
-
-        let err = super::close_file(file).unwrap_err();
+        let err = super::close_handle(std::ptr::null_mut()).unwrap_err();
         assert_eq!(
             err.raw_os_error(),
             Some(windows_sys::Win32::Foundation::ERROR_INVALID_HANDLE as i32),
