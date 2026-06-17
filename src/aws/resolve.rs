@@ -49,7 +49,12 @@ impl From<Error> for crate::Error {
 pub async fn resolve_bucket_region(bucket: &str, client_options: &ClientOptions) -> Result<String> {
     use http::StatusCode;
 
-    let endpoint = format!("https://{bucket}.s3.amazonaws.com");
+    // S3's wildcard TLS cert (*.s3.amazonaws.com) only covers one DNS label. Use path-style for dotted names.
+    let endpoint = if bucket.contains('.') {
+        format!("https://s3.amazonaws.com/{bucket}")
+    } else {
+        format!("https://{bucket}.s3.amazonaws.com")
+    };
 
     let client = client_options.client()?;
 
