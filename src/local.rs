@@ -513,9 +513,8 @@ impl ObjectStore for LocalFileSystem {
                 let config = Arc::clone(&config);
                 maybe_spawn_blocking(move || {
                     let location = location?;
-                    // Do not apply `with_fsync` to standalone deletes.
-                    // Use `fsync=true` only when removing the source after a synced copy in
-                    // `rename_if_not_exists`.
+                    // `with_fsync` does not apply to standalone deletes; only create-mode rename
+                    // fsyncs its internal source removal as part of the durable copy-and-delete.
                     Self::delete_location(config, automatic_cleanup, &location, false)?;
                     Ok(location)
                 })
