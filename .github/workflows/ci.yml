@@ -114,6 +114,11 @@ jobs:
         run: cargo clippy --no-default-features --features gcp-base -- -D warnings
       - name: Run clippy with http-base feature
         run: cargo clippy --no-default-features --features http-base -- -D warnings
+      # Testing matrix of HTTP and crypto providers
+      #
+      # Improvements tracked in  https://githubcom/apache/arrow-rs-object-store/issues/759
+      #
+      # Notes:
       # Direct `reqwest` needs a TLS backend. Use `rustls-no-provider` so TLS
       # does not add AWS-LC to ring/custom CryptoProvider checks.
       - name: Run clippy with base features, reqwest and ring CryptoProvider
@@ -121,7 +126,7 @@ jobs:
       - name: Run clippy with base features, reqwest and no bundled CryptoProvider
         run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base,reqwest,reqwest/rustls-no-provider -- -D warnings
       - name: Run clippy with base features, custom HTTP and aws-lc-rs CryptoProvider
-        run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base,aws-lc-rs -- -D warnings
+        run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base,aws-lc-rs,aws-lc-rs/aws-lc-sys -- -D warnings
       - name: Run clippy with base features, custom HTTP and ring CryptoProvider
         run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base,ring -- -D warnings
       - name: Run clippy with base features, custom HTTP and no bundled CryptoProvider
@@ -230,12 +235,13 @@ jobs:
           AWS_COPY_IF_NOT_EXISTS: multipart
 
       # Exercise the `ring` crypto provider at runtime (the other jobs only
-      # compile it; the default `aws`/etc. features use `aws-lc-rs`).
-      # Uses `reqwest/native-tls` so the build is pure ring with no aws-lc-rs
-      # anywhere in the tree (and reqwest needs no runtime crypto-provider install).
-      # `env -u TEST_INTEGRATION` runs only the (crypto) unit tests: the emulator
-      # integration tests already ran above, and re-running them here would race
-      # on shared emulator state.
+      # compile it)
+      #
+      # Notes:
+      # * Use `reqwest/native-tls` to avoid aws-lc-rs anywhere in the tree
+      #
+      # * use `env -u TEST_INTEGRATION` to run only the (crypto) unit tests
+      #   as the integration tests already ran above.
       - name: Run object_store tests with ring crypto provider
         run: env -u TEST_INTEGRATION cargo test --lib --tests --no-default-features --features fs,aws-base,azure-base,gcp-base,http-base,reqwest,reqwest/native-tls,ring
 
@@ -278,8 +284,7 @@ jobs:
       - name: Install wasm32-wasip1
         run: rustup target add wasm32-wasip1
       - name: Use reqwest 0.13.2 for wasm32-wasip1
-        # TODO: reqwest 0.13.3+ doesn't compile against wasm32-wasip1, as it no
-        # longer uses the web (JS) backend.
+        # TODO: reqwest 0.13.3+ doesn't compile against wasm32-wasip1
         run: cargo update -p reqwest --precise 0.13.2
       - name: Build wasm32-wasip1
         # aws-lc-rs does not build for wasm32-wasip1, so use the ring crypto provider here
