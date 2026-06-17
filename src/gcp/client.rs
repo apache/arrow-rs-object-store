@@ -24,7 +24,7 @@ use crate::client::s3::{
     CompleteMultipartUpload, CompleteMultipartUploadResult, InitiateMultipartUploadResult,
     ListResponse,
 };
-use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpResponse};
+use crate::client::{CryptoProvider, GetOptionsExt, HttpClient, HttpError, HttpResponse};
 use crate::gcp::credential::CredentialExt;
 use crate::gcp::{GcpCredential, GcpCredentialProvider, GcpSigningCredentialProvider, STORE};
 use crate::list::{PaginatedListOptions, PaginatedListResult};
@@ -32,8 +32,8 @@ use crate::multipart::PartId;
 use crate::path::Path;
 use crate::util::hex_encode;
 use crate::{
-    Attribute, Attributes, ClientOptions, GetOptions, MultipartId, PutMode, PutMultipartOptions,
-    PutOptions, PutPayload, PutResult, Result, RetryConfig,
+    Attribute, Attributes, ClientOptions, CopyMode, GetOptions, ListResult, MultipartId, PutMode,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, RetryConfig,
 };
 use async_trait::async_trait;
 use base64::Engine;
@@ -141,6 +141,8 @@ pub(crate) struct GoogleCloudStorageConfig {
     pub credentials: GcpCredentialProvider,
 
     pub signing_credentials: GcpSigningCredentialProvider,
+
+    pub crypto: Option<Arc<dyn CryptoProvider>>,
 
     pub bucket_name: String,
 
@@ -250,8 +252,10 @@ impl Request<'_> {
 
     async fn do_put(self) -> Result<PutResult> {
         let response = self.send().await?;
-        Ok(get_put_result(response.headers(), VERSION_HEADER)
-            .map_err(|source| Error::Metadata { source })?)
+        Ok(
+            get_put_result(response, VERSION_HEADER)
+                .map_err(|source| Error::Metadata { source })?,
+        )
     }
 }
 
@@ -541,11 +545,12 @@ impl GoogleCloudStorageClient {
             .await
             .map_err(|source| Error::CompleteMultipartRequest { source })?;
 
-        let version = get_version(response.headers(), VERSION_HEADER)
+        let (parts, body) = response.into_parts();
+
+        let version = get_version(&parts.headers, VERSION_HEADER)
             .map_err(|source| Error::Metadata { source })?;
 
-        let data = response
-            .into_body()
+        let data = body
             .bytes()
             .await
             .map_err(|source| Error::CompleteMultipartResponseBody { source })?;
@@ -556,6 +561,7 @@ impl GoogleCloudStorageClient {
         Ok(PutResult {
             e_tag: Some(response.e_tag),
             version,
+            extensions: parts.extensions,
         })
     }
 
@@ -566,12 +572,7 @@ impl GoogleCloudStorageClient {
     }
 
     /// Perform a copy request <https://cloud.google.com/storage/docs/xml-api/put-object-copy>
-    pub(crate) async fn copy_request(
-        &self,
-        from: &Path,
-        to: &Path,
-        if_not_exists: bool,
-    ) -> Result<()> {
+    pub(crate) async fn copy_request(&self, from: &Path, to: &Path, mode: CopyMode) -> Result<()> {
         let credential = self.get_credential().await?;
         let url = self.object_url(to);
 
@@ -582,6 +583,11 @@ impl GoogleCloudStorageClient {
             .client
             .request(Method::PUT, url)
             .header("x-goog-copy-source", source);
+
+        let if_not_exists = match mode {
+            CopyMode::Create => true,
+            CopyMode::Overwrite => false,
+        };
 
         if if_not_exists {
             builder = builder.header(&VERSION_MATCH, 0);
@@ -705,8 +711,11 @@ impl ListClient for Arc<GoogleCloudStorageClient> {
             .with_bearer_auth(credential.as_deref())
             .send_retry(&self.config.retry_config)
             .await
-            .map_err(|source| Error::ListRequest { source })?
-            .into_body()
+            .map_err(|source| Error::ListRequest { source })?;
+
+        let (parts, body) = response.into_parts();
+
+        let response = body
             .bytes()
             .await
             .map_err(|source| Error::ListResponseBody { source })?;
@@ -715,8 +724,12 @@ impl ListClient for Arc<GoogleCloudStorageClient> {
             .map_err(|source| Error::InvalidListResponse { source })?;
 
         let token = response.next_continuation_token.take();
+
+        let mut result: ListResult = response.try_into()?;
+        result.extensions = parts.extensions;
+
         Ok(PaginatedListResult {
-            result: response.try_into()?,
+            result,
             page_token: token,
         })
     }

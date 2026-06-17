@@ -52,6 +52,7 @@ impl TryFrom<ListResponse> for ListResult {
         Ok(Self {
             common_prefixes,
             objects,
+            extensions: Default::default(),
         })
     }
 }
@@ -92,7 +93,7 @@ pub(crate) struct InitiateMultipartUploadResult {
     pub upload_id: String,
 }
 
-#[cfg(feature = "aws")]
+#[cfg(feature = "aws-base")]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub(crate) struct CopyPartResult {
@@ -100,6 +101,8 @@ pub(crate) struct CopyPartResult {
     pub e_tag: String,
     #[serde(default, rename = "ChecksumSHA256")]
     pub checksum_sha256: Option<String>,
+    #[serde(default, rename = "ChecksumCRC64NVME")]
+    pub checksum_crc64nvme: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -113,6 +116,8 @@ pub(crate) struct PartMetadata {
     pub e_tag: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checksum_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checksum_crc64nvme: Option<String>,
 }
 
 impl From<Vec<PartId>> for CompleteMultipartUpload {
@@ -127,12 +132,14 @@ impl From<Vec<PartId>> for CompleteMultipartUpload {
                     Err(_) => PartMetadata {
                         e_tag: part.content_id.clone(),
                         checksum_sha256: None,
+                        checksum_crc64nvme: None,
                     },
                 };
                 MultipartPart {
                     e_tag: md.e_tag,
                     part_number: part_idx + 1,
                     checksum_sha256: md.checksum_sha256,
+                    checksum_crc64nvme: md.checksum_crc64nvme,
                 }
             })
             .collect();
@@ -149,6 +156,9 @@ pub(crate) struct MultipartPart {
     #[serde(rename = "ChecksumSHA256")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checksum_sha256: Option<String>,
+    #[serde(rename = "ChecksumCRC64NVME")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checksum_crc64nvme: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

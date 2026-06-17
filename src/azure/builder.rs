@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::azure::client::{AzureClient, AzureConfig};
+use crate::azure::client::{AzureClient, AzureConfig, AzureEncryptionHeaders};
 use crate::azure::credential::{
     AzureAccessKey, AzureCliCredential, ClientSecretOAuthProvider, FabricTokenOAuthProvider,
     ImdsManagedIdentityProvider, WorkloadIdentityOAuthProvider,
 };
 use crate::azure::{AzureCredential, AzureCredentialProvider, MicrosoftAzure, STORE};
-use crate::client::{HttpConnector, TokenCredentialProvider, http_connector};
+use crate::client::{CryptoProvider, HttpConnector, TokenCredentialProvider, http_connector};
 use crate::config::ConfigValue;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use percent_encoding::percent_decode_str;
@@ -84,6 +84,11 @@ enum Error {
 
     #[error("Missing component in SAS query pair")]
     MissingSasComponent {},
+
+    #[error("Invalid encryption key: {source}")]
+    InvalidEncryptionKey {
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
 
     #[error("Configuration key: '{}' is not known.", key)]
     UnknownConfigurationKey { key: String },
@@ -174,6 +179,8 @@ pub struct MicrosoftAzureBuilder {
     client_options: ClientOptions,
     /// Credentials
     credentials: Option<AzureCredentialProvider>,
+    /// The [`CryptoProvider`] to use
+    crypto: Option<Arc<dyn CryptoProvider>>,
     /// Skip signing requests
     skip_signature: ConfigValue<bool>,
     /// When set to true, fabric url scheme will be used
@@ -192,6 +199,8 @@ pub struct MicrosoftAzureBuilder {
     fabric_cluster_identifier: Option<String>,
     /// Credential type override
     credential_type: Option<String>,
+    /// Base64-encoded 256-bit customer-provided encryption key
+    encryption_key: Option<String>,
     /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
 }
@@ -415,6 +424,13 @@ pub enum AzureConfigKey {
     /// - `credential_type`
     CredentialType,
 
+    /// Base64-encoded customer-provided encryption key
+    ///
+    /// Supported keys:
+    /// - `azure_storage_encryption_key`
+    /// - `encryption_key`
+    EncryptionKey,
+
     /// Client options
     Client(ClientConfigKey),
 }
@@ -446,6 +462,7 @@ impl AsRef<str> for AzureConfigKey {
             Self::FabricSessionToken => "azure_fabric_session_token",
             Self::FabricClusterIdentifier => "azure_fabric_cluster_identifier",
             Self::CredentialType => "azure_credential_type",
+            Self::EncryptionKey => "azure_storage_encryption_key",
             Self::Client(key) => key.as_ref(),
         }
     }
@@ -503,6 +520,7 @@ impl FromStr for AzureConfigKey {
                 Ok(Self::FabricClusterIdentifier)
             }
             "azure_credential_type" | "credential_type" => Ok(Self::CredentialType),
+            "azure_storage_encryption_key" | "encryption_key" => Ok(Self::EncryptionKey),
             // Backwards compatibility
             "azure_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
             _ => match s.strip_prefix("azure_").unwrap_or(s).parse() {
@@ -632,6 +650,7 @@ impl MicrosoftAzureBuilder {
                 self.fabric_cluster_identifier = Some(value.into())
             }
             AzureConfigKey::CredentialType => self.credential_type = Some(value.into()),
+            AzureConfigKey::EncryptionKey => self.encryption_key = Some(value.into()),
         };
         self
     }
@@ -674,6 +693,7 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::FabricSessionToken => self.fabric_session_token.clone(),
             AzureConfigKey::FabricClusterIdentifier => self.fabric_cluster_identifier.clone(),
             AzureConfigKey::CredentialType => self.credential_type.clone(),
+            AzureConfigKey::EncryptionKey => self.encryption_key.clone(),
         }
     }
 
@@ -705,10 +725,26 @@ impl MicrosoftAzureBuilder {
                     self.container_name = Some(validate(host)?);
                 } else {
                     match host.split_once('.') {
+                        // Workspace-level Private Link detection
+                        // "{workspaceid}.z??.(onelake|dfs|blob).fabric.microsoft.com"
+                        Some((workspaceid, rest))
+                            if rest.starts_with('z') && rest.ends_with("fabric.microsoft.com") =>
+                        {
+                            // Account name for WS-PL is two labels: "{workspaceid}.z{xy}"
+                            let (zone, _) = rest.split_once('.').unwrap_or((rest, ""));
+
+                            self.account_name = Some(format!("{workspaceid}.{zone}"));
+                            self.endpoint = Some(format!("https://{}", host));
+
+                            self.container_name = Some(validate(parsed.username())?);
+                            self.use_fabric_endpoint = true.into();
+                        }
+
                         Some((a, "dfs.core.windows.net")) | Some((a, "blob.core.windows.net")) => {
                             self.account_name = Some(validate(a)?);
                             self.container_name = Some(validate(parsed.username())?);
                         }
+
                         Some((a, "dfs.fabric.microsoft.com"))
                         | Some((a, "blob.fabric.microsoft.com")) => {
                             self.account_name = Some(validate(a)?);
@@ -720,6 +756,30 @@ impl MicrosoftAzureBuilder {
                 }
             }
             "https" => match host.split_once('.') {
+                // Workspace-level Private Link detection
+                // "{workspaceid}.z??.(onelake|dfs|blob).fabric.microsoft.com"
+                Some((workspaceid, rest))
+                    if rest.starts_with('z') && rest.ends_with("fabric.microsoft.com") =>
+                {
+                    // rest looks like: "z28.dfs.fabric.microsoft.com" / "z28.blob.fabric.microsoft.com" / etc.
+                    // Account name for WS-PL is two labels: "{workspaceid}.z{xy}"
+                    let (zone, _) = rest.split_once('.').unwrap_or((rest, ""));
+
+                    self.account_name = Some(format!("{workspaceid}.{zone}"));
+                    self.endpoint = Some(format!("https://{}", host));
+
+                    // Attempt to infer the container name from the URL
+                    let container = parsed.path_segments().unwrap().next().expect(
+                        "iterator always contains at least one string (which may be empty)",
+                    );
+
+                    if !container.is_empty() {
+                        self.container_name = Some(validate(container)?);
+                    }
+
+                    self.use_fabric_endpoint = true.into();
+                }
+
                 Some((a, "dfs.core.windows.net")) | Some((a, "blob.core.windows.net")) => {
                     self.account_name = Some(validate(a)?);
                     let container = parsed.path_segments().unwrap().next().expect(
@@ -818,6 +878,12 @@ impl MicrosoftAzureBuilder {
     /// Set the credential provider overriding any other options
     pub fn with_credentials(mut self, credentials: AzureCredentialProvider) -> Self {
         self.credentials = Some(credentials);
+        self
+    }
+
+    /// The [`CryptoProvider`] to use
+    pub fn with_crypto_provider(mut self, provider: Arc<dyn CryptoProvider>) -> Self {
+        self.crypto = Some(provider);
         self
     }
 
@@ -947,6 +1013,25 @@ impl MicrosoftAzureBuilder {
     /// If set to `true` will ignore any tags provided to put_opts
     pub fn with_disable_tagging(mut self, ignore: bool) -> Self {
         self.disable_tagging = ignore.into();
+        self
+    }
+
+    /// Set the customer-provided encryption key (CPK) used to encrypt blob content.
+    ///
+    /// `key` must be a base64-encoded 256-bit AES key (the decoded value must be
+    /// exactly 32 bytes). The same key must be supplied on every subsequent read,
+    /// write, or copy of any blob created with it; if the key is lost or omitted
+    /// the data is unrecoverable. CPK material is sent to Azure on every request,
+    /// so the configured endpoint must use HTTPS.
+    ///
+    /// Only a subset of Blob storage operations support CPK
+    /// (see the [Azure documentation][cpk-ops]). When CPK is enabled, `copy`
+    /// switches from the asynchronous `Copy Blob` API to `Put Blob From URL`,
+    /// which is synchronous and limits the source blob to 5,000 MiB.
+    ///
+    /// [cpk-ops]: https://learn.microsoft.com/en-us/azure/storage/blobs/encryption-customer-provided-keys#blob-storage-operations-supporting-customer-provided-keys
+    pub fn with_encryption_key(mut self, key: impl Into<String>) -> Self {
+        self.encryption_key = Some(key.into());
         self
     }
 
@@ -1217,6 +1302,16 @@ impl MicrosoftAzureBuilder {
             (false, url, credential, account_name)
         };
 
+        let encryption_headers =
+            AzureEncryptionHeaders::try_new(self.crypto.as_deref(), self.encryption_key).map_err(
+                |source| Error::InvalidEncryptionKey {
+                    source: match source {
+                        crate::Error::Generic { source, .. } => source,
+                        other => Box::new(other),
+                    },
+                },
+            )?;
+
         let config = AzureConfig {
             account,
             is_emulator,
@@ -1227,6 +1322,8 @@ impl MicrosoftAzureBuilder {
             client_options: self.client_options,
             service: storage_url,
             credentials: auth,
+            crypto: self.crypto,
+            encryption_headers,
         };
 
         let http_client = http.connect(&config.client_options)?;
@@ -1252,7 +1349,8 @@ fn url_from_env(env_name: &str, default_url: &str) -> Result<Url> {
     Ok(url)
 }
 
-fn split_sas(sas: &str) -> Result<Vec<(String, String)>, Error> {
+/// Parse a SAS token string into the query pairs expected by [`AzureCredential::SASToken`].
+pub fn split_sas(sas: &str) -> Result<Vec<(String, String)>> {
     let sas = percent_decode_str(sas)
         .decode_utf8()
         .map_err(|source| Error::DecodeSasKey { source })?;
@@ -1274,6 +1372,8 @@ fn split_sas(sas: &str) -> Result<Vec<(String, String)>, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
+    use base64::prelude::BASE64_STANDARD;
     use std::collections::HashMap;
 
     #[test]
@@ -1383,6 +1483,17 @@ mod tests {
 
         let mut builder = MicrosoftAzureBuilder::new();
         builder
+            .parse_url("https://onelake.dfs.fabric.microsoft.com/c047b3e3-4e89-407a-98d7-cf9949ae92a3/9f1a2b3c-4d5e-6f70-8a9b-c0d1e2f3a456.lakehouse/Files/tables/sales/data.parquet")
+            .unwrap();
+        assert_eq!(builder.account_name, Some("onelake".to_string()));
+        assert_eq!(
+            builder.container_name.as_deref(),
+            Some("c047b3e3-4e89-407a-98d7-cf9949ae92a3")
+        );
+        assert!(builder.use_fabric_endpoint.get().unwrap());
+
+        let mut builder = MicrosoftAzureBuilder::new();
+        builder
             .parse_url("https://account.blob.fabric.microsoft.com/")
             .unwrap();
         assert_eq!(builder.account_name, Some("account".to_string()));
@@ -1410,6 +1521,130 @@ mod tests {
         for case in err_cases {
             builder.parse_url(case).unwrap_err();
         }
+    }
+
+    #[test]
+    fn azure_test_workspace_private_link() {
+        let test_cases: Vec<(&str, &str, Option<&str>)> = vec![
+            (
+                "https://Ab000000000000000000000000000000.zAb.dfs.fabric.microsoft.com/",
+                "ab000000000000000000000000000000.zab",
+                None,
+            ),
+            (
+                "https://ab000000000000000000000000000000.zab.dfs.fabric.microsoft.com/",
+                "ab000000000000000000000000000000.zab",
+                None,
+            ),
+            (
+                "https://c047b3e34e89407a98d7cf9949ae92a3.zc0.blob.fabric.microsoft.com/c047b3e3-4e89-407a-98d7-cf9949ae92a3/9f1a2b3c-4d5e-6f70-8a9b-c0d1e2f3a456/file",
+                "c047b3e34e89407a98d7cf9949ae92a3.zc0",
+                Some("c047b3e3-4e89-407a-98d7-cf9949ae92a3"),
+            ),
+            (
+                "https://c047b3e34e89407a98d7cf9949ae92a3.zc0.dfs.fabric.microsoft.com/c047b3e3-4e89-407a-98d7-cf9949ae92a3/9f1a2b3c-4d5e-6f70-8a9b-c0d1e2f3a456/file",
+                "c047b3e34e89407a98d7cf9949ae92a3.zc0",
+                Some("c047b3e3-4e89-407a-98d7-cf9949ae92a3"),
+            ),
+            (
+                "https://c047b3e34e89407a98d7cf9949ae92a3.zc0.onelake.fabric.microsoft.com/c047b3e3-4e89-407a-98d7-cf9949ae92a3/9f1a2b3c-4d5e-6f70-8a9b-c0d1e2f3a456/file",
+                "c047b3e34e89407a98d7cf9949ae92a3.zc0",
+                Some("c047b3e3-4e89-407a-98d7-cf9949ae92a3"),
+            ),
+            (
+                "https://c047b3e34e89407a98d7cf9949ae92a3.zc0.w.api.fabric.microsoft.com/c047b3e3-4e89-407a-98d7-cf9949ae92a3/9f1a2b3c-4d5e-6f70-8a9b-c0d1e2f3a456/file",
+                "c047b3e34e89407a98d7cf9949ae92a3.zc0",
+                Some("c047b3e3-4e89-407a-98d7-cf9949ae92a3"),
+            ),
+            (
+                "https://c047b3e34e89407a98d7cf9949ae92a3.zc0.c.api.fabric.microsoft.com/c047b3e3-4e89-407a-98d7-cf9949ae92a3/9f1a2b3c-4d5e-6f70-8a9b-c0d1e2f3a456/file",
+                "c047b3e34e89407a98d7cf9949ae92a3.zc0",
+                Some("c047b3e3-4e89-407a-98d7-cf9949ae92a3"),
+            ),
+            (
+                "abfss://c047b3e34e89407a98d7cf9949ae92a3@c047b3e34e89407a98d7cf9949ae92a3.zc0.dfs.fabric.microsoft.com/9f1a2b3c-4d5e-6f70-8a9b-c0d1e2f3a456/file",
+                "c047b3e34e89407a98d7cf9949ae92a3.zc0",
+                Some("c047b3e34e89407a98d7cf9949ae92a3"),
+            ),
+            (
+                "abfss://c047b3e34e89407a98d7cf9949ae92a3@c047b3e34e89407a98d7cf9949ae92a3.zc0.blob.fabric.microsoft.com/9f1a2b3c-4d5e-6f70-8a9b-c0d1e2f3a456/file",
+                "c047b3e34e89407a98d7cf9949ae92a3.zc0",
+                Some("c047b3e34e89407a98d7cf9949ae92a3"),
+            ),
+        ];
+
+        for (url, expected_account, expected_container) in &test_cases {
+            let mut builder = MicrosoftAzureBuilder::new();
+            builder.parse_url(url).unwrap();
+
+            assert_eq!(
+                builder.account_name.as_deref(),
+                Some(*expected_account),
+                "account mismatch for URL: {url}"
+            );
+            assert_eq!(
+                builder.container_name.as_deref(),
+                *expected_container,
+                "container mismatch for URL: {url}"
+            );
+            assert!(
+                builder.use_fabric_endpoint.get().unwrap(),
+                "use_fabric_endpoint not set for URL: {url}"
+            );
+        }
+    }
+
+    #[test]
+    fn azure_encryption_key_roundtrip() {
+        let key = BASE64_STANDARD.encode([7_u8; 32]);
+        let builder = MicrosoftAzureBuilder::new().with_encryption_key(&key);
+
+        assert_eq!(
+            builder
+                .get_config_value(&AzureConfigKey::EncryptionKey)
+                .as_deref(),
+            Some(key.as_str())
+        );
+    }
+
+    #[test]
+    fn azure_encryption_key_rejects_malformed_base64() {
+        let err = MicrosoftAzureBuilder::new()
+            .with_account("account")
+            .with_container_name("container")
+            .with_access_key(EMULATOR_ACCOUNT_KEY)
+            .with_encryption_key("not-base64!!!")
+            .build()
+            .unwrap_err();
+
+        let msg = err.to_string();
+        assert!(msg.contains("Invalid encryption key") || msg.contains("Invalid byte"));
+    }
+
+    #[test]
+    fn azure_encryption_key_rejects_short_decoded_key() {
+        let err = MicrosoftAzureBuilder::new()
+            .with_account("account")
+            .with_container_name("container")
+            .with_access_key(EMULATOR_ACCOUNT_KEY)
+            .with_encryption_key(BASE64_STANDARD.encode([7_u8; 31]))
+            .build()
+            .unwrap_err();
+
+        assert!(err.to_string().contains("must decode to 32 bytes, got 31"));
+    }
+
+    #[test]
+    fn azure_encryption_key_rejects_long_decoded_key() {
+        let err = MicrosoftAzureBuilder::new()
+            .with_account("account")
+            .with_container_name("container")
+            .with_access_key(EMULATOR_ACCOUNT_KEY)
+            .with_encryption_key(BASE64_STANDARD.encode([7_u8; 33]))
+            .build()
+            .unwrap_err();
+
+        assert!(err.to_string().contains("must decode to 32 bytes, got 33"));
     }
 
     #[test]
@@ -1517,6 +1752,27 @@ mod tests {
         ];
         let pairs = split_sas(raw_sas).unwrap();
         assert_eq!(expected, pairs);
+    }
+
+    #[test]
+    fn azure_test_split_sas_trims_leading_question_mark_and_skips_empties() {
+        let pairs = split_sas("?&sv=2021-10-04& &sp=r").unwrap();
+        assert_eq!(
+            pairs,
+            vec![
+                ("sv".to_string(), "2021-10-04".to_string()),
+                ("sp".to_string(), "r".to_string()),
+            ],
+        );
+    }
+
+    #[test]
+    fn azure_test_split_sas_rejects_missing_equals() {
+        let err = split_sas("sv=2021-10-04&bogus").unwrap_err();
+        assert!(
+            err.to_string().contains("Missing component"),
+            "unexpected error: {err}",
+        );
     }
 
     #[test]

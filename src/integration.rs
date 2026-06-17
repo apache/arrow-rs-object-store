@@ -177,6 +177,7 @@ pub async fn put_get_delete_list(storage: &DynObjectStore) {
 
     let head = storage.head(&location).await.unwrap();
     assert_eq!(head.size, data.len() as u64);
+    assert_eq!(head.location, location);
 
     storage.delete(&location).await.unwrap();
 
@@ -1052,6 +1053,56 @@ pub async fn multipart(storage: &dyn ObjectStore, multipart: &dyn MultipartStore
     assert_eq!(meta.size, 0);
 }
 
+/// Tests that [`MultipartStore::put_part`] may be invoked with non-sequential part indices.
+pub async fn multipart_put_part_out_of_order(
+    storage: &dyn ObjectStore,
+    multipart: &dyn MultipartStore,
+) {
+    let path = Path::from("test_multipart_put_part_out_of_order");
+
+    // S3: each part except the last must be ≥ 5 MiB.
+    const MIN_MULTIPART_PART: usize = 5 * 1024 * 1024;
+    let part0_data = Bytes::from(vec![0xAA_u8; MIN_MULTIPART_PART]);
+    let part1_data = Bytes::from(vec![0xBB_u8; MIN_MULTIPART_PART]);
+    let part2_data = Bytes::from_static(b"tail");
+
+    let upload_id = multipart.create_multipart(&path).await.unwrap();
+
+    let part2 = multipart
+        .put_part(&path, &upload_id, 2, PutPayload::from(part2_data.clone()))
+        .await
+        .unwrap();
+
+    let part0 = multipart
+        .put_part(&path, &upload_id, 0, PutPayload::from(part0_data.clone()))
+        .await
+        .unwrap();
+
+    let part1 = multipart
+        .put_part(&path, &upload_id, 1, PutPayload::from(part1_data.clone()))
+        .await
+        .unwrap();
+
+    let result = multipart
+        .complete_multipart(&path, &upload_id, vec![part0, part1, part2])
+        .await
+        .unwrap();
+    assert!(result.e_tag.is_some(), "Expected e_tag in PutResult");
+
+    let data = storage.get(&path).await.unwrap().bytes().await.unwrap();
+    assert_eq!(
+        data.len(),
+        part0_data.len() + part1_data.len() + part2_data.len()
+    );
+    assert!(data[..MIN_MULTIPART_PART].iter().all(|&b| b == 0xAA));
+    assert!(
+        data[MIN_MULTIPART_PART..2 * MIN_MULTIPART_PART]
+            .iter()
+            .all(|&b| b == 0xBB)
+    );
+    assert_eq!(&data[2 * MIN_MULTIPART_PART..], part2_data.as_ref());
+}
+
 async fn delete_fixtures(storage: &DynObjectStore) {
     let paths = storage.list(None).map_ok(|meta| meta.location).boxed();
     storage
@@ -1385,3 +1436,92 @@ pub async fn list_with_offset_exclusivity(storage: &DynObjectStore) {
     // Clean up
     delete_fixtures(storage).await;
 }
+
+#[cfg(all(
+    feature = "reqwest",
+    not(all(target_arch = "wasm32", target_os = "wasi"))
+))]
+mod marker {
+    use super::*;
+    use crate::ClientOptions;
+    use crate::client::{
+        HttpClient, HttpConnector, HttpError, HttpRequest, HttpResponse, HttpService,
+        ReqwestConnector,
+    };
+    use async_trait::async_trait;
+
+    /// A marker inserted into response extensions by [`MarkerHttpConnector`]
+    #[derive(Clone, Debug, PartialEq)]
+    struct Marker;
+
+    /// [`HttpService`] middleware that tags every response with a [`Marker`]
+    #[derive(Debug)]
+    struct MarkerService(HttpClient);
+
+    #[async_trait]
+    impl HttpService for MarkerService {
+        async fn call(&self, req: HttpRequest) -> Result<HttpResponse, HttpError> {
+            let mut response = self.0.execute(req).await?;
+            response.extensions_mut().insert(Marker);
+            Ok(response)
+        }
+    }
+
+    /// An [`HttpConnector`] that tags the extensions of every HTTP response with a
+    /// marker, allowing [`response_extensions`] to verify their propagation
+    #[derive(Debug, Default)]
+    pub struct MarkerHttpConnector(ReqwestConnector);
+
+    impl HttpConnector for MarkerHttpConnector {
+        fn connect(&self, options: &ClientOptions) -> crate::Result<HttpClient> {
+            let client = self.0.connect(options)?;
+            Ok(HttpClient::new(MarkerService(client)))
+        }
+    }
+
+    /// Tests that the extensions of HTTP responses are propagated to returned results
+    ///
+    /// The provided store must have been built with [`MarkerHttpConnector`]
+    pub async fn response_extensions(storage: &DynObjectStore, test_multipart: bool) {
+        delete_fixtures(storage).await;
+
+        let location = Path::from("test_response_extensions/file.txt");
+        let data = Bytes::from("arbitrary data");
+
+        let put = storage.put(&location, data.clone().into()).await.unwrap();
+        assert!(
+            put.extensions.get::<Marker>().is_some(),
+            "PutResult should contain the response extensions"
+        );
+
+        let get = storage.get(&location).await.unwrap();
+        assert!(
+            get.extensions.get::<Marker>().is_some(),
+            "GetResult should contain the response extensions"
+        );
+
+        let list = storage.list_with_delimiter(None).await.unwrap();
+        assert!(
+            list.extensions.get::<Marker>().is_some(),
+            "ListResult should contain the response extensions"
+        );
+
+        if test_multipart {
+            let mut upload = storage.put_multipart(&location).await.unwrap();
+            upload.put_part(data.into()).await.unwrap();
+            let complete = upload.complete().await.unwrap();
+            assert!(
+                complete.extensions.get::<Marker>().is_some(),
+                "PutResult of a completed multipart upload should contain the response extensions"
+            );
+        }
+
+        delete_fixtures(storage).await;
+    }
+}
+
+#[cfg(all(
+    feature = "reqwest",
+    not(all(target_arch = "wasm32", target_os = "wasi"))
+))]
+pub use marker::{MarkerHttpConnector, response_extensions};

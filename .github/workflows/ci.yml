@@ -39,6 +39,55 @@ jobs:
       - uses: actions/checkout@v6
       - name: Setup Clippy
         run: rustup component add clippy
+      - name: Verify base features do not enable TLS/signing crypto crates
+        # `--prefix none -f '{p}'` prints one `name vX.Y.Z` per line, so the
+        # crate name can be anchored with `^`. Avoid `\b`, which is not
+        # portable (e.g. BSD grep) and would also substring-match crates like
+        # `iri-string`.
+        run: |
+          found=$(cargo tree --no-default-features --features aws-base,azure-base,gcp-base,http-base --edges normal --prefix none -f '{p}' \
+            | grep -E '^(aws-lc-rs|aws-lc-sys|native-tls|openssl|ring|rustls) v' | sort -u || true)
+          if [ -n "$found" ]; then
+            echo "❌ disallowed crate(s) found:"
+            echo "$found"
+            exit 1
+          fi
+          echo "✅ no TLS/signing crypto crates"
+      - name: Verify base features do not enable reqwest
+        run: |
+          found=$(cargo tree --no-default-features --features aws-base,azure-base,gcp-base,http-base --edges normal --prefix none -f '{p}' \
+            | grep -E '^reqwest v' | sort -u || true)
+          if [ -n "$found" ]; then
+            echo "❌ reqwest must not be enabled by *-base features:"
+            echo "$found"
+            exit 1
+          fi
+          echo "✅ *-base features do not enable reqwest"
+      - name: Check ring build does not pull aws-lc-rs
+        # A `ring` build (with a non-aws-lc-rs reqwest TLS backend) must be free
+        # of aws-lc-rs entirely, so users can opt out of it on every target.
+        run: |
+          found=$(cargo tree --no-default-features --features aws-base,azure-base,gcp-base,http-base,reqwest,reqwest/native-tls,ring --edges normal --prefix none -f '{p}' \
+            | grep -E '^(aws-lc-rs|aws-lc-sys) v' | sort -u || true)
+          if [ -n "$found" ]; then
+            echo "❌ aws-lc-rs pulled into a ring-only build:"
+            echo "$found"
+            exit 1
+          fi
+          echo "✅ ring build is free of aws-lc-rs"
+      - name: Check batteries-included features do not pull ring
+        # The batteries-included features use reqwest/rustls, which uses aws-lc-rs
+        # for TLS by default. Keep object_store's default bundled crypto provider
+        # aligned with that choice by ensuring these features don't pull ring.
+        run: |
+          found=$(cargo tree --no-default-features --features aws,azure,gcp,http --edges normal --prefix none -f '{p}' \
+            | grep -E '^ring v' | sort -u || true)
+          if [ -n "$found" ]; then
+            echo "❌ batteries-included features pulled ring:"
+            echo "$found"
+            exit 1
+          fi
+          echo "✅ batteries-included features are free of ring"
       # Run different tests for the library on its own as well as
       # all targets to ensure that it still works in the absence of
       # features that might be enabled by dev-dependencies of other
@@ -57,6 +106,31 @@ jobs:
         run: cargo clippy --features azure -- -D warnings
       - name: Run clippy with http feature
         run: cargo clippy --features http -- -D warnings
+      - name: Run clippy with aws-base feature
+        run: cargo clippy --no-default-features --features aws-base -- -D warnings
+      - name: Run clippy with azure-base feature
+        run: cargo clippy --no-default-features --features azure-base -- -D warnings
+      - name: Run clippy with gcp-base feature
+        run: cargo clippy --no-default-features --features gcp-base -- -D warnings
+      - name: Run clippy with http-base feature
+        run: cargo clippy --no-default-features --features http-base -- -D warnings
+      # Testing matrix of HTTP and crypto providers
+      #
+      # Improvements tracked in  https://githubcom/apache/arrow-rs-object-store/issues/759
+      #
+      # Notes:
+      # Direct `reqwest` needs a TLS backend. Use `rustls-no-provider` so TLS
+      # does not add AWS-LC to ring/custom CryptoProvider checks.
+      - name: Run clippy with base features, reqwest and ring CryptoProvider
+        run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base,reqwest,reqwest/rustls-no-provider,ring -- -D warnings
+      - name: Run clippy with base features, reqwest and no bundled CryptoProvider
+        run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base,reqwest,reqwest/rustls-no-provider -- -D warnings
+      - name: Run clippy with base features, custom HTTP and aws-lc-rs CryptoProvider
+        run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base,aws-lc-rs,aws-lc-rs/aws-lc-sys -- -D warnings
+      - name: Run clippy with base features, custom HTTP and ring CryptoProvider
+        run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base,ring -- -D warnings
+      - name: Run clippy with base features, custom HTTP and no bundled CryptoProvider
+        run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base -- -D warnings
       - name: Run clippy with integration feature
         run: cargo clippy --no-default-features --features integration -- -D warnings
       - name: Run clippy with all features
@@ -139,7 +213,7 @@ jobs:
       - name: Configure Azurite (Azure emulation)
         # the magical connection string is from
         # https://docs.microsoft.com/en-us/azure/storage/common/storage-use-azurite?tabs=visual-studio#http-connection-strings
-        # We skip the API version check to prevent breaks related to differences between Azurite, Azure and the azure-cli, 
+        # We skip the API version check to prevent breaks related to differences between Azurite, Azure and the azure-cli,
         # see https://github.com/Azure/Azurite/issues/2623
         run: |
           echo "AZURITE_CONTAINER=$(docker run -d -p 10000:10000 -p 10001:10001 -p 10002:10002 mcr.microsoft.com/azure-storage/azurite azurite -l /data --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck)" >> $GITHUB_ENV
@@ -159,6 +233,17 @@ jobs:
         env:
           AWS_CONDITIONAL_PUT: etag
           AWS_COPY_IF_NOT_EXISTS: multipart
+
+      # Exercise the `ring` crypto provider at runtime (the other jobs only
+      # compile it)
+      #
+      # Notes:
+      # * Use `reqwest/native-tls` to avoid aws-lc-rs anywhere in the tree
+      #
+      # * use `env -u TEST_INTEGRATION` to run only the (crypto) unit tests
+      #   as the integration tests already ran above.
+      - name: Run object_store tests with ring crypto provider
+        run: env -u TEST_INTEGRATION cargo test --lib --tests --no-default-features --features fs,aws-base,azure-base,gcp-base,http-base,reqwest,reqwest/native-tls,ring
 
       - name: GCS Output
         if: ${{ !cancelled() }}
@@ -192,17 +277,27 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
       - name: Build wasm32-unknown-unknown
         run: cargo build --target wasm32-unknown-unknown
+      # Note: we don't `cargo build` the cloud features for wasm32-unknown-unknown.
+      # They pull in `rand` -> `getrandom`, which on this target only compiles with
+      # its `wasm_js` feature enabled. We can't enable that via `--features` because
+      # `getrandom` is a transitive dependency (pulled in by `rand`), not direct
       - name: Install wasm32-wasip1
         run: rustup target add wasm32-wasip1
+      - name: Use reqwest 0.13.2 for wasm32-wasip1
+        # TODO: reqwest 0.13.3+ doesn't compile against wasm32-wasip1
+        run: cargo update -p reqwest --precise 0.13.2
       - name: Build wasm32-wasip1
-        run: cargo build --all-features --target wasm32-wasip1
+        # aws-lc-rs does not build for wasm32-wasip1, so use the ring crypto provider here
+        run: cargo build --no-default-features --features aws-base,gcp-base,azure-base,http-base,reqwest,ring --target wasm32-wasip1
+      - name: Build wasm32-wasip1 without reqwest
+        run: cargo build --no-default-features --features aws-base --target wasm32-wasip1
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - uses: actions/setup-node@v6
         with:
           node-version: 20
       - name: Run wasm32-unknown-unknown tests (via Node)
-        run: wasm-pack test --node --features http --no-default-features
+        run: wasm-pack test --node --features http-base,reqwest,ring --no-default-features
 
   windows:
     name: cargo test LocalFileSystem (win64)

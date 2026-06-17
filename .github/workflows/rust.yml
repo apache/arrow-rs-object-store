@@ -51,7 +51,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Install cargo-msrv
-        run: cargo install cargo-msrv
+        run: cargo install cargo-msrv --locked
       - name: Check
         run: |
           # run `cargo msrv verify` to see problems

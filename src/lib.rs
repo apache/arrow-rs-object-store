@@ -80,21 +80,23 @@
     doc = "* Local filesystem: [`LocalFileSystem`](local::LocalFileSystem)"
 )]
 #![cfg_attr(
-    feature = "gcp",
+    feature = "gcp-base",
     doc = "* [`gcp`]: [Google Cloud Storage](https://cloud.google.com/storage/) support. See [`GoogleCloudStorageBuilder`](gcp::GoogleCloudStorageBuilder)"
 )]
 #![cfg_attr(
-    feature = "aws",
+    feature = "aws-base",
     doc = "* [`aws`]: [Amazon S3](https://aws.amazon.com/s3/). See [`AmazonS3Builder`](aws::AmazonS3Builder)"
 )]
 #![cfg_attr(
-    feature = "azure",
+    feature = "azure-base",
     doc = "* [`azure`]: [Azure Blob Storage](https://azure.microsoft.com/en-gb/services/storage/blobs/). See [`MicrosoftAzureBuilder`](azure::MicrosoftAzureBuilder)"
 )]
 #![cfg_attr(
-    feature = "http",
+    feature = "http-base",
     doc = "* [`http`]: [HTTP/WebDAV Storage](https://datatracker.ietf.org/doc/html/rfc2518). See [`HttpBuilder`](http::HttpBuilder)"
 )]
+//!
+//! See [Feature Flags](#feature-flags) for the full set of flags.
 //!
 //! # Why not a Filesystem Interface?
 //!
@@ -517,15 +519,133 @@
 //! [Apache Iceberg]: https://iceberg.apache.org/
 //! [Delta Lake]: https://delta.io/
 //!
+//! # Feature Flags
+//!
+//! The feature set is layered so that you can pick an object store
+//! implementation, its HTTP transport, and its cryptography provider
+//! independently:
+//!
+//! * `cloud-base` shared cloud implementation (XML/JSON parsing,
+//!   credentials, retry, etc.) and intentionally does *not* depend on
+//!   `reqwest` or a cryptography provider.
+//! * `reqwest` enables the built-in [`reqwest`]-based [`HttpConnector`].
+//! * `aws-lc-rs` and `ring` each provide a bundled [`client::CryptoProvider`].
+//! * `<provider>-base` (`aws-base`, `azure-base`, `gcp-base`, `http-base`)
+//!   adds the implementation specific logic on top of `cloud-base` without pulling in
+//!   `reqwest` or a cryptography provider.
+//! * `<provider>` (`aws`, `azure`, `gcp`, `http`) is the batteries-included
+//!   feature for `<provider>-base` + `reqwest` (with `rustls`) + the default
+//!   `aws-lc-rs` cryptography provider, and is the typical choice.
+//!
+//! ## Implementation specific features
+//!
+//! | Feature | Enables | Notes |
+//! | --- | --- | --- |
+//! | `aws` | `aws-base` + `reqwest` + `aws-lc-rs` | Amazon S3 with the built-in HTTP transport. |
+//! | `azure` | `azure-base` + `reqwest` + `aws-lc-rs` | Azure Blob Storage with the built-in HTTP transport. |
+//! | `gcp` | `gcp-base` + `reqwest` + `aws-lc-rs` | Google Cloud Storage with the built-in HTTP transport. |
+//! | `http` | `http-base` + `reqwest` + `aws-lc-rs` | HTTP/WebDAV with the built-in HTTP transport. |
+//! | `aws-base` |  | S3 without `reqwest` or crypto; supply your own [`HttpConnector`] and [`client::CryptoProvider`]. |
+//! | `azure-base` |  | Azure without `reqwest` or crypto; supply your own [`HttpConnector`] and [`client::CryptoProvider`]. |
+//! | `gcp-base` |  | GCS without `reqwest` or crypto; supply your own [`HttpConnector`] and [`client::CryptoProvider`]. |
+//! | `http-base` |  | HTTP/WebDAV without `reqwest`; supply your own [`HttpConnector`]. |
+//!
+//! ## Transport and crypto features
+//!
+//! | Feature | Description |
+//! | --- | --- |
+//! | `reqwest` | Enables the [`reqwest`]-based [`HttpConnector`]. Enabled automatically by `aws`, `azure`, `gcp`, and `http`. |
+//! | `aws-lc-rs` | Bundled [`aws-lc-rs`]-based [`client::CryptoProvider`]. The default for the batteries-included provider features. |
+//! | `ring` | Bundled [`ring`]-based [`client::CryptoProvider`], e.g. for WASM targets. |
+//! | `cloud-base` | Shared cloud-provider implementation. Enabled automatically by `*-base` features; usually not enabled directly. |
+//!
+//! ## Other features
+//!
+//! | Feature | Description |
+//! | --- | --- |
+//! | `fs` *(default)* | Local filesystem store via [`LocalFileSystem`](local::LocalFileSystem). |
+//! | `tokio` | Enables Tokio-based utilities such as [`BufReader`](buffered::BufReader) and [`BufWriter`](buffered::BufWriter). Pulled in automatically by `fs` and the `*-base` features. |
+//! | `integration` | Exposes the [`integration`] module, a reusable test suite for verifying custom [`ObjectStore`] implementations. Not API-stable. |
+//!
+//! ## Selecting a `reqwest` TLS backend
+//!
+//! `reqwest` needs a TLS backend to compile, so whenever you enable the `reqwest` feature directly
+//! you must also enable one of `reqwest`'s TLS features:
+//!
+//! | reqwest feature | TLS stack | Notes |
+//! | --- | --- | --- |
+//! | `reqwest/rustls` | [rustls] with [`aws-lc-rs`] | enables `aws-lc-rs`. This is what `aws`/`azure`/`gcp`/`http` enable. |
+//! | `reqwest/native-tls` | the platform's native TLS (OpenSSL / SChannel / Secure Transport) | enables neither `rustls` nor `aws-lc-rs`. |
+//! | `reqwest/rustls-no-provider` | [rustls] with no bundled provider | enables neither provider; you must install one at runtime, e.g. `rustls::crypto::ring::default_provider().install_default()`. |
+//!
+//! ## Feature examples
+//!
+//! S3 implementation only; user provides the HTTP connector and crypto provider:
+//! ```toml
+//! object_store = { default-features = false, features = ["aws-base"] }
+//! ```
+//!
+//! S3 implementation + `reqwest` + `aws-lc-rs` signing (equivalent to the `aws` feature):
+//! ```toml
+//! object_store = { default-features = false, features = ["aws-base", "reqwest", "reqwest/rustls", "aws-lc-rs"] }
+//! ```
+//!
+//! S3 implementation + `reqwest` with native TLS + `ring` signing (no `aws-lc-rs` in the dependency tree):
+//! ```toml
+//! object_store = { default-features = false, features = ["aws-base", "reqwest", "reqwest/native-tls", "ring"] }
+//! ```
+//!
+//! [rustls]: https://crates.io/crates/rustls/
+//!
+//! # Cryptography
+//!
+//! Request signing (e.g. AWS SigV4 or GCP service-account signing) requires a
+//! [`client::CryptoProvider`]. The `aws`, `gcp`, and `azure` features
+//! use [`aws-lc-rs`], matching `reqwest`'s default so that applications do not end up with
+//! two crypto stacks.
+//!
+//! If you wish to use [`ring`] (e.g. to support WASM targets), use the
+//! `*-base` feature flags, e.g. `aws-base`, and then enable the `ring` feature.
+//!
+//! If both `ring` and `aws-lc-rs` are enabled, `aws-lc-rs` is used by default.
+//!
+//! You can also implement a custom [`client::CryptoProvider`] to use your own cryptographic library.
+//!
+//! This signing provider is independent of the TLS crypto provider used by the
+//! built-in `reqwest` transport — see
+//! [Selecting a `reqwest` TLS backend](#selecting-a-reqwest-tls-backend). The
+//! only combination that needs the provider registered manually (e.g.
+//! `rustls::crypto::ring::default_provider().install_default()` in your `main`)
+//! is `reqwest/rustls-no-provider`; `reqwest/rustls` and `reqwest/native-tls`
+//! configure their TLS stack automatically.
+//!
+//! [`aws-lc-rs`]: https://crates.io/crates/aws-lc-rs/
+//! [`ring`]: https://crates.io/crates/ring/
+//!
 //! # TLS Certificates
 //!
-//! Stores that use HTTPS/TLS (this is true for most cloud stores) can choose the source of their [CA]
-//! certificates. By default the system-bundled certificates are used (see
-//! [`rustls-native-certs`]). The `tls-webpki-roots` feature switch can be used to also bundle Mozilla's
-//! root certificates with the library/application (see [`webpki-roots`]).
+//! Stores that use HTTPS/TLS (this is true for most cloud stores) can choose how certificates are validated.
+//!
+//! By default [`rustls-platform-verifier`] is used to verify certificates using the system's certificate
+//! facilities. Alternatively, this functionality can be disabled using
+//! [`ClientOptions::with_no_system_certificates`] and certificates manually registered using
+//! [`ClientOptions::with_root_certificate`].
+//!
+//! These could be a custom CA chain, or alternatively an alternative trust store, e.g. [`webpki-roots`].
+//!
+//! ```ignore-wasm32
+//! # #[cfg(feature = "aws")] {
+//! use object_store::{ClientOptions, Certificate};
+//!
+//! let mut options = ClientOptions::default().with_no_system_certificates(true);
+//! for root_cert in webpki_root_certs::TLS_SERVER_ROOT_CERTS {
+//!     options = options.with_root_certificate(Certificate::from_der(root_cert.as_ref()).unwrap());
+//! }
+//! # }
+//! ```
 //!
 //! [CA]: https://en.wikipedia.org/wiki/Certificate_authority
-//! [`rustls-native-certs`]: https://crates.io/crates/rustls-native-certs/
+//! [`rustls-platform-verifier`]: https://crates.io/crates/rustls-platform-verifier/
 //! [`webpki-roots`]: https://crates.io/crates/webpki-roots
 //!
 //! # Customizing HTTP Clients
@@ -533,22 +653,54 @@
 //! Many [`ObjectStore`] implementations permit customization of the HTTP client via
 //! the [`HttpConnector`] trait and utilities in the [`client`] module.
 //! Examples include injecting custom HTTP headers or using an alternate
-//! tokio Runtime I/O requests.
+//! tokio Runtime for I/O requests. To replace `reqwest` entirely (rather than
+//! tweak the bundled transport) see [Disabling `reqwest`](#disabling-reqwest).
 //!
 //! [`HttpConnector`]: client::HttpConnector
+//!
+//! # Disabling `reqwest`
+//!
+//! The `aws`, `azure`, `gcp`, and `http` features each bundle a
+//! [`reqwest`]-based HTTP transport, which is the right choice for most
+//! applications. If you would rather supply your own HTTP client — for example
+//! to share an existing client, to target a platform where `reqwest` does not
+//! compile (such as `wasm32-wasip1`), or to keep `reqwest` out of your
+//! dependency tree — use the matching `*-base` feature and provide an
+//! [`HttpConnector`](client::HttpConnector) at builder time.
+//!
+//! Remember to disable the default features so that `fs` (and its transitive
+//! dependencies) is not pulled in:
+//!
+//! ```toml
+//! [dependencies]
+//! object_store = { version = "0.13", default-features = false, features = ["aws-base"] }
+//! ```
+//!
+//! ```ignore
+//! use object_store::aws::AmazonS3Builder;
+//!
+//! let store = AmazonS3Builder::from_env()
+//!     // `my_connector` is your own `impl HttpConnector`
+//!     .with_http_connector(my_connector)
+//!     .build()?;
+//! ```
+//!
+//! See [Feature Flags](#feature-flags) above for the full set of flags.
+//!
+//! [`reqwest`]: https://crates.io/crates/reqwest
 
-#[cfg(feature = "aws")]
+#[cfg(feature = "aws-base")]
 pub mod aws;
-#[cfg(feature = "azure")]
+#[cfg(feature = "azure-base")]
 pub mod azure;
 #[cfg(feature = "tokio")]
 pub mod buffered;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod chunked;
 pub mod delimited;
-#[cfg(feature = "gcp")]
+#[cfg(feature = "gcp-base")]
 pub mod gcp;
-#[cfg(feature = "http")]
+#[cfg(feature = "http-base")]
 pub mod http;
 #[cfg(feature = "tokio")]
 pub mod limit;
@@ -558,24 +710,28 @@ pub mod memory;
 pub mod path;
 pub mod prefix;
 pub mod registry;
-#[cfg(feature = "cloud")]
+#[cfg(feature = "cloud-base")]
 pub mod signer;
 #[cfg(feature = "tokio")]
 pub mod throttle;
 
-#[cfg(feature = "cloud")]
+#[cfg(feature = "cloud-base")]
 pub mod client;
 
-#[cfg(feature = "cloud")]
+#[cfg(feature = "cloud-base")]
 pub use client::{
     ClientConfigKey, ClientOptions, CredentialProvider, StaticCredentialProvider,
     backoff::BackoffConfig, retry::RetryConfig,
 };
 
-#[cfg(all(feature = "cloud", not(target_arch = "wasm32")))]
+#[cfg(all(
+    feature = "cloud-base",
+    feature = "reqwest",
+    not(target_arch = "wasm32")
+))]
 pub use client::Certificate;
 
-#[cfg(feature = "cloud")]
+#[cfg(feature = "cloud-base")]
 mod config;
 
 mod tags;
@@ -1413,6 +1569,14 @@ pub struct ListResult {
     pub common_prefixes: Vec<Path>,
     /// Object metadata for the listing
     pub objects: Vec<ObjectMeta>,
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to return context-specific information (like cache status) from trait methods.
+    ///
+    /// HTTP-backed stores in this crate populate this with the extensions of the HTTP
+    /// response, allowing custom HTTP middleware to propagate information to callers.
+    /// Where a result is assembled from multiple paginated requests, the extensions of
+    /// each response are merged, with those of later responses taking precedence.
+    pub extensions: Extensions,
 }
 
 /// The metadata that describes an object.
@@ -1627,6 +1791,12 @@ pub struct GetResult {
     pub range: Range<u64>,
     /// Additional object attributes
     pub attributes: Attributes,
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to return context-specific information (like cache status) from trait methods.
+    ///
+    /// HTTP-backed stores in this crate populate this with the extensions of the HTTP
+    /// response, allowing custom HTTP middleware to propagate information to callers.
+    pub extensions: Extensions,
 }
 
 /// The kind of a [`GetResult`]
@@ -1865,7 +2035,7 @@ impl From<Attributes> for PutMultipartOptions {
 }
 
 /// Result for a put request
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct PutResult {
     /// The unique identifier for the newly created object
     ///
@@ -1873,7 +2043,33 @@ pub struct PutResult {
     pub e_tag: Option<String>,
     /// A version indicator for the newly created object
     pub version: Option<String>,
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to return context-specific information (like cache status) from trait methods.
+    ///
+    /// HTTP-backed stores in this crate populate this with the extensions of the HTTP
+    /// response, allowing custom HTTP middleware to propagate information to callers.
+    ///
+    /// These extensions are excluded from [`PartialEq`] and [`Eq`].
+    pub extensions: Extensions,
 }
+
+impl PartialEq<Self> for PutResult {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            e_tag,
+            version,
+            extensions: _,
+        } = self;
+        let Self {
+            e_tag: other_e_tag,
+            version: other_version,
+            extensions: _,
+        } = other;
+        (e_tag == other_e_tag) && (version == other_version)
+    }
+}
+
+impl Eq for PutResult {}
 
 /// Configure preconditions for the copy operation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -2173,12 +2369,12 @@ mod tests {
         store.list(Some(&path))
     }
 
-    #[cfg(any(feature = "azure", feature = "aws"))]
+    #[cfg(any(feature = "azure-base", feature = "aws-base"))]
     pub(crate) async fn signing<T>(integration: &T)
     where
         T: ObjectStore + signer::Signer,
     {
-        use reqwest::Method;
+        use ::http::Method;
         use std::time::Duration;
 
         let data = Bytes::from("hello world");
@@ -2196,7 +2392,7 @@ mod tests {
         assert_eq!(data, loaded);
     }
 
-    #[cfg(any(feature = "aws", feature = "azure"))]
+    #[cfg(any(feature = "aws-base", feature = "azure-base"))]
     pub(crate) async fn tagging<F, Fut>(storage: Arc<dyn ObjectStore>, validate: bool, get_tags: F)
     where
         F: Fn(Path) -> Fut + Send + Sync,
@@ -2369,7 +2565,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "http")]
+    #[cfg(feature = "http-base")]
     fn test_reexported_types() {
         // Test HeaderMap
         let mut headers = HeaderMap::new();

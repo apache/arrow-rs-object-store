@@ -139,7 +139,7 @@ impl ObjectStoreScheme {
     }
 }
 
-#[cfg(feature = "cloud")]
+#[cfg(feature = "cloud-base")]
 macro_rules! builder_opts {
     ($builder:ty, $url:expr, $options:expr) => {{
         let builder = $options.into_iter().fold(
@@ -201,29 +201,29 @@ where
         #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
         ObjectStoreScheme::Local => Box::new(LocalFileSystem::new()) as _,
         ObjectStoreScheme::Memory => Box::new(InMemory::new()) as _,
-        #[cfg(feature = "aws")]
+        #[cfg(feature = "aws-base")]
         ObjectStoreScheme::AmazonS3 => {
             builder_opts!(crate::aws::AmazonS3Builder, url, _options)
         }
-        #[cfg(feature = "gcp")]
+        #[cfg(feature = "gcp-base")]
         ObjectStoreScheme::GoogleCloudStorage => {
             builder_opts!(crate::gcp::GoogleCloudStorageBuilder, url, _options)
         }
-        #[cfg(feature = "azure")]
+        #[cfg(feature = "azure-base")]
         ObjectStoreScheme::MicrosoftAzure => {
             builder_opts!(crate::azure::MicrosoftAzureBuilder, url, _options)
         }
-        #[cfg(feature = "http")]
+        #[cfg(feature = "http-base")]
         ObjectStoreScheme::Http => {
             let url = &url[..url::Position::BeforePath];
             builder_opts!(crate::http::HttpBuilder, url, _options)
         }
         #[cfg(not(all(
             feature = "fs",
-            feature = "aws",
-            feature = "azure",
-            feature = "gcp",
-            feature = "http",
+            feature = "aws-base",
+            feature = "azure-base",
+            feature = "gcp-base",
+            feature = "http-base",
             not(target_arch = "wasm32")
         )))]
         s => {
@@ -240,6 +240,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use url::Url;
 
     #[test]
     fn test_parse() {
@@ -422,8 +423,29 @@ mod tests {
         assert_eq!(path.as_ref(), "my file with spaces");
     }
 
+    #[test]
+    #[cfg(feature = "gcp")]
+    fn test_url_gcs_bearer_token_opts() {
+        let url = Url::parse("gs://bucket/path").unwrap();
+
+        for alias in ["google_bearer_token", "bearer_token"] {
+            let opts = [
+                (alias, "test-token"),
+                ("google_proxy_url", "https://example.com"),
+            ];
+
+            let (store, path) = parse_url_opts(&url, opts).unwrap();
+            assert_eq!(path.as_ref(), "path");
+            assert_eq!(store.to_string(), "GoogleCloudStorage(bucket)");
+        }
+    }
+
     #[tokio::test]
-    #[cfg(all(feature = "http", not(target_arch = "wasm32")))]
+    #[cfg(all(
+        feature = "reqwest",
+        feature = "http-base",
+        not(target_arch = "wasm32")
+    ))]
     async fn test_url_http() {
         use crate::{ObjectStoreExt, client::mock_server::MockServer};
         use http::{Response, header::USER_AGENT};

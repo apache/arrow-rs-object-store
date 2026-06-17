@@ -218,6 +218,7 @@ impl ObjectStore for InMemory {
         Ok(PutResult {
             e_tag: Some(etag.to_string()),
             version: None,
+            extensions: Default::default(),
         })
     }
 
@@ -266,6 +267,7 @@ impl ObjectStore for InMemory {
             attributes: entry.attributes,
             meta,
             range,
+            extensions: Default::default(),
         })
     }
 
@@ -383,6 +385,7 @@ impl ObjectStore for InMemory {
         Ok(ListResult {
             objects,
             common_prefixes: common_prefixes.into_iter().collect(),
+            extensions: Default::default(),
         })
     }
 
@@ -433,7 +436,7 @@ impl MultipartStore for InMemory {
     ) -> Result<PartId> {
         let mut storage = self.storage.write();
         let upload = storage.upload_mut(id)?;
-        if part_idx <= upload.parts.len() {
+        if part_idx >= upload.parts.len() {
             upload.parts.resize(part_idx + 1, None);
         }
         upload.parts[part_idx] = Some(payload.into());
@@ -463,6 +466,7 @@ impl MultipartStore for InMemory {
         Ok(PutResult {
             e_tag: Some(etag.to_string()),
             version: None,
+            extensions: Default::default(),
         })
     }
 
@@ -529,6 +533,7 @@ impl MultipartUpload for InMemoryUpload {
         Ok(PutResult {
             e_tag: Some(etag.to_string()),
             version: None,
+            extensions: Default::default(),
         })
     }
 
@@ -558,6 +563,7 @@ mod tests {
         put_opts(&integration, true).await;
         multipart(&integration, &integration).await;
         put_get_attributes(&integration).await;
+        multipart_put_part_out_of_order(&integration, &integration).await;
     }
 
     #[tokio::test]

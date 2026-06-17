@@ -446,6 +446,7 @@ impl AsyncWrite for BufWriter {
                     let opts = PutOptions {
                         attributes: self.attributes.take().unwrap_or_default(),
                         tags: self.tags.take().unwrap_or_default(),
+                        extensions: self.extensions.take().unwrap_or_default(),
                         ..Default::default()
                     };
                     let store = Arc::clone(&self.store);

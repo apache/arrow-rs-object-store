@@ -17,6 +17,9 @@
 
 //! An object store implementation for S3
 //!
+//! See the [Feature Flags](crate#feature-flags) section for the difference
+//! between the `aws` and `aws-base` features.
+//!
 //! ## Multipart uploads
 //!
 //! Multipart uploads can be initiated with the [`ObjectStore::put_multipart_opts`] method.
@@ -31,8 +34,8 @@
 use async_trait::async_trait;
 use futures_util::stream::BoxStream;
 use futures_util::{StreamExt, TryStreamExt};
-use reqwest::header::{HeaderName, IF_MATCH, IF_NONE_MATCH};
-use reqwest::{Method, StatusCode};
+use http::header::{HeaderName, IF_MATCH, IF_NONE_MATCH};
+use http::{Method, StatusCode};
 use std::{sync::Arc, time::Duration};
 use url::Url;
 
@@ -58,14 +61,14 @@ mod client;
 mod credential;
 mod precondition;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
 mod resolve;
 
 pub use builder::{AmazonS3Builder, AmazonS3ConfigKey};
 pub use checksum::Checksum;
 pub use precondition::{S3ConditionalPut, S3CopyIfNotExists};
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
 pub use resolve::resolve_bucket_region;
 
 /// This struct is used to maintain the URI path encoding
@@ -118,7 +121,7 @@ impl Signer for AmazonS3 {
     /// ```
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # use object_store::{aws::AmazonS3Builder, path::Path, signer::Signer};
-    /// # use reqwest::Method;
+    /// # use http::Method;
     /// # use std::time::Duration;
     /// #
     /// let region = "us-east-1";
@@ -138,9 +141,11 @@ impl Signer for AmazonS3 {
     /// # }
     /// ```
     async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
+        let crypto = self.client.config.crypto()?;
         let credential = self.credentials().get_credential().await?;
         let authorizer = AwsAuthorizer::new(&credential, "s3", &self.client.config.region)
-            .with_request_payer(self.client.config.request_payer);
+            .with_request_payer(self.client.config.request_payer)
+            .with_crypto(crypto);
 
         let path_url = self.path_url(path);
         let mut url = path_url.parse().map_err(|e| Error::Generic {
@@ -148,7 +153,7 @@ impl Signer for AmazonS3 {
             source: format!("Unable to parse url {path_url}: {e}").into(),
         })?;
 
-        authorizer.sign(method, &mut url, expires_in);
+        authorizer.sign(method, &mut url, expires_in)?;
 
         Ok(url)
     }
@@ -172,7 +177,7 @@ impl ObjectStore for AmazonS3 {
         let request = self
             .client
             .request(Method::PUT, location)
-            .with_payload(payload)
+            .with_payload(payload)?
             .with_attributes(attributes)
             .with_tags(tags)
             .with_extensions(extensions)
@@ -264,6 +269,25 @@ impl ObjectStore for AmazonS3 {
         locations: BoxStream<'static, Result<Path>>,
     ) -> BoxStream<'static, Result<Path>> {
         let client = Arc::clone(&self.client);
+
+        // Some S3-compatible providers do not implement
+        // the bulk `DeleteObjects` API (`POST /?delete`). When bulk delete is
+        // disabled, fall back to parallel single-object `DELETE /key` requests,
+        // which are part of the core S3 API supported by every provider.
+        if client.config.disable_bulk_delete {
+            return locations
+                .map(move |location| {
+                    let client = Arc::clone(&client);
+                    async move {
+                        let location = location?;
+                        client.delete_request(&location).await?;
+                        Ok(location)
+                    }
+                })
+                .buffered(20)
+                .boxed();
+        }
+
         locations
             .try_chunks(1_000)
             .map(move |locations| {
@@ -515,6 +539,7 @@ mod tests {
     use super::*;
     use crate::ClientOptions;
     use crate::ObjectStoreExt;
+    #[cfg(feature = "reqwest")]
     use crate::client::SpawnedReqwestConnector;
     use crate::client::get::GetClient;
     use crate::client::retry::RetryContext;
@@ -531,30 +556,32 @@ mod tests {
         maybe_skip_integration!();
 
         let bucket = "test-bucket-for-checksum";
-        let store = AmazonS3Builder::from_env()
-            .with_bucket_name(bucket)
-            .with_checksum_algorithm(Checksum::SHA256)
-            .build()
-            .unwrap();
+        for checksum in [Checksum::SHA256, Checksum::CRC64NVME] {
+            let store = AmazonS3Builder::from_env()
+                .with_bucket_name(bucket)
+                .with_checksum_algorithm(checksum)
+                .build()
+                .unwrap();
 
-        let str = "test.bin";
-        let path = Path::parse(str).unwrap();
-        let opts = PutMultipartOptions::default();
-        let mut upload = store.put_multipart_opts(&path, opts).await.unwrap();
+            let str = "test.bin";
+            let path = Path::parse(str).unwrap();
+            let opts = PutMultipartOptions::default();
+            let mut upload = store.put_multipart_opts(&path, opts).await.unwrap();
 
-        upload
-            .put_part(PutPayload::from(vec![0u8; 10_000_000]))
-            .await
-            .unwrap();
-        upload
-            .put_part(PutPayload::from(vec![0u8; 5_000_000]))
-            .await
-            .unwrap();
+            upload
+                .put_part(PutPayload::from(vec![0u8; 10_000_000]))
+                .await
+                .unwrap();
+            upload
+                .put_part(PutPayload::from(vec![0u8; 5_000_000]))
+                .await
+                .unwrap();
 
-        let res = upload.complete().await.unwrap();
-        assert!(res.e_tag.is_some(), "Should have valid etag");
+            let res = upload.complete().await.unwrap();
+            assert!(res.e_tag.is_some(), "Should have valid etag");
 
-        store.delete(&path).await.unwrap();
+            store.delete(&path).await.unwrap();
+        }
     }
 
     #[tokio::test]
@@ -562,15 +589,46 @@ mod tests {
         maybe_skip_integration!();
 
         let bucket = "test-bucket-for-copy-if-not-exists";
+        for checksum in [Checksum::SHA256, Checksum::CRC64NVME] {
+            let store = AmazonS3Builder::from_env()
+                .with_bucket_name(bucket)
+                .with_checksum_algorithm(checksum)
+                .with_copy_if_not_exists(S3CopyIfNotExists::Multipart)
+                .build()
+                .unwrap();
+
+            let src = Path::parse("src.bin").unwrap();
+            let dst = Path::parse("dst.bin").unwrap();
+            store
+                .put(&src, PutPayload::from(vec![0u8; 100_000]))
+                .await
+                .unwrap();
+            if store.head(&dst).await.is_ok() {
+                store.delete(&dst).await.unwrap();
+            }
+            store.copy_if_not_exists(&src, &dst).await.unwrap();
+            store.delete(&src).await.unwrap();
+            store.delete(&dst).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn copy_multipart_file_with_signature_change_checksum() {
+        maybe_skip_integration!();
+
+        let bucket = "test-bucket-for-copy-if-not-exists";
+        let checksum_src = Checksum::SHA256;
+        let checksum_dst = Checksum::CRC64NVME;
+
+        let src = Path::parse("change_checksum_src.bin").unwrap();
+        let dst = Path::parse("change_checksum_dst.bin").unwrap();
+
         let store = AmazonS3Builder::from_env()
             .with_bucket_name(bucket)
-            .with_checksum_algorithm(Checksum::SHA256)
-            .with_copy_if_not_exists(S3CopyIfNotExists::Multipart)
+            .with_checksum_algorithm(checksum_src)
             .build()
             .unwrap();
 
-        let src = Path::parse("src.bin").unwrap();
-        let dst = Path::parse("dst.bin").unwrap();
         store
             .put(&src, PutPayload::from(vec![0u8; 100_000]))
             .await
@@ -578,6 +636,14 @@ mod tests {
         if store.head(&dst).await.is_ok() {
             store.delete(&dst).await.unwrap();
         }
+
+        let store = AmazonS3Builder::from_env()
+            .with_bucket_name(bucket)
+            .with_checksum_algorithm(checksum_dst)
+            .with_copy_if_not_exists(S3CopyIfNotExists::Multipart)
+            .build()
+            .unwrap();
+
         store.copy_if_not_exists(&src, &dst).await.unwrap();
         store.delete(&src).await.unwrap();
         store.delete(&dst).await.unwrap();
@@ -587,37 +653,42 @@ mod tests {
     async fn write_multipart_file_with_signature_object_lock() {
         maybe_skip_integration!();
 
-        let bucket = "test-object-lock";
-        let store = AmazonS3Builder::from_env()
-            .with_bucket_name(bucket)
-            .with_checksum_algorithm(Checksum::SHA256)
-            .build()
-            .unwrap();
+        for checksum in [Checksum::SHA256, Checksum::CRC64NVME] {
+            let bucket = "test-object-lock";
+            let store = AmazonS3Builder::from_env()
+                .with_bucket_name(bucket)
+                .with_checksum_algorithm(checksum)
+                .build()
+                .unwrap();
 
-        let str = "test.bin";
-        let path = Path::parse(str).unwrap();
-        let opts = PutMultipartOptions::default();
-        let mut upload = store.put_multipart_opts(&path, opts).await.unwrap();
+            let str = "test.bin";
+            let path = Path::parse(str).unwrap();
+            let opts = PutMultipartOptions::default();
+            let mut upload = store.put_multipart_opts(&path, opts).await.unwrap();
 
-        upload
-            .put_part(PutPayload::from(vec![0u8; 10_000_000]))
-            .await
-            .unwrap();
-        upload
-            .put_part(PutPayload::from(vec![0u8; 5_000_000]))
-            .await
-            .unwrap();
+            upload
+                .put_part(PutPayload::from(vec![0u8; 10_000_000]))
+                .await
+                .unwrap();
+            upload
+                .put_part(PutPayload::from(vec![0u8; 5_000_000]))
+                .await
+                .unwrap();
 
-        let res = upload.complete().await.unwrap();
-        assert!(res.e_tag.is_some(), "Should have valid etag");
+            let res = upload.complete().await.unwrap();
+            assert!(res.e_tag.is_some(), "Should have valid etag");
 
-        store.delete(&path).await.unwrap();
+            store.delete(&path).await.unwrap();
+        }
     }
 
     #[tokio::test]
     async fn s3_test() {
         maybe_skip_integration!();
-        let config = AmazonS3Builder::from_env();
+        // tag the extensions of every HTTP response with a marker,
+        // allowing response_extensions to verify their propagation
+        let config =
+            AmazonS3Builder::from_env().with_http_connector(MarkerHttpConnector::default());
 
         let integration = config.build().unwrap();
         let config = &integration.client.config;
@@ -632,12 +703,14 @@ mod tests {
         rename_and_copy(&integration).await;
         stream_get(&integration).await;
         multipart(&integration, &integration).await;
+        multipart_put_part_out_of_order(&integration, &integration).await;
         multipart_race_condition(&integration, true).await;
         multipart_out_of_order(&integration).await;
         signing(&integration).await;
         s3_encryption(&integration).await;
         put_get_attributes(&integration).await;
         list_paginated(&integration, &integration).await;
+        response_extensions(&integration, true).await;
 
         // Object tagging is not supported by S3 Express One Zone
         if config.session_provider.is_none() {
@@ -668,6 +741,11 @@ mod tests {
 
         // run integration test with checksum set to sha256
         let builder = AmazonS3Builder::from_env().with_checksum_algorithm(Checksum::SHA256);
+        let integration = builder.build().unwrap();
+        put_get_delete_list(&integration).await;
+
+        // run integration test with checksum set to crc64nvme
+        let builder = AmazonS3Builder::from_env().with_checksum_algorithm(Checksum::CRC64NVME);
         let integration = builder.build().unwrap();
         put_get_delete_list(&integration).await;
     }
@@ -874,6 +952,7 @@ mod tests {
 
     /// Integration test that ensures I/O is done on an alternate threadpool
     /// when using the `SpawnedReqwestConnector`.
+    #[cfg(feature = "reqwest")]
     #[test]
     fn s3_alternate_threadpool_spawned_request_connector() {
         maybe_skip_integration!();

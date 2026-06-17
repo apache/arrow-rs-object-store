@@ -24,14 +24,14 @@ use crate::aws::{
     AmazonS3, AwsCredential, AwsCredentialProvider, Checksum, S3ConditionalPut, S3CopyIfNotExists,
     STORE,
 };
-use crate::client::{HttpConnector, TokenCredentialProvider, http_connector};
+use crate::client::{CryptoProvider, HttpConnector, TokenCredentialProvider, http_connector};
 use crate::config::ConfigValue;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
+use http::header::{HeaderMap, HeaderValue};
 use itertools::Itertools;
 use md5::{Digest, Md5};
-use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -173,6 +173,8 @@ pub struct AmazonS3Builder {
     client_options: ClientOptions,
     /// Credentials
     credentials: Option<AwsCredentialProvider>,
+    /// The [`CryptoProvider`] to use
+    crypto: Option<Arc<dyn CryptoProvider>>,
     /// Skip signing requests
     skip_signature: ConfigValue<bool>,
     /// Copy if not exists
@@ -181,6 +183,8 @@ pub struct AmazonS3Builder {
     conditional_put: ConfigValue<S3ConditionalPut>,
     /// Ignore tags
     disable_tagging: ConfigValue<bool>,
+    /// Disable bulk delete
+    disable_bulk_delete: ConfigValue<bool>,
     /// Encryption (See [`S3EncryptionConfigKey`])
     encryption_type: Option<ConfigValue<S3EncryptionType>>,
     encryption_kms_key_id: Option<String>,
@@ -188,7 +192,7 @@ pub struct AmazonS3Builder {
     /// base64-encoded 256-bit customer encryption key for SSE-C.
     encryption_customer_key_base64: Option<String>,
     /// When set to true, charge requester for bucket operations
-    request_payer: ConfigValue<bool>,
+    request_payer: ConfigValue<RequesterPayer>,
     /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
 }
@@ -429,6 +433,19 @@ pub enum AmazonS3ConfigKey {
     /// - `disable_tagging`
     DisableTagging,
 
+    /// Disable bulk delete (`DeleteObjects`, `POST /?delete`)
+    ///
+    /// If set to `true`, [`delete`](crate::ObjectStoreExt::delete) and
+    /// [`delete_stream`](crate::ObjectStore::delete_stream) will issue
+    /// single-object `DELETE /key` requests instead of the bulk `DeleteObjects`
+    /// API (`POST /?delete`). Use this for S3-compatible providers that do not
+    /// implement `DeleteObjects` (e.g. Alibaba Cloud OSS).
+    ///
+    /// Supported keys:
+    /// - `aws_disable_bulk_delete`
+    /// - `disable_bulk_delete`
+    DisableBulkDelete,
+
     /// Enable Support for S3 Express One Zone
     ///
     /// Supported keys:
@@ -478,6 +495,7 @@ impl AsRef<str> for AmazonS3ConfigKey {
             Self::CopyIfNotExists => "aws_copy_if_not_exists",
             Self::ConditionalPut => "aws_conditional_put",
             Self::DisableTagging => "aws_disable_tagging",
+            Self::DisableBulkDelete => "aws_disable_bulk_delete",
             Self::RequestPayer => "aws_request_payer",
             Self::Client(opt) => opt.as_ref(),
             Self::Encryption(opt) => opt.as_ref(),
@@ -525,6 +543,7 @@ impl FromStr for AmazonS3ConfigKey {
             "aws_copy_if_not_exists" | "copy_if_not_exists" => Ok(Self::CopyIfNotExists),
             "aws_conditional_put" | "conditional_put" => Ok(Self::ConditionalPut),
             "aws_disable_tagging" | "disable_tagging" => Ok(Self::DisableTagging),
+            "aws_disable_bulk_delete" | "disable_bulk_delete" => Ok(Self::DisableBulkDelete),
             "aws_request_payer" | "request_payer" => Ok(Self::RequestPayer),
             // Backwards compatibility
             "aws_allow_http" => Ok(Self::Client(ClientConfigKey::AllowHttp)),
@@ -574,7 +593,7 @@ impl AmazonS3Builder {
     /// * `AWS_CONTAINER_CREDENTIALS_FULL_URI` -> <https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html>
     /// * `AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE` -> <https://docs.aws.amazon.com/sdkref/latest/guide/feature-container-credentials.html>
     /// * `AWS_ALLOW_HTTP` -> set to "true" to permit HTTP connections without TLS
-    /// * `AWS_REQUEST_PAYER` -> set to "true" to permit operations on requester-pays buckets.
+    /// * `AWS_REQUEST_PAYER` -> set to "requester" or "true" to permit operations on requester-pays buckets.
     ///
     /// # Example
     /// ```
@@ -672,15 +691,14 @@ impl AmazonS3Builder {
             }
             AmazonS3ConfigKey::SkipSignature => self.skip_signature.parse(value),
             AmazonS3ConfigKey::DisableTagging => self.disable_tagging.parse(value),
+            AmazonS3ConfigKey::DisableBulkDelete => self.disable_bulk_delete.parse(value),
             AmazonS3ConfigKey::CopyIfNotExists => {
                 self.copy_if_not_exists = Some(ConfigValue::Deferred(value.into()))
             }
             AmazonS3ConfigKey::ConditionalPut => {
                 self.conditional_put = ConfigValue::Deferred(value.into())
             }
-            AmazonS3ConfigKey::RequestPayer => {
-                self.request_payer = ConfigValue::Deferred(value.into())
-            }
+            AmazonS3ConfigKey::RequestPayer => self.request_payer.parse(value),
             AmazonS3ConfigKey::Encryption(key) => match key {
                 S3EncryptionConfigKey::ServerSideEncryption => {
                     self.encryption_type = Some(ConfigValue::Deferred(value.into()))
@@ -747,6 +765,7 @@ impl AmazonS3Builder {
             }
             AmazonS3ConfigKey::ConditionalPut => Some(self.conditional_put.to_string()),
             AmazonS3ConfigKey::DisableTagging => Some(self.disable_tagging.to_string()),
+            AmazonS3ConfigKey::DisableBulkDelete => Some(self.disable_bulk_delete.to_string()),
             AmazonS3ConfigKey::RequestPayer => Some(self.request_payer.to_string()),
             AmazonS3ConfigKey::Encryption(key) => match key {
                 S3EncryptionConfigKey::ServerSideEncryption => {
@@ -874,6 +893,12 @@ impl AmazonS3Builder {
     /// Set the credential provider overriding any other options
     pub fn with_credentials(mut self, credentials: AwsCredentialProvider) -> Self {
         self.credentials = Some(credentials);
+        self
+    }
+
+    /// The [`CryptoProvider`] to use
+    pub fn with_crypto_provider(mut self, provider: Arc<dyn CryptoProvider>) -> Self {
+        self.crypto = Some(provider);
         self
     }
 
@@ -1020,6 +1045,21 @@ impl AmazonS3Builder {
         self
     }
 
+    /// If set to `true`, [`delete`](crate::ObjectStoreExt::delete) and
+    /// [`delete_stream`](crate::ObjectStore::delete_stream) will issue
+    /// single-object `DELETE /key` requests instead of the bulk `DeleteObjects`
+    /// API (`POST /?delete`).
+    ///
+    /// The bulk `DeleteObjects` API is more efficient but is not implemented by
+    /// all S3-compatible providers (e.g. Alibaba Cloud OSS). Setting this to
+    /// `true` restores the single-object delete behaviour that works against
+    /// every S3-compatible provider, at the cost of throughput when deleting
+    /// many objects via [`delete_stream`](crate::ObjectStore::delete_stream).
+    pub fn with_disable_bulk_delete(mut self, disable: bool) -> Self {
+        self.disable_bulk_delete = disable.into();
+        self
+    }
+
     /// Use SSE-KMS for server side encryption.
     pub fn with_sse_kms_encryption(mut self, kms_key_id: impl Into<String>) -> Self {
         self.encryption_type = Some(ConfigValue::Parsed(S3EncryptionType::SseKms));
@@ -1061,7 +1101,7 @@ impl AmazonS3Builder {
     ///
     /// <https://docs.aws.amazon.com/AmazonS3/latest/userguide/RequesterPaysBuckets.html>
     pub fn with_request_payer(mut self, enabled: bool) -> Self {
-        self.request_payer = ConfigValue::Parsed(enabled);
+        self.request_payer = ConfigValue::Parsed(enabled.into());
         self
     }
 
@@ -1194,6 +1234,7 @@ impl AmazonS3Builder {
                             endpoint: endpoint.clone(),
                             region: region.clone(),
                             credentials: Arc::clone(&credentials),
+                            crypto: self.crypto.clone(),
                         },
                         http.connect(&self.client_options)?,
                         self.retry_config.clone(),
@@ -1237,17 +1278,19 @@ impl AmazonS3Builder {
             bucket,
             bucket_endpoint,
             credentials,
+            crypto: self.crypto,
             session_provider,
             retry_config: self.retry_config,
             client_options: self.client_options,
             sign_payload: !self.unsigned_payload.get()?,
             skip_signature: self.skip_signature.get()?,
             disable_tagging: self.disable_tagging.get()?,
+            disable_bulk_delete: self.disable_bulk_delete.get()?,
             checksum,
             copy_if_not_exists,
             conditional_put: self.conditional_put.get()?,
             encryption_headers,
-            request_payer: self.request_payer.get()?,
+            request_payer: self.request_payer.get()?.into(),
         };
 
         let http_client = http.connect(&config.client_options)?;
@@ -1265,6 +1308,40 @@ fn parse_bucket_az(bucket: &str) -> Option<&str> {
         .strip_suffix("--x-s3")
         .or_else(|| bucket.strip_suffix("--xa-s3"))?;
     Some(base.rsplit_once("--")?.1)
+}
+
+/// Captures `AWS_REQUEST_PAYER`.
+///
+/// Parses either as `"requester"` (case-insensitive) meaning `true`, or as a [`bool`] (i.e. `"true"`, `"1"`, `"no"`, etc.).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
+struct RequesterPayer(bool);
+
+impl crate::config::Parse for RequesterPayer {
+    fn parse(v: &str) -> Result<Self> {
+        if v.eq_ignore_ascii_case("requester") {
+            Ok(Self(true))
+        } else {
+            Ok(Self(<bool as crate::config::Parse>::parse(v)?))
+        }
+    }
+}
+
+impl From<bool> for RequesterPayer {
+    fn from(value: bool) -> Self {
+        Self(value)
+    }
+}
+
+impl From<RequesterPayer> for bool {
+    fn from(value: RequesterPayer) -> Self {
+        value.0
+    }
+}
+
+impl std::fmt::Display for RequesterPayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
 }
 
 /// Encryption configuration options for S3.
@@ -1506,6 +1583,7 @@ mod tests {
         assert!(builder.unsigned_payload.get().unwrap());
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn s3_test_endpoint_url_s3_config() {
         // Verify aws_endpoint_url_s3 parses to S3Endpoint config key
@@ -1620,6 +1698,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn s3_default_region() {
         let builder = AmazonS3Builder::new()
@@ -1629,6 +1708,7 @@ mod tests {
         assert_eq!(builder.client.config.region, "us-east-1");
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn s3_test_bucket_endpoint() {
         let builder = AmazonS3Builder::new()
@@ -1728,6 +1808,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "reqwest")]
     #[tokio::test]
     async fn s3_test_proxy_url() {
         let s3 = AmazonS3Builder::new()
@@ -1756,6 +1837,7 @@ mod tests {
         assert_eq!("Generic HTTP client error: builder error", err);
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn test_invalid_config() {
         let err = AmazonS3Builder::new()
@@ -1783,6 +1865,63 @@ mod tests {
             err,
             "Generic Config error: \"md5\" is not a valid checksum algorithm"
         );
+
+        let err = AmazonS3Builder::new()
+            .with_config(AmazonS3ConfigKey::RequestPayer, "requestr")
+            .with_bucket_name("bucket")
+            .with_region("region")
+            .build()
+            .unwrap_err()
+            .to_string();
+
+        assert_eq!(
+            err,
+            "Generic Config error: failed to parse \"requestr\" as boolean"
+        );
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[test]
+    fn test_request_payer_config() {
+        let s3 = AmazonS3Builder::new()
+            .with_config(AmazonS3ConfigKey::RequestPayer, "requester")
+            .with_bucket_name("bucket")
+            .with_region("region")
+            .build()
+            .unwrap();
+        assert!(s3.client.config.request_payer);
+
+        let s3 = AmazonS3Builder::new()
+            .with_config(AmazonS3ConfigKey::RequestPayer, "REQUESTER")
+            .with_bucket_name("bucket")
+            .with_region("region")
+            .build()
+            .unwrap();
+        assert!(s3.client.config.request_payer);
+
+        let s3 = AmazonS3Builder::new()
+            .with_config(AmazonS3ConfigKey::RequestPayer, "true")
+            .with_bucket_name("bucket")
+            .with_region("region")
+            .build()
+            .unwrap();
+        assert!(s3.client.config.request_payer);
+
+        let s3 = AmazonS3Builder::new()
+            .with_config(AmazonS3ConfigKey::RequestPayer, "false")
+            .with_bucket_name("bucket")
+            .with_region("region")
+            .build()
+            .unwrap();
+        assert!(!s3.client.config.request_payer);
+
+        let s3 = AmazonS3Builder::new()
+            .with_request_payer(true)
+            .with_bucket_name("bucket")
+            .with_region("region")
+            .build()
+            .unwrap();
+        assert!(s3.client.config.request_payer);
     }
 
     #[test]
@@ -1815,6 +1954,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn test_builder_eks_with_config() {
         let builder = AmazonS3Builder::new()
@@ -1837,6 +1977,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn test_builder_web_identity_with_config() {
         let builder = AmazonS3Builder::new()

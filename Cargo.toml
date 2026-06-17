@@ -38,7 +38,7 @@ futures-core = "0.3"
 futures-util = { version = "0.3", features = ["sink"] }
 http = "1.2.0"
 humantime = "2.1"
-itertools = "0.14.0"
+itertools = "0.15.0"
 parking_lot = { version = "0.12" }
 percent-encoding = "2.1"
 thiserror = "2.0.2"
@@ -47,15 +47,17 @@ walkdir = { version = "2", optional = true }
 
 # Cloud storage support
 base64 = { version = "0.22", default-features = false, features = ["std"], optional = true }
+crc-fast = { version = "1.6" , optional = true }
 form_urlencoded = { version = "1.2", optional = true }
 http-body-util = { version = "0.1.2", optional = true }
 httparse = { version = "1.8.0", default-features = false, features = ["std"], optional = true }
 hyper = { version = "1.2", default-features = false, optional = true }
-md-5 = { version = "0.10.6", default-features = false, optional = true }
-quick-xml = { version = "0.39.0", features = ["serialize", "overlapped-lists"], optional = true }
+md-5 = { version = "0.11.0", default-features = false, optional = true }
+quick-xml = { version = "0.40.1", features = ["serialize", "overlapped-lists"], optional = true }
 rand = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"], optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "http2"], optional = true }
+reqwest = { version = "0.13", default-features = false, features = ["http2"], optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
+aws-lc-rs = { version = "1.15", default-features = false, optional = true }
 rustls-pki-types = { version = "1.9", default-features = false, features = ["std"], optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
 serde_json = { version = "1.0", default-features = false, features = ["std"], optional = true }
@@ -64,6 +66,12 @@ serde_urlencoded = { version = "0.7", optional = true }
 # Optional tokio feature
 tokio = { version = "1.29.0", features = ["sync", "macros", "rt", "time", "io-util"], optional = true }
 tracing = { version = "0.1", optional = true }
+
+[target.'cfg(target_family="unix")'.dependencies]
+nix = { version = "0.31.1", default-features = false, optional = true }
+
+[target.'cfg(target_family="windows")'.dependencies]
+windows-sys = { version = "0.61.2", default-features = false, features = ["Win32_Foundation"], optional = true }
 
 [target.'cfg(target_family="unix")'.dev-dependencies]
 nix = { version = "0.31.1", features = ["fs"] }
@@ -75,13 +83,38 @@ futures-channel = {version = "0.3", features = ["sink"]}
 
 [features]
 default = ["fs"]
-cloud = ["serde", "serde_json", "quick-xml", "hyper", "reqwest", "reqwest/stream", "chrono/serde", "base64", "rand", "ring", "http-body-util", "form_urlencoded", "serde_urlencoded", "tokio"]
-azure = ["cloud", "httparse"]
-fs = ["walkdir", "tokio"]
-gcp = ["cloud", "rustls-pki-types"]
-aws = ["cloud", "md-5"]
-http = ["cloud"]
-tls-webpki-roots = ["reqwest?/rustls-tls-webpki-roots"]
+
+# Shared cloud/provider implementation dependencies.
+# This intentionally does NOT include reqwest or a bundled crypto provider.
+cloud-base = ["serde", "serde_json", "quick-xml", "hyper", "chrono/serde", "base64", "rand", "http-body-util", "form_urlencoded", "serde_urlencoded", "tokio"]
+
+# Built-in reqwest-based HTTP transport.
+reqwest = ["dep:reqwest", "reqwest/stream"]
+
+# Bundled crypto providers.
+# Selecting one provides the default `CryptoProvider`; otherwise a custom
+# provider must be supplied at runtime.
+aws-lc-rs = ["dep:aws-lc-rs", "rustls-pki-types"]
+ring = ["dep:ring", "rustls-pki-types"]
+
+# Implementation base features.
+# These compile provider logic without forcing reqwest or a crypto provider.
+azure-base = ["cloud-base", "httparse"]
+gcp-base = ["cloud-base"]
+aws-base = ["cloud-base", "crc-fast", "md-5"]
+http-base = ["cloud-base"]
+
+# "Batteries-included" implementation features.
+# Each enables the default `reqwest` transport (with rustls) and `aws-lc-rs`.
+# This keeps object_store's bundled crypto provider aligned with reqwest/rustls,
+# which uses aws-lc-rs for TLS by default.
+azure = ["azure-base", "reqwest", "reqwest/rustls", "aws-lc-rs"]
+gcp = ["gcp-base", "reqwest", "reqwest/rustls", "aws-lc-rs"]
+aws = ["aws-base", "reqwest", "reqwest/rustls", "aws-lc-rs"]
+# HTTP/WebDAV doesn't sign object_store requests, but reqwest/rustls uses aws-lc-rs by default.
+http = ["http-base", "reqwest", "reqwest/rustls", "aws-lc-rs"]
+
+fs = ["walkdir", "tokio", "nix", "windows-sys"]
 integration = ["rand", "tokio"]
 tokio = ["dep:tokio", "dep:tracing"]
 
@@ -92,8 +125,9 @@ hyper-util = "0.1"
 rand = "0.10"
 tempfile = "3.1.0"
 regex = "1.11.1"
+webpki-root-certs = "1"
 # The "gzip" feature for reqwest is enabled for an integration test.
-reqwest = { version = "0.12", default-features = false, features = ["gzip"] }
+reqwest = { version = "0.13", default-features = false, features = ["gzip"] }
 
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
 wasm-bindgen-test = "0.3.50"

@@ -400,6 +400,7 @@ mod tests {
         copy_if_not_exists(&store).await;
         stream_get(&store).await;
         multipart(&store, &store).await;
+        multipart_put_part_out_of_order(&store, &store).await;
     }
 
     #[tokio::test]

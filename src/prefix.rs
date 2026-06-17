@@ -22,6 +22,8 @@ use std::ops::Range;
 
 use crate::multipart::{MultipartStore, PartId};
 use crate::path::Path;
+#[cfg(feature = "cloud-base")]
+use crate::signer::Signer;
 use crate::{
     CopyOptions, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
     ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result,
@@ -84,12 +86,19 @@ fn strip_prefix(prefix: &Path, path: Path) -> Path {
 
 /// Strip the constant prefix from a given ObjectMeta
 fn strip_meta(prefix: &Path, meta: ObjectMeta) -> ObjectMeta {
+    let ObjectMeta {
+        last_modified,
+        size,
+        location,
+        e_tag,
+        version,
+    } = meta;
     ObjectMeta {
-        last_modified: meta.last_modified,
-        size: meta.size,
-        location: strip_prefix(prefix, meta.location),
-        e_tag: meta.e_tag,
-        version: None,
+        last_modified,
+        size,
+        location: strip_prefix(prefix, location),
+        e_tag,
+        version,
     }
 }
 
@@ -117,7 +126,9 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let full_path = self.full_path(location);
-        self.inner.get_opts(&full_path, options).await
+        let mut result = self.inner.get_opts(&full_path, options).await?;
+        result.meta = self.strip_meta(result.meta);
+        Ok(result)
     }
 
     async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
@@ -175,6 +186,7 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
                     .into_iter()
                     .map(|meta| self.strip_meta(meta))
                     .collect(),
+                extensions: lst.extensions,
             })
     }
 
@@ -222,6 +234,36 @@ impl<T: MultipartStore> MultipartStore for PrefixStore<T> {
     async fn abort_multipart(&self, path: &Path, id: &MultipartId) -> Result<()> {
         let full_path = self.full_path(path);
         self.inner.abort_multipart(&full_path, id).await
+    }
+}
+
+#[cfg(feature = "cloud-base")]
+#[async_trait::async_trait]
+impl<T: Signer> Signer for PrefixStore<T> {
+    async fn signed_url(
+        &self,
+        method: http::Method,
+        path: &Path,
+        expires_in: std::time::Duration,
+    ) -> Result<url::Url> {
+        self.inner
+            .signed_url(method, &self.full_path(path), expires_in)
+            .await
+    }
+
+    async fn signed_urls(
+        &self,
+        method: http::Method,
+        paths: &[Path],
+        expires_in: std::time::Duration,
+    ) -> Result<Vec<url::Url>> {
+        self.inner
+            .signed_urls(
+                method,
+                &paths.iter().map(|p| self.full_path(p)).collect::<Vec<_>>(),
+                expires_in,
+            )
+            .await
     }
 }
 
@@ -299,12 +341,101 @@ mod tests {
         assert_eq!(&*read_data, data)
     }
 
+    // Regression test for
+    // https://github.com/apache/arrow-rs-object-store/issues/664:
+    // head/get returned an ObjectMeta whose location still contained the
+    // prefix, so round-tripping the returned location back into the store would
+    // double-prefix it.
+    #[tokio::test]
+    async fn prefix_head_get_strip_prefix() {
+        let store = PrefixStore::new(InMemory::new(), "prefix");
+        let path = Path::from("test_file");
+        store.put(&path, "data".into()).await.unwrap();
+
+        let head = store.head(&path).await.unwrap();
+        assert_eq!(head.location, path);
+        let get = store.get(&path).await.unwrap();
+        assert_eq!(get.meta.location, path);
+
+        // The returned location must round-trip back into the same store.
+        store.get(&head.location).await.unwrap();
+    }
+
+    #[test]
+    fn strip_meta_preserves_version_and_etag() {
+        let prefix = Path::from("prefix");
+        let meta = ObjectMeta {
+            location: Path::from("prefix/foo"),
+            last_modified: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            size: 42,
+            e_tag: Some("etag-value".to_string()),
+            version: Some("version-value".to_string()),
+        };
+
+        let ObjectMeta {
+            location,
+            last_modified,
+            size,
+            e_tag,
+            version,
+        } = strip_meta(&prefix, meta.clone());
+
+        assert_eq!(location, Path::from("foo"));
+        assert_eq!(last_modified, meta.last_modified);
+        assert_eq!(size, meta.size);
+        assert_eq!(e_tag, meta.e_tag);
+        assert_eq!(version, meta.version);
+    }
+
     #[tokio::test]
     async fn prefix_multipart() {
         let store = PrefixStore::new(InMemory::new(), "prefix");
 
         multipart(&store, &store).await;
+        multipart_put_part_out_of_order(&store, &store).await;
         multipart_out_of_order(&store).await;
         multipart_race_condition(&store, true).await;
+    }
+
+    #[cfg(feature = "cloud-base")]
+    #[tokio::test]
+    async fn signer() {
+        #[derive(Debug)]
+        struct Foo;
+
+        #[async_trait::async_trait]
+        impl Signer for Foo {
+            async fn signed_url(
+                &self,
+                method: http::Method,
+                path: &Path,
+                _expires_in: std::time::Duration,
+            ) -> Result<url::Url> {
+                Ok(url::Url::parse(&format!("ex:{path}?method={method}")).unwrap())
+            }
+        }
+
+        assert_eq!(
+            PrefixStore::new(Foo, "prefix")
+                .signed_url(
+                    http::Method::GET,
+                    &"foo".into(),
+                    std::time::Duration::from_secs(1)
+                )
+                .await
+                .unwrap(),
+            url::Url::parse("ex:prefix/foo?method=GET").unwrap()
+        );
+        assert_eq!(
+            PrefixStore::new(Foo, "prefix")
+                .signed_urls(
+                    http::Method::GET,
+                    &["foo".into()],
+                    std::time::Duration::from_secs(1)
+                )
+                .await
+                .unwrap(),
+            vec![url::Url::parse("ex:prefix/foo?method=GET").unwrap()]
+        );
     }
 }

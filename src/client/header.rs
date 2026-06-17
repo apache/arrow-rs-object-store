@@ -49,7 +49,7 @@ pub(crate) enum Error {
     MissingEtag,
 
     #[error("Received header containing non-ASCII data")]
-    BadHeader { source: reqwest::header::ToStrError },
+    BadHeader { source: http::header::ToStrError },
 
     #[error("Last-Modified Header missing from response")]
     MissingLastModified,
@@ -70,19 +70,26 @@ pub(crate) enum Error {
     },
 }
 
-/// Extracts a PutResult from the provided [`HeaderMap`]
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+/// Extracts a PutResult from the provided response
+///
+/// Propagates the extensions of the response into the [`crate::PutResult`]
+#[cfg(any(feature = "aws-base", feature = "gcp-base", feature = "azure-base"))]
 pub(crate) fn get_put_result(
-    headers: &HeaderMap,
+    response: crate::client::HttpResponse,
     version: &str,
 ) -> Result<crate::PutResult, Error> {
-    let e_tag = Some(get_etag(headers)?);
-    let version = get_version(headers, version)?;
-    Ok(crate::PutResult { e_tag, version })
+    let (parts, _) = response.into_parts();
+    let e_tag = Some(get_etag(&parts.headers)?);
+    let version = get_version(&parts.headers, version)?;
+    Ok(crate::PutResult {
+        e_tag,
+        version,
+        extensions: parts.extensions,
+    })
 }
 
 /// Extracts a optional version from the provided [`HeaderMap`]
-#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+#[cfg(any(feature = "aws-base", feature = "gcp-base", feature = "azure-base"))]
 pub(crate) fn get_version(headers: &HeaderMap, version: &str) -> Result<Option<String>, Error> {
     Ok(match headers.get(version) {
         Some(x) => Some(

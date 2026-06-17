@@ -17,6 +17,9 @@
 
 //! An object store implementation for Google Cloud Storage
 //!
+//! See the [Feature Flags](crate#feature-flags) section for the difference
+//! between the `gcp` and `gcp-base` features.
+//!
 //! ## Multipart uploads
 //!
 //! [Multipart uploads](https://cloud.google.com/storage/docs/multipart-uploads)
@@ -37,10 +40,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::client::CredentialProvider;
+use crate::CopyOptions;
+use crate::client::{CredentialProvider, crypto_provider};
 use crate::gcp::credential::GCSAuthorizer;
 use crate::signer::Signer;
-use crate::{CopyMode, CopyOptions};
 use crate::{
     GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
     PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart, multipart::PartId,
@@ -221,10 +224,7 @@ impl ObjectStore for GoogleCloudStorage {
             extensions: _,
         } = options;
 
-        match mode {
-            CopyMode::Overwrite => self.client.copy_request(from, to, true).await,
-            CopyMode::Create => self.client.copy_request(from, to, false).await,
-        }
+        self.client.copy_request(from, to, mode).await
     }
 }
 
@@ -280,8 +280,9 @@ impl Signer for GoogleCloudStorage {
         let signing_credentials = self.signing_credentials().get_credential().await?;
         let authorizer = GCSAuthorizer::new(signing_credentials);
 
+        let crypto = crypto_provider(self.client.config().crypto.as_deref())?;
         authorizer
-            .sign(method, &mut url, expires_in, &self.client)
+            .sign(crypto, method, &mut url, expires_in, &self.client)
             .await?;
 
         Ok(url)
@@ -314,7 +315,12 @@ mod test {
     #[tokio::test]
     async fn gcs_test() {
         maybe_skip_integration!();
-        let integration = GoogleCloudStorageBuilder::from_env().build().unwrap();
+        // tag the extensions of every HTTP response with a marker,
+        // allowing response_extensions to verify their propagation
+        let integration = GoogleCloudStorageBuilder::from_env()
+            .with_http_connector(MarkerHttpConnector::default())
+            .build()
+            .unwrap();
 
         put_get_delete_list(&integration).await;
         list_with_offset_exclusivity(&integration).await;
@@ -329,6 +335,7 @@ mod test {
             // https://github.com/fsouza/fake-gcs-server/issues/852
             stream_get(&integration).await;
             multipart(&integration, &integration).await;
+            multipart_put_part_out_of_order(&integration, &integration).await;
             multipart_race_condition(&integration, true).await;
             multipart_out_of_order(&integration).await;
             list_paginated(&integration, &integration).await;
@@ -338,8 +345,13 @@ mod test {
             // Fake GCS server doesn't currently support attributes
             put_get_attributes(&integration).await;
         }
+
+        // Fake GCS server does not yet implement XML Multipart uploads
+        let test_multipart = integration.client.config().base_url == DEFAULT_GCS_BASE_URL;
+        response_extensions(&integration, test_multipart).await;
     }
 
+    #[cfg(feature = "reqwest")]
     #[tokio::test]
     #[ignore]
     async fn gcs_test_sign() {
