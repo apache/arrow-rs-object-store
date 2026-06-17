@@ -1115,6 +1115,7 @@ mod tests {
         let http2_keep_alive_timeout = "91 seconds".to_string();
         let http2_keep_alive_while_idle = "92 seconds".to_string();
         let http2_max_frame_size = "1337".to_string();
+        let no_system_certificates = "true".to_string();
         let pool_idle_timeout = "93 seconds".to_string();
         let pool_max_idle_per_host = "94".to_string();
         let proxy_url = "https://fake_proxy_url".to_string();
@@ -1142,6 +1143,10 @@ mod tests {
                 http2_keep_alive_while_idle.clone(),
             ),
             ("http2_max_frame_size", http2_max_frame_size.clone()),
+            (
+                "disable_system_certificates",
+                no_system_certificates.clone(),
+            ),
             ("pool_idle_timeout", pool_idle_timeout.clone()),
             ("pool_max_idle_per_host", pool_max_idle_per_host.clone()),
             ("proxy_url", proxy_url.clone()),
@@ -1215,6 +1220,12 @@ mod tests {
                 .get_config_value(&ClientConfigKey::Http2MaxFrameSize)
                 .unwrap(),
             http2_max_frame_size
+        );
+        assert_eq!(
+            builder
+                .get_config_value(&ClientConfigKey::NoSystemCertificates)
+                .unwrap(),
+            no_system_certificates
         );
 
         assert_eq!(

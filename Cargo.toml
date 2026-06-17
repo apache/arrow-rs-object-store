@@ -94,7 +94,7 @@ reqwest = ["dep:reqwest", "reqwest/stream"]
 # Bundled crypto providers.
 # Selecting one provides the default `CryptoProvider`; otherwise a custom
 # provider must be supplied at runtime.
-aws-lc-rs = ["dep:aws-lc-rs", "rustls-pki-types"]
+aws-lc-rs = ["dep:aws-lc-rs", "aws-lc-rs/non-fips", "rustls-pki-types"]
 ring = ["dep:ring", "rustls-pki-types"]
 
 # Implementation base features.
@@ -105,10 +105,13 @@ aws-base = ["cloud-base", "crc-fast", "md-5"]
 http-base = ["cloud-base"]
 
 # "Batteries-included" implementation features.
-# Each enables the default `reqwest` transport (with rustls) and `aws-lc-rs`
+# Each enables the default `reqwest` transport (with rustls) and `aws-lc-rs`.
+# This keeps object_store's bundled crypto provider aligned with reqwest/rustls,
+# which uses aws-lc-rs for TLS by default.
 azure = ["azure-base", "reqwest", "reqwest/rustls", "aws-lc-rs"]
 gcp = ["gcp-base", "reqwest", "reqwest/rustls", "aws-lc-rs"]
 aws = ["aws-base", "reqwest", "reqwest/rustls", "aws-lc-rs"]
+# HTTP/WebDAV doesn't sign object_store requests, but reqwest/rustls uses aws-lc-rs by default.
 http = ["http-base", "reqwest", "reqwest/rustls", "aws-lc-rs"]
 
 fs = ["walkdir", "tokio", "nix", "windows-sys"]

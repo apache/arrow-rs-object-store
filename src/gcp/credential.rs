@@ -160,9 +160,8 @@ impl ServiceAccountKey {
         Ok(Self::new(Box::new(key)))
     }
 
-    fn sign(&self, string_to_sign: &[u8]) -> crate::Result<String> {
-        let signature = self.0.sign(string_to_sign)?;
-        Ok(hex_encode(&signature))
+    fn sign(&self, string_to_sign: &[u8]) -> crate::Result<Vec<u8>> {
+        self.0.sign(string_to_sign)
     }
 }
 
@@ -787,7 +786,7 @@ impl GCSAuthorizer {
 
         let string_to_sign = self.string_to_sign(crypto, date, &method, url, &headers)?;
         let signature = match &self.credential.private_key {
-            Some(key) => key.sign(string_to_sign.as_bytes())?,
+            Some(key) => hex_encode(&key.sign(string_to_sign.as_bytes())?),
             None => client.sign_blob(&string_to_sign, email).await?,
         };
 
@@ -928,6 +927,133 @@ impl CredentialExt for HttpRequestBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::{
+        ClientOptions, DigestAlgorithm, DigestContext, HmacContext, StaticCredentialProvider,
+    };
+    use crate::gcp::client::{GoogleCloudStorageClient, GoogleCloudStorageConfig};
+
+    const SIGNATURE_BYTES: &[u8] = &[0x00, 0x01, 0x02, 0xab, 0xcd];
+
+    struct FixedSigner;
+
+    impl Signer for FixedSigner {
+        fn sign(&self, _string_to_sign: &[u8]) -> crate::Result<Vec<u8>> {
+            Ok(SIGNATURE_BYTES.to_vec())
+        }
+    }
+
+    #[derive(Debug)]
+    struct FixedCryptoProvider;
+
+    impl CryptoProvider for FixedCryptoProvider {
+        fn digest(&self, _algorithm: DigestAlgorithm) -> crate::Result<Box<dyn DigestContext>> {
+            Ok(Box::new(FixedDigestContext))
+        }
+
+        fn hmac(
+            &self,
+            _algorithm: DigestAlgorithm,
+            _secret: &[u8],
+        ) -> crate::Result<Box<dyn HmacContext>> {
+            panic!("GCS signed URL should not use HMAC")
+        }
+
+        fn sign(
+            &self,
+            _algorithm: SigningAlgorithm,
+            _pem: &[u8],
+        ) -> crate::Result<Box<dyn Signer>> {
+            Ok(Box::new(FixedSigner))
+        }
+    }
+
+    struct FixedDigestContext;
+
+    impl DigestContext for FixedDigestContext {
+        fn update(&mut self, _data: &[u8]) {}
+
+        fn finish(&mut self) -> crate::Result<&[u8]> {
+            Ok(&[0x12, 0x34])
+        }
+    }
+
+    #[derive(Debug)]
+    struct UnusedHttpService;
+
+    #[async_trait::async_trait]
+    impl crate::client::HttpService for UnusedHttpService {
+        async fn call(
+            &self,
+            _req: crate::client::HttpRequest,
+        ) -> std::result::Result<crate::client::HttpResponse, HttpError> {
+            panic!("SelfSignedJwt should not make HTTP requests")
+        }
+    }
+
+    #[test]
+    fn self_signed_jwt_base64url_encodes_raw_signature_bytes() {
+        let jwt = SelfSignedJwt::new(
+            "key-id".into(),
+            "service-account@example.com".into(),
+            ServiceAccountKey::new(Box::new(FixedSigner)),
+            DEFAULT_SCOPE.to_string(),
+        )
+        .unwrap();
+        let client = HttpClient::new(UnusedHttpService);
+        let token = futures_executor::block_on(jwt.fetch_token(&client, &RetryConfig::default()))
+            .unwrap()
+            .token;
+        let signature = token.bearer.rsplit('.').next().unwrap();
+
+        assert_eq!(signature, BASE64_URL_SAFE_NO_PAD.encode(SIGNATURE_BYTES));
+        assert_ne!(
+            signature,
+            BASE64_URL_SAFE_NO_PAD.encode(hex_encode(SIGNATURE_BYTES))
+        );
+    }
+
+    #[test]
+    fn signed_url_hex_encodes_local_signature_bytes() {
+        let signing_credential = Arc::new(GcpSigningCredential {
+            email: "service-account@example.com".into(),
+            private_key: Some(ServiceAccountKey::new(Box::new(FixedSigner))),
+        });
+        let authorizer = GCSAuthorizer::new(Arc::clone(&signing_credential));
+        let config = GoogleCloudStorageConfig {
+            base_url: DEFAULT_GCS_BASE_URL.into(),
+            credentials: Arc::new(StaticCredentialProvider::new(GcpCredential {
+                bearer: "bearer".into(),
+            })),
+            signing_credentials: Arc::new(StaticCredentialProvider::new(GcpSigningCredential {
+                email: "service-account@example.com".into(),
+                private_key: None,
+            })),
+            crypto: None,
+            bucket_name: "bucket".into(),
+            retry_config: RetryConfig::default(),
+            client_options: ClientOptions::default(),
+            skip_signature: false,
+        };
+        let client =
+            GoogleCloudStorageClient::new(config, HttpClient::new(UnusedHttpService)).unwrap();
+        let mut url = Url::parse("https://storage.googleapis.com/bucket/object").unwrap();
+
+        futures_executor::block_on(authorizer.sign(
+            &FixedCryptoProvider,
+            Method::GET,
+            &mut url,
+            Duration::from_secs(60),
+            &client,
+        ))
+        .unwrap();
+
+        let signature = url
+            .query_pairs()
+            .find(|(key, _)| key == "X-Goog-Signature")
+            .unwrap()
+            .1;
+        assert_eq!(signature, hex_encode(SIGNATURE_BYTES));
+    }
 
     #[test]
     fn test_canonicalize_headers() {
