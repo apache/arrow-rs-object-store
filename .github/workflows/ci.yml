@@ -57,6 +57,26 @@ jobs:
         run: cargo clippy --features azure -- -D warnings
       - name: Run clippy with http feature
         run: cargo clippy --features http -- -D warnings
+      - name: Run clippy with aws-base feature
+        run: cargo clippy --no-default-features --features aws-base -- -D warnings
+      - name: Run clippy with azure-base feature
+        run: cargo clippy --no-default-features --features azure-base -- -D warnings
+      - name: Run clippy with gcp-base feature
+        run: cargo clippy --no-default-features --features gcp-base -- -D warnings
+      - name: Run clippy with http-base feature
+        run: cargo clippy --no-default-features --features http-base -- -D warnings
+      - name: Verify base features do not enable reqwest
+        run: |
+          if cargo tree \
+            --no-default-features \
+            --features aws-base,azure-base,gcp-base,http-base \
+            --edges normal \
+            --prefix none \
+            -f '{p}' \
+            | grep -E '^reqwest v'; then
+            echo "reqwest must not be enabled by *-base features"
+            exit 1
+          fi
       - name: Run clippy with integration feature
         run: cargo clippy --no-default-features --features integration -- -D warnings
       - name: Run clippy with all features
@@ -196,6 +216,8 @@ jobs:
         run: rustup target add wasm32-wasip1
       - name: Build wasm32-wasip1
         run: cargo build --all-features --target wasm32-wasip1
+      - name: Build wasm32-wasip1 without reqwest
+        run: cargo build --no-default-features --features aws-base --target wasm32-wasip1
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
       - uses: actions/setup-node@v6

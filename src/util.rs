@@ -25,11 +25,11 @@ use super::Result;
 use bytes::Bytes;
 use futures_util::{Stream, TryStreamExt, stream::StreamExt};
 
-#[cfg(any(feature = "azure", feature = "http"))]
+#[cfg(any(feature = "azure-base", feature = "http-base"))]
 pub(crate) static RFC1123_FMT: &str = "%a, %d %h %Y %T GMT";
 
 // deserialize dates according to rfc1123
-#[cfg(any(feature = "azure", feature = "http"))]
+#[cfg(any(feature = "azure-base", feature = "http-base"))]
 pub(crate) fn deserialize_rfc1123<'de, D>(
     deserializer: D,
 ) -> Result<chrono::DateTime<chrono::Utc>, D::Error>
@@ -42,7 +42,7 @@ where
     Ok(chrono::TimeZone::from_utc_datetime(&chrono::Utc, &naive))
 }
 
-#[cfg(any(feature = "aws", feature = "azure"))]
+#[cfg(any(feature = "aws-base", feature = "azure-base"))]
 pub(crate) fn hmac_sha256(secret: impl AsRef<[u8]>, bytes: impl AsRef<[u8]>) -> ring::hmac::Tag {
     let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret.as_ref());
     ring::hmac::sign(&key, bytes.as_ref())
@@ -300,7 +300,7 @@ impl<T: RangeBounds<u64>> From<T> for GetRange {
 //
 // Do not URI-encode any of the unreserved characters that RFC 3986 defines:
 // A-Z, a-z, 0-9, hyphen ( - ), underscore ( _ ), period ( . ), and tilde ( ~ ).
-#[cfg(any(feature = "aws", feature = "gcp"))]
+#[cfg(any(feature = "aws-base", feature = "gcp-base"))]
 pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet = percent_encoding::NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'.')
@@ -308,14 +308,14 @@ pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet = percent_encodin
     .remove(b'~');
 
 /// Computes the SHA256 digest of `body` returned as a hex encoded string
-#[cfg(any(feature = "aws", feature = "gcp"))]
+#[cfg(any(feature = "aws-base", feature = "gcp-base"))]
 pub(crate) fn hex_digest(bytes: &[u8]) -> String {
     let digest = ring::digest::digest(&ring::digest::SHA256, bytes);
     hex_encode(digest.as_ref())
 }
 
 /// Returns `bytes` as a lower-case hex encoded string
-#[cfg(any(feature = "aws", feature = "gcp"))]
+#[cfg(any(feature = "aws-base", feature = "gcp-base"))]
 pub(crate) fn hex_encode(bytes: &[u8]) -> String {
     use std::fmt::Write;
     let mut out = String::with_capacity(bytes.len() * 2);

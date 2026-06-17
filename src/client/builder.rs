@@ -63,7 +63,7 @@ impl HttpRequestBuilder {
         }
     }
 
-    #[cfg(any(feature = "aws", feature = "azure"))]
+    #[cfg(any(feature = "aws-base", feature = "azure-base"))]
     pub(crate) fn from_parts(client: HttpClient, request: HttpRequest) -> Self {
         Self {
             client,
@@ -116,7 +116,7 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(feature = "aws")]
+    #[cfg(feature = "aws-base")]
     pub(crate) fn headers(mut self, headers: http::HeaderMap) -> Self {
         use http::header::{Entry, OccupiedEntry};
 
@@ -151,21 +151,40 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(feature = "gcp")]
-    pub(crate) fn bearer_auth(mut self, token: &str) -> Self {
-        let value = HeaderValue::try_from(format!("Bearer {token}"));
-        match (value, &mut self.request) {
-            (Ok(mut v), Ok(r)) => {
-                v.set_sensitive(true);
-                r.headers_mut().insert(http::header::AUTHORIZATION, v);
+    /// Insert a header whose value is marked [sensitive], so it is redacted from
+    /// the `Debug` representation of the request and any `HeaderValue`.
+    ///
+    /// Used for secret material carried in headers (e.g. Azure customer-provided
+    /// encryption keys) so it cannot leak through diagnostics as well as bearer
+    /// auth tokens by GCP.
+    ///
+    /// [sensitive]: HeaderValue::set_sensitive
+    #[cfg(any(feature = "gcp-base", feature = "azure-base"))]
+    pub(crate) fn sensitive_header<K, V>(mut self, name: K, value: V) -> Self
+    where
+        K: TryInto<HeaderName>,
+        K::Error: Into<RequestBuilderError>,
+        V: TryInto<HeaderValue>,
+        V::Error: Into<RequestBuilderError>,
+    {
+        match (name.try_into(), value.try_into(), &mut self.request) {
+            (Ok(name), Ok(mut value), Ok(r)) => {
+                value.set_sensitive(true);
+                r.headers_mut().insert(name, value);
             }
-            (Err(e), Ok(_)) => self.request = Err(e.into()),
-            (_, Err(_)) => {}
+            (Err(e), _, Ok(_)) => self.request = Err(e.into()),
+            (_, Err(e), Ok(_)) => self.request = Err(e.into()),
+            (_, _, Err(_)) => {}
         }
         self
     }
 
-    #[cfg(feature = "gcp")]
+    #[cfg(feature = "gcp-base")]
+    pub(crate) fn bearer_auth(self, token: &str) -> Self {
+        self.sensitive_header(http::header::AUTHORIZATION, format!("Bearer {token}"))
+    }
+
+    #[cfg(feature = "gcp-base")]
     pub(crate) fn json<S: serde::Serialize>(mut self, s: S) -> Self {
         match (serde_json::to_vec(&s), &mut self.request) {
             (Ok(json), Ok(request)) => {
@@ -177,7 +196,12 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(any(test, feature = "aws", feature = "gcp", feature = "azure"))]
+    #[cfg(any(
+        test,
+        feature = "aws-base",
+        feature = "gcp-base",
+        feature = "azure-base"
+    ))]
     pub(crate) fn query<T: serde::Serialize + ?Sized>(mut self, query: &T) -> Self {
         let mut error = None;
         if let Ok(ref mut req) = self.request {
@@ -205,7 +229,7 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(any(feature = "gcp", feature = "azure"))]
+    #[cfg(any(feature = "gcp-base", feature = "azure-base"))]
     pub(crate) fn form<T: serde::Serialize>(mut self, form: T) -> Self {
         let mut error = None;
         if let Ok(ref mut req) = self.request {
@@ -226,7 +250,7 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
+    #[cfg(any(feature = "aws-base", feature = "gcp-base", feature = "azure-base"))]
     pub(crate) fn body(mut self, b: impl Into<HttpRequestBody>) -> Self {
         if let Ok(r) = &mut self.request {
             *r.body_mut() = b.into();
@@ -239,7 +263,7 @@ impl HttpRequestBuilder {
     }
 }
 
-#[cfg(any(test, feature = "azure"))]
+#[cfg(any(test, feature = "azure-base"))]
 pub(crate) fn add_query_pairs<I, K, V>(uri: &mut Uri, query_pairs: I)
 where
     I: IntoIterator,
@@ -300,6 +324,7 @@ mod tests {
         assert_eq!(uri.to_string(), "https://foo@example.com/?foo=1");
     }
 
+    #[cfg(feature = "reqwest")]
     #[test]
     fn test_request_builder_query() {
         let client = HttpClient::new(reqwest::Client::new());

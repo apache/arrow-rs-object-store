@@ -17,6 +17,9 @@
 
 //! An object store implementation for Azure blob storage
 //!
+//! See the [Feature Flags](crate#feature-flags) section for the difference
+//! between the `azure` and `azure-base` features.
+//!
 //! ## Streaming uploads
 //!
 //! [`ObjectStore::put_multipart_opts`] will upload data in blocks and write a blob from those blocks.
@@ -33,7 +36,7 @@ use crate::{
 };
 use async_trait::async_trait;
 use futures_util::stream::{BoxStream, StreamExt, TryStreamExt};
-use reqwest::Method;
+use http::Method;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
@@ -197,7 +200,7 @@ impl Signer for MicrosoftAzure {
     /// ```
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # use object_store::{azure::MicrosoftAzureBuilder, path::Path, signer::Signer};
-    /// # use reqwest::Method;
+    /// # use http::Method;
     /// # use std::time::Duration;
     /// #
     /// let azure = MicrosoftAzureBuilder::new()
@@ -215,6 +218,12 @@ impl Signer for MicrosoftAzure {
     /// # }
     /// ```
     async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
+        if self.client.config().encryption_headers.is_enabled() {
+            return Err(crate::Error::NotSupported {
+                source: "Azure signed URLs cannot be used with customer-provided keys because CPK values must be supplied as request headers".into(),
+            });
+        }
+
         let mut url = self.path_url(path);
         let signer = self.client.signer(expires_in).await?;
         signer.sign(&method, &mut url)?;
@@ -227,6 +236,12 @@ impl Signer for MicrosoftAzure {
         paths: &[Path],
         expires_in: Duration,
     ) -> Result<Vec<Url>> {
+        if self.client.config().encryption_headers.is_enabled() {
+            return Err(crate::Error::NotSupported {
+                source: "Azure signed URLs cannot be used with customer-provided keys because CPK values must be supplied as request headers".into(),
+            });
+        }
+
         let mut urls = Vec::with_capacity(paths.len());
         let signer = self.client.signer(expires_in).await?;
         for path in paths {
@@ -357,8 +372,12 @@ mod tests {
     use crate::integration::*;
     use crate::tests::*;
     use crate::{Attribute, Attributes};
+    use base64::Engine;
+    use base64::prelude::BASE64_STANDARD;
     use bytes::Bytes;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[cfg(feature = "reqwest")]
     #[tokio::test]
     async fn azure_create_multipart_opts_rejects_attributes() {
         let integration = MicrosoftAzureBuilder::new()
@@ -382,7 +401,12 @@ mod tests {
     #[tokio::test]
     async fn azure_blob_test() {
         maybe_skip_integration!();
-        let integration = MicrosoftAzureBuilder::from_env().build().unwrap();
+        // tag the extensions of every HTTP response with a marker,
+        // allowing response_extensions to verify their propagation
+        let integration = MicrosoftAzureBuilder::from_env()
+            .with_http_connector(MarkerHttpConnector::default())
+            .build()
+            .unwrap();
 
         put_get_delete_list(&integration).await;
         list_with_offset_exclusivity(&integration).await;
@@ -399,6 +423,7 @@ mod tests {
         multipart_out_of_order(&integration).await;
         signing(&integration).await;
         list_paginated(&integration, &integration).await;
+        response_extensions(&integration, true).await;
 
         let validate = !integration.client.config().disable_tagging;
         tagging(
@@ -458,6 +483,93 @@ mod tests {
         let loaded = result.bytes().await.unwrap();
         assert_eq!(data, loaded);
         store.delete(&path).await.unwrap();
+    }
+
+    // Azurite doesn't support CPK (just ignores it)
+    #[ignore = "Used for manual testing against a real storage account."]
+    #[tokio::test]
+    async fn azure_blob_cpk_test() {
+        let base = MicrosoftAzureBuilder::from_env();
+        let key = BASE64_STANDARD.encode([7_u8; 32]);
+        let wrong_key = BASE64_STANDARD.encode([9_u8; 32]);
+
+        let encrypted = base.clone().with_encryption_key(&key).build().unwrap();
+        let unencrypted = base.clone().build().unwrap();
+        let wrong = base.with_encryption_key(&wrong_key).build().unwrap();
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = Path::from(format!("cpk-test-{suffix}.txt"));
+        let copy_path = Path::from(format!("cpk-test-copy-{suffix}.txt"));
+        let payload = Bytes::from("customer-provided-key");
+
+        encrypted.put(&path, payload.clone().into()).await.unwrap();
+
+        let loaded = encrypted.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(loaded, payload);
+
+        let range = encrypted.get_range(&path, 9..17).await.unwrap();
+        assert_eq!(range, Bytes::from("provided"));
+
+        let meta = encrypted.head(&path).await.unwrap();
+        assert_eq!(meta.size, payload.len() as u64);
+
+        encrypted.copy(&path, &copy_path).await.unwrap();
+        let copied = encrypted
+            .get(&copy_path)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(copied, payload);
+
+        assert!(unencrypted.get(&path).await.is_err());
+        assert!(wrong.get(&path).await.is_err());
+        assert!(unencrypted.head(&path).await.is_err());
+        assert!(wrong.get_range(&path, 0..8).await.is_err());
+        assert!(unencrypted.get(&copy_path).await.is_err());
+        assert!(wrong.get(&copy_path).await.is_err());
+        let meta = encrypted.head(&copy_path).await.unwrap();
+        assert_eq!(meta.size, payload.len() as u64);
+
+        encrypted.delete(&copy_path).await.unwrap();
+        encrypted.delete(&path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn azure_signed_url_rejects_cpk_configuration() {
+        let store = MicrosoftAzureBuilder::new()
+            .with_account("testaccount")
+            .with_container_name("testcontainer")
+            .with_access_key("Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==")
+            .with_encryption_key(BASE64_STANDARD.encode([7_u8; 32]))
+            .build()
+            .unwrap();
+
+        let err = store
+            .signed_url(
+                Method::GET,
+                &Path::from("file.txt"),
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, crate::Error::NotSupported { .. }));
+        assert!(err.to_string().contains("customer-provided keys"));
+
+        let err = store
+            .signed_urls(
+                Method::GET,
+                &[Path::from("file.txt")],
+                Duration::from_secs(60),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, crate::Error::NotSupported { .. }));
+        assert!(err.to_string().contains("customer-provided keys"));
     }
 
     #[ignore = "Used for manual testing against a real storage account."]

@@ -219,6 +219,7 @@ impl ObjectStore for InMemory {
         Ok(PutResult {
             e_tag: Some(etag.to_string()),
             version: None,
+            extensions: Default::default(),
         })
     }
 
@@ -267,6 +268,7 @@ impl ObjectStore for InMemory {
             attributes: entry.attributes,
             meta,
             range,
+            extensions: Default::default(),
         })
     }
 
@@ -384,6 +386,7 @@ impl ObjectStore for InMemory {
         Ok(ListResult {
             objects,
             common_prefixes: common_prefixes.into_iter().collect(),
+            extensions: Default::default(),
         })
     }
 
@@ -479,6 +482,7 @@ impl MultipartStore for InMemory {
         Ok(PutResult {
             e_tag: Some(etag.to_string()),
             version: None,
+            extensions: Default::default(),
         })
     }
 
@@ -545,6 +549,7 @@ impl MultipartUpload for InMemoryUpload {
         Ok(PutResult {
             e_tag: Some(etag.to_string()),
             version: None,
+            extensions: Default::default(),
         })
     }
 

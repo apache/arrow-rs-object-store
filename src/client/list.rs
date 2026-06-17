@@ -114,16 +114,19 @@ impl<T: ListClient + Clone> ListClientExt for T {
 
         let mut common_prefixes = BTreeSet::new();
         let mut objects = Vec::new();
+        let mut extensions = http::Extensions::new();
 
         while let Some(result) = stream.next().await {
             let response = result?;
             common_prefixes.extend(response.common_prefixes);
             objects.extend(response.objects);
+            extensions.extend(response.extensions);
         }
 
         Ok(ListResult {
             common_prefixes: common_prefixes.into_iter().collect(),
             objects,
+            extensions,
         })
     }
 }

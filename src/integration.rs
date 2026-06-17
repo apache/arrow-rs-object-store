@@ -1472,3 +1472,92 @@ pub async fn list_with_offset_exclusivity(storage: &DynObjectStore) {
     // Clean up
     delete_fixtures(storage).await;
 }
+
+#[cfg(all(
+    feature = "reqwest",
+    not(all(target_arch = "wasm32", target_os = "wasi"))
+))]
+mod marker {
+    use super::*;
+    use crate::ClientOptions;
+    use crate::client::{
+        HttpClient, HttpConnector, HttpError, HttpRequest, HttpResponse, HttpService,
+        ReqwestConnector,
+    };
+    use async_trait::async_trait;
+
+    /// A marker inserted into response extensions by [`MarkerHttpConnector`]
+    #[derive(Clone, Debug, PartialEq)]
+    struct Marker;
+
+    /// [`HttpService`] middleware that tags every response with a [`Marker`]
+    #[derive(Debug)]
+    struct MarkerService(HttpClient);
+
+    #[async_trait]
+    impl HttpService for MarkerService {
+        async fn call(&self, req: HttpRequest) -> Result<HttpResponse, HttpError> {
+            let mut response = self.0.execute(req).await?;
+            response.extensions_mut().insert(Marker);
+            Ok(response)
+        }
+    }
+
+    /// An [`HttpConnector`] that tags the extensions of every HTTP response with a
+    /// marker, allowing [`response_extensions`] to verify their propagation
+    #[derive(Debug, Default)]
+    pub struct MarkerHttpConnector(ReqwestConnector);
+
+    impl HttpConnector for MarkerHttpConnector {
+        fn connect(&self, options: &ClientOptions) -> crate::Result<HttpClient> {
+            let client = self.0.connect(options)?;
+            Ok(HttpClient::new(MarkerService(client)))
+        }
+    }
+
+    /// Tests that the extensions of HTTP responses are propagated to returned results
+    ///
+    /// The provided store must have been built with [`MarkerHttpConnector`]
+    pub async fn response_extensions(storage: &DynObjectStore, test_multipart: bool) {
+        delete_fixtures(storage).await;
+
+        let location = Path::from("test_response_extensions/file.txt");
+        let data = Bytes::from("arbitrary data");
+
+        let put = storage.put(&location, data.clone().into()).await.unwrap();
+        assert!(
+            put.extensions.get::<Marker>().is_some(),
+            "PutResult should contain the response extensions"
+        );
+
+        let get = storage.get(&location).await.unwrap();
+        assert!(
+            get.extensions.get::<Marker>().is_some(),
+            "GetResult should contain the response extensions"
+        );
+
+        let list = storage.list_with_delimiter(None).await.unwrap();
+        assert!(
+            list.extensions.get::<Marker>().is_some(),
+            "ListResult should contain the response extensions"
+        );
+
+        if test_multipart {
+            let mut upload = storage.put_multipart(&location).await.unwrap();
+            upload.put_part(data.into()).await.unwrap();
+            let complete = upload.complete().await.unwrap();
+            assert!(
+                complete.extensions.get::<Marker>().is_some(),
+                "PutResult of a completed multipart upload should contain the response extensions"
+            );
+        }
+
+        delete_fixtures(storage).await;
+    }
+}
+
+#[cfg(all(
+    feature = "reqwest",
+    not(all(target_arch = "wasm32", target_os = "wasi"))
+))]
+pub use marker::{MarkerHttpConnector, response_extensions};
