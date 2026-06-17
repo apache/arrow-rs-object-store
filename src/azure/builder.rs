@@ -1125,14 +1125,14 @@ impl MicrosoftAzureBuilder {
         };
 
         let encryption_headers =
-            AzureEncryptionHeaders::try_new(self.encryption_key).map_err(|source| {
-                Error::InvalidEncryptionKey {
+            AzureEncryptionHeaders::try_new(self.crypto.as_deref(), self.encryption_key).map_err(
+                |source| Error::InvalidEncryptionKey {
                     source: match source {
                         crate::Error::Generic { source, .. } => source,
                         other => Box::new(other),
                     },
-                }
-            })?;
+                },
+            )?;
 
         let config = AzureConfig {
             account,

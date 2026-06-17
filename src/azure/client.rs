@@ -24,8 +24,8 @@ use crate::client::header::{HeaderConfig, get_put_result};
 use crate::client::list::ListClient;
 use crate::client::retry::{RetryContext, RetryExt};
 use crate::client::{
-    CryptoProvider, GetOptionsExt, HttpClient, HttpError, HttpRequest, HttpResponse,
-    crypto_provider,
+    CryptoProvider, DigestAlgorithm, GetOptionsExt, HttpClient, HttpError, HttpRequest,
+    HttpResponse, crypto_provider,
 };
 use crate::list::{PaginatedListOptions, PaginatedListResult};
 use crate::multipart::PartId;
@@ -44,7 +44,6 @@ use http::{
     header::{CONTENT_LENGTH, CONTENT_TYPE, HeaderMap, HeaderValue, IF_MATCH, IF_NONE_MATCH},
 };
 use rand::RngExt;
-use ring::digest;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -254,7 +253,10 @@ impl std::fmt::Debug for AzureEncryptionHeaders {
 }
 
 impl AzureEncryptionHeaders {
-    pub(crate) fn try_new(encryption_key: Option<String>) -> Result<Self> {
+    pub(crate) fn try_new(
+        crypto: Option<&dyn CryptoProvider>,
+        encryption_key: Option<String>,
+    ) -> Result<Self> {
         let Some(encryption_key) = encryption_key else {
             return Ok(Self::default());
         };
@@ -279,8 +281,10 @@ impl AzureEncryptionHeaders {
             });
         }
 
-        let encryption_key_sha256 =
-            BASE64_STANDARD.encode(digest::digest(&digest::SHA256, &decoded_key));
+        let crypto = crypto_provider(crypto)?;
+        let mut ctx = crypto.digest(DigestAlgorithm::Sha256)?;
+        ctx.update(&decoded_key);
+        let encryption_key_sha256 = BASE64_STANDARD.encode(ctx.finish()?);
 
         Ok(Self {
             encryption_key: Some(encryption_key),
@@ -911,7 +915,11 @@ impl AzureClient {
                         signed_expiry,
                         None,
                     )
-                    .sign(crypto_provider(self.crypto())?, &Method::GET, &mut source)?;
+                    .sign(
+                        crypto_provider(self.crypto())?,
+                        &Method::GET,
+                        &mut source,
+                    )?;
                 }
                 Some(AzureCredential::BearerToken(token)) => {
                     source_authorization = Some(format!("Bearer {token}"));
@@ -1604,9 +1612,10 @@ mod tests {
             skip_signature: false,
             disable_tagging: false,
             client_options: Default::default(),
-            encryption_headers: AzureEncryptionHeaders::try_new(Some(
-                BASE64_STANDARD.encode([7_u8; 32]),
-            ))
+            encryption_headers: AzureEncryptionHeaders::try_new(
+                None,
+                Some(BASE64_STANDARD.encode([7_u8; 32])),
+            )
             .unwrap(),
         };
 
@@ -1672,7 +1681,7 @@ Authorization: Bearer static-token\r
     #[test]
     fn test_azure_encryption_headers_debug_redacts_key() {
         let encryption_key = BASE64_STANDARD.encode([7_u8; 32]);
-        let headers = AzureEncryptionHeaders::try_new(Some(encryption_key.clone())).unwrap();
+        let headers = AzureEncryptionHeaders::try_new(None, Some(encryption_key.clone())).unwrap();
         let encryption_key_sha256 = headers.encryption_key_sha256.clone().unwrap();
 
         let debug = format!("{headers:?}");
@@ -1686,7 +1695,7 @@ Authorization: Bearer static-token\r
     #[test]
     fn test_azure_sensitive_headers_redact_client_request_debug() {
         let encryption_key = BASE64_STANDARD.encode([7_u8; 32]);
-        let headers = AzureEncryptionHeaders::try_new(Some(encryption_key.clone())).unwrap();
+        let headers = AzureEncryptionHeaders::try_new(None, Some(encryption_key.clone())).unwrap();
         let encryption_key_sha256 = headers.encryption_key_sha256.clone().unwrap();
         let copy_source = "http://example.com/source.txt?sig=secret-source-sas";
         let source_authorization = "Bearer static-token";
