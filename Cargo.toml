@@ -94,7 +94,7 @@ reqwest = ["dep:reqwest", "reqwest/stream"]
 # Bundled crypto providers.
 # Selecting one provides the default `CryptoProvider`; otherwise a custom
 # provider must be supplied at runtime.
-aws-lc-rs = ["dep:aws-lc-rs", "aws-lc-rs/non-fips", "rustls-pki-types"]
+aws-lc-rs = ["dep:aws-lc-rs", "rustls-pki-types"]
 ring = ["dep:ring", "rustls-pki-types"]
 
 # Implementation base features.
