@@ -47,7 +47,7 @@ use std::time::{Duration, Instant, SystemTime};
 use url::Url;
 
 static AZURE_VERSION: HeaderValue = HeaderValue::from_static("2023-11-03");
-static VERSION: HeaderName = HeaderName::from_static("x-ms-version");
+pub(crate) static VERSION: HeaderName = HeaderName::from_static("x-ms-version");
 pub(crate) static BLOB_TYPE: HeaderName = HeaderName::from_static("x-ms-blob-type");
 pub(crate) static COPY_SOURCE: HeaderName = HeaderName::from_static("x-ms-copy-source");
 static CONTENT_MD5: HeaderName = HeaderName::from_static("content-md5");
@@ -224,9 +224,13 @@ fn add_date_and_version_headers(request: &mut HttpRequest) {
     // we formatted the data string ourselves, so unwrapping should be fine
     let date_val = HeaderValue::from_str(&date_str).unwrap();
     request.headers_mut().insert(DATE, date_val);
-    request
-        .headers_mut()
-        .insert(&VERSION, AZURE_VERSION.clone());
+    // Preserve an explicit per-request override when a call site needs a newer
+    // service version than the backend default.
+    if !request.headers().contains_key(&VERSION) {
+        request
+            .headers_mut()
+            .insert(&VERSION, AZURE_VERSION.clone());
+    }
 }
 
 /// Authorize a [`HttpRequest`] with an [`AzureAuthorizer`]
@@ -1120,6 +1124,7 @@ mod tests {
 
     use super::*;
     use crate::azure::MicrosoftAzureBuilder;
+    use crate::azure::client::RequestVersionExt;
     use crate::client::HttpRequestBody;
     use crate::client::mock_server::MockServer;
     use crate::{ObjectStoreExt, Path};
@@ -1370,5 +1375,23 @@ mod tests {
                 "Should have fetched fresh token from API, not returned expired cached token"
             );
         }
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[test]
+    fn test_azure_authorization_preserves_explicit_version() {
+        let credential = Some(Arc::new(AzureCredential::BearerToken("token".to_string())));
+        let client = HttpClient::new(Client::new());
+
+        let request = client
+            .request(Method::GET, "http://example.com/container/blob")
+            .with_azure_version("2026-02-06")
+            .with_azure_authorization(None, &credential, "account")
+            .unwrap()
+            .into_parts()
+            .1
+            .unwrap();
+
+        assert_eq!(request.headers().get(&VERSION).unwrap(), "2026-02-06");
     }
 }

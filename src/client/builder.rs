@@ -151,18 +151,37 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(feature = "gcp-base")]
-    pub(crate) fn bearer_auth(mut self, token: &str) -> Self {
-        let value = HeaderValue::try_from(format!("Bearer {token}"));
-        match (value, &mut self.request) {
-            (Ok(mut v), Ok(r)) => {
-                v.set_sensitive(true);
-                r.headers_mut().insert(http::header::AUTHORIZATION, v);
+    /// Insert a header whose value is marked [sensitive], so it is redacted from
+    /// the `Debug` representation of the request and any `HeaderValue`.
+    ///
+    /// Used for secret material carried in headers (e.g. Azure customer-provided
+    /// encryption keys) so it cannot leak through diagnostics as well as bearer
+    /// auth tokens by GCP.
+    ///
+    /// [sensitive]: HeaderValue::set_sensitive
+    #[cfg(any(feature = "gcp-base", feature = "azure-base"))]
+    pub(crate) fn sensitive_header<K, V>(mut self, name: K, value: V) -> Self
+    where
+        K: TryInto<HeaderName>,
+        K::Error: Into<RequestBuilderError>,
+        V: TryInto<HeaderValue>,
+        V::Error: Into<RequestBuilderError>,
+    {
+        match (name.try_into(), value.try_into(), &mut self.request) {
+            (Ok(name), Ok(mut value), Ok(r)) => {
+                value.set_sensitive(true);
+                r.headers_mut().insert(name, value);
             }
-            (Err(e), Ok(_)) => self.request = Err(e.into()),
-            (_, Err(_)) => {}
+            (Err(e), _, Ok(_)) => self.request = Err(e.into()),
+            (_, Err(e), Ok(_)) => self.request = Err(e.into()),
+            (_, _, Err(_)) => {}
         }
         self
+    }
+
+    #[cfg(feature = "gcp-base")]
+    pub(crate) fn bearer_auth(self, token: &str) -> Self {
+        self.sensitive_header(http::header::AUTHORIZATION, format!("Bearer {token}"))
     }
 
     #[cfg(feature = "gcp-base")]
