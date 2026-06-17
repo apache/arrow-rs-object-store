@@ -253,6 +253,10 @@ impl<'a> AzureAuthorizer<'a> {
         self
     }
 
+    fn crypto(&self) -> crate::Result<&dyn CryptoProvider> {
+        crypto_provider(self.crypto)
+    }
+
     /// Authorize `request`
     ///
     /// # Panics
@@ -265,12 +269,11 @@ impl<'a> AzureAuthorizer<'a> {
 
     /// Authorize `request`
     pub fn try_authorize(&self, request: &mut HttpRequest) -> crate::Result<()> {
-        let crypto = crypto_provider(self.crypto)?;
-
         add_date_and_version_headers(request);
 
         match self.credential {
             AzureCredential::AccessKey(key) => {
+                let crypto = self.crypto()?;
                 let url = Url::parse(&request.uri().to_string()).unwrap();
                 let signature = generate_authorization(
                     crypto,
@@ -325,9 +328,11 @@ impl CredentialExt for HttpRequestBuilder {
 
         match credential.as_deref() {
             Some(credential) => {
-                AzureAuthorizer::new(credential, account)
-                    .with_crypto(crypto_provider(crypto)?)
-                    .try_authorize(&mut request)?;
+                let mut authorizer = AzureAuthorizer::new(credential, account);
+                if let Some(crypto) = crypto {
+                    authorizer = authorizer.with_crypto(crypto);
+                }
+                authorizer.try_authorize(&mut request)?;
             }
             None => {
                 add_date_and_version_headers(&mut request);
@@ -1115,6 +1120,7 @@ mod tests {
 
     use super::*;
     use crate::azure::MicrosoftAzureBuilder;
+    use crate::client::HttpRequestBody;
     use crate::client::mock_server::MockServer;
     use crate::{ObjectStoreExt, Path};
 
@@ -1262,6 +1268,48 @@ mod tests {
                 panic!("unexpected response");
             }
         }
+    }
+
+    #[test]
+    fn bearer_authorization_does_not_require_crypto_provider() {
+        let credential = Some(Arc::new(AzureCredential::BearerToken("TOKEN".into())));
+        let builder = HttpRequestBuilder::new(HttpClient::new(Client::new()))
+            .method(Method::GET)
+            .uri("https://account.blob.core.windows.net/container/file.txt")
+            .body(HttpRequestBody::empty())
+            .with_azure_authorization(None, &credential, "account")
+            .unwrap();
+
+        let (_, request) = builder.into_parts();
+        let request = request.unwrap();
+        assert_eq!(
+            request.headers().get(AUTHORIZATION).unwrap(),
+            "Bearer TOKEN"
+        );
+        assert!(request.headers().contains_key(&DATE));
+        assert!(request.headers().contains_key(&VERSION));
+    }
+
+    #[test]
+    fn sas_authorization_does_not_require_crypto_provider() {
+        let credential = Some(Arc::new(AzureCredential::SASToken(vec![
+            ("sig".into(), "signature".into()),
+            ("se".into(), "expiry".into()),
+        ])));
+        let builder = HttpRequestBuilder::new(HttpClient::new(Client::new()))
+            .method(Method::GET)
+            .uri("https://account.blob.core.windows.net/container/file.txt")
+            .body(HttpRequestBody::empty())
+            .with_azure_authorization(None, &credential, "account")
+            .unwrap();
+
+        let (_, request) = builder.into_parts();
+        let request = request.unwrap();
+        let query = request.uri().query().unwrap();
+        assert!(query.contains("sig=signature"));
+        assert!(query.contains("se=expiry"));
+        assert!(request.headers().contains_key(&DATE));
+        assert!(request.headers().contains_key(&VERSION));
     }
 
     #[cfg(feature = "reqwest")]

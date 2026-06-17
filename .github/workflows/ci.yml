@@ -39,25 +39,35 @@ jobs:
       - uses: actions/checkout@v6
       - name: Setup Clippy
         run: rustup component add clippy
-      - name: Check no crypto crates
+      - name: Verify base features do not enable TLS/signing crypto crates
         # `--prefix none -f '{p}'` prints one `name vX.Y.Z` per line, so the
         # crate name can be anchored with `^`. Avoid `\b`, which is not
         # portable (e.g. BSD grep) and would also substring-match crates like
         # `iri-string`.
         run: |
-          found=$(cargo tree --no-default-features --features gcp-base,aws-base,azure-base,http-base --prefix none -f '{p}' \
-            | grep -E '^(ring|openssl|aws-lc-rs) v' | sort -u || true)
+          found=$(cargo tree --no-default-features --features aws-base,azure-base,gcp-base,http-base --edges normal --prefix none -f '{p}' \
+            | grep -E '^(aws-lc-rs|aws-lc-sys|native-tls|openssl|ring|rustls) v' | sort -u || true)
           if [ -n "$found" ]; then
             echo "❌ disallowed crate(s) found:"
             echo "$found"
             exit 1
           fi
-          echo "✅ no ring/openssl/aws-lc-rs crates"
+          echo "✅ no TLS/signing crypto crates"
+      - name: Verify base features do not enable reqwest
+        run: |
+          found=$(cargo tree --no-default-features --features aws-base,azure-base,gcp-base,http-base --edges normal --prefix none -f '{p}' \
+            | grep -E '^reqwest v' | sort -u || true)
+          if [ -n "$found" ]; then
+            echo "❌ reqwest must not be enabled by *-base features:"
+            echo "$found"
+            exit 1
+          fi
+          echo "✅ *-base features do not enable reqwest"
       - name: Check ring build does not pull aws-lc-rs
         # A `ring` build (with a non-aws-lc-rs reqwest TLS backend) must be free
         # of aws-lc-rs entirely, so users can opt out of it on every target.
         run: |
-          found=$(cargo tree --no-default-features --features aws-base,azure-base,gcp-base,http-base,reqwest,reqwest/native-tls,ring --prefix none -f '{p}' \
+          found=$(cargo tree --no-default-features --features aws-base,azure-base,gcp-base,http-base,reqwest,reqwest/native-tls,ring --edges normal --prefix none -f '{p}' \
             | grep -E '^(aws-lc-rs|aws-lc-sys) v' | sort -u || true)
           if [ -n "$found" ]; then
             echo "❌ aws-lc-rs pulled into a ring-only build:"
@@ -65,6 +75,19 @@ jobs:
             exit 1
           fi
           echo "✅ ring build is free of aws-lc-rs"
+      - name: Check batteries-included features do not pull ring
+        # The batteries-included features use reqwest/rustls, which uses aws-lc-rs
+        # for TLS by default. Keep object_store's default bundled crypto provider
+        # aligned with that choice by ensuring these features don't pull ring.
+        run: |
+          found=$(cargo tree --no-default-features --features aws,azure,gcp,http --edges normal --prefix none -f '{p}' \
+            | grep -E '^ring v' | sort -u || true)
+          if [ -n "$found" ]; then
+            echo "❌ batteries-included features pulled ring:"
+            echo "$found"
+            exit 1
+          fi
+          echo "✅ batteries-included features are free of ring"
       # Run different tests for the library on its own as well as
       # all targets to ensure that it still works in the absence of
       # features that might be enabled by dev-dependencies of other
@@ -91,24 +114,18 @@ jobs:
         run: cargo clippy --no-default-features --features gcp-base -- -D warnings
       - name: Run clippy with http-base feature
         run: cargo clippy --no-default-features --features http-base -- -D warnings
-      # `reqwest` needs a TLS backend; use
-      # `rustls-no-provider` here so these checks stay free of aws-lc-rs
-      - name: Run clippy with base features, reqwest and ring crypto
+      # Direct `reqwest` needs a TLS backend. Use `rustls-no-provider` so TLS
+      # does not add AWS-LC to ring/custom CryptoProvider checks.
+      - name: Run clippy with base features, reqwest and ring CryptoProvider
         run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base,reqwest,reqwest/rustls-no-provider,ring -- -D warnings
-      - name: Run clippy with base features and reqwest but no bundled crypto
+      - name: Run clippy with base features, reqwest and no bundled CryptoProvider
         run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base,reqwest,reqwest/rustls-no-provider -- -D warnings
-      - name: Verify base features do not enable reqwest
-        run: |
-          if cargo tree \
-            --no-default-features \
-            --features aws-base,azure-base,gcp-base,http-base \
-            --edges normal \
-            --prefix none \
-            -f '{p}' \
-            | grep -E '^reqwest v'; then
-            echo "reqwest must not be enabled by *-base features"
-            exit 1
-          fi
+      - name: Run clippy with base features, custom HTTP and aws-lc-rs CryptoProvider
+        run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base,aws-lc-rs -- -D warnings
+      - name: Run clippy with base features, custom HTTP and ring CryptoProvider
+        run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base,ring -- -D warnings
+      - name: Run clippy with base features, custom HTTP and no bundled CryptoProvider
+        run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base -- -D warnings
       - name: Run clippy with integration feature
         run: cargo clippy --no-default-features --features integration -- -D warnings
       - name: Run clippy with all features
