@@ -610,8 +610,8 @@
 //! When enabling the `aws-lc-rs` feature without the built-in `reqwest`
 //! transport (e.g. `aws-base` + `aws-lc-rs` with a custom [`HttpConnector`]),
 //! you must also select an [`aws-lc-rs`] backend, as `object_store` does not
-//! pick one for you. For example enable `aws-lc-rs/aws-lc-sys` (or `fips` /
-//! `non-fips`). 
+//! pick one for you.
+//! For example enable `aws-lc-rs/aws-lc-sys` (or `fips` / `non-fips`). 
 //!
 //! If both `ring` and `aws-lc-rs` are enabled, `aws-lc-rs` is used by default.
 //!
