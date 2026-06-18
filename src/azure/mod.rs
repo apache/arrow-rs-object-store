@@ -27,7 +27,7 @@
 //! Unused blocks will automatically be dropped after 7 days.
 //!
 use crate::{
-    CopyMode, CopyOptions, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
+    CopyMode, CopyOptions, Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
     ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
     UploadPart,
     multipart::{MultipartStore, PartId},
@@ -308,6 +308,26 @@ impl MultipartStore for MicrosoftAzure {
         Ok(String::new())
     }
 
+    async fn create_multipart_opts(
+        &self,
+        path: &Path,
+        opts: PutMultipartOptions,
+    ) -> Result<MultipartId> {
+        let PutMultipartOptions {
+            tags,
+            attributes,
+            extensions: _,
+        } = opts;
+
+        if !tags.is_empty() || !attributes.is_empty() {
+            return Err(Error::NotSupported {
+                source: "`create_multipart_opts` with non-default options is not supported by MicrosoftAzure".into(),
+            });
+        }
+
+        self.create_multipart(path).await
+    }
+
     async fn put_part(
         &self,
         path: &Path,
@@ -353,12 +373,33 @@ mod tests {
     use crate::ObjectStoreExt;
     use crate::integration::*;
     use crate::tests::*;
+    use crate::{Attribute, Attributes};
     use base64::Engine;
     use base64::prelude::BASE64_STANDARD;
     use bytes::Bytes;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn azure_create_multipart_opts_rejects_attributes() {
+        let integration = MicrosoftAzureBuilder::new()
+            .with_container_name("test")
+            .with_use_emulator(true)
+            .build()
+            .unwrap();
+        let opts = PutMultipartOptions {
+            attributes: Attributes::from_iter([(Attribute::Metadata("key".into()), "value")]),
+            ..Default::default()
+        };
+
+        let err = integration
+            .create_multipart_opts(&Path::from("test"), opts)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, Error::NotSupported { .. }));
+    }
+
     #[tokio::test]
     async fn azure_blob_test() {
         maybe_skip_integration!();

@@ -236,6 +236,14 @@ impl MultipartStore for GoogleCloudStorage {
             .await
     }
 
+    async fn create_multipart_opts(
+        &self,
+        path: &Path,
+        opts: PutMultipartOptions,
+    ) -> Result<MultipartId> {
+        self.client.multipart_initiate(path, opts).await
+    }
+
     async fn put_part(
         &self,
         path: &Path,
@@ -335,6 +343,7 @@ mod test {
             // https://github.com/fsouza/fake-gcs-server/issues/852
             stream_get(&integration).await;
             multipart(&integration, &integration).await;
+            multipart_with_opts(&integration, &integration).await;
             multipart_put_part_out_of_order(&integration, &integration).await;
             multipart_race_condition(&integration, true).await;
             multipart_out_of_order(&integration).await;

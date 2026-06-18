@@ -490,6 +490,14 @@ impl MultipartStore for AmazonS3 {
             .await
     }
 
+    async fn create_multipart_opts(
+        &self,
+        path: &Path,
+        opts: PutMultipartOptions,
+    ) -> Result<MultipartId> {
+        self.client.create_multipart(path, opts).await
+    }
+
     async fn put_part(
         &self,
         path: &Path,
@@ -703,6 +711,7 @@ mod tests {
         rename_and_copy(&integration).await;
         stream_get(&integration).await;
         multipart(&integration, &integration).await;
+        multipart_with_opts(&integration, &integration).await;
         multipart_put_part_out_of_order(&integration, &integration).await;
         multipart_race_condition(&integration, true).await;
         multipart_out_of_order(&integration).await;

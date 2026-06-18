@@ -29,7 +29,8 @@ use crate::multipart::MultipartStore;
 use crate::path::Path;
 use crate::{
     Attribute, Attributes, DynObjectStore, Error, GetOptions, GetRange, MultipartUpload,
-    ObjectStore, ObjectStoreExt, PutMode, PutPayload, UpdateVersion, WriteMultipart,
+    ObjectStore, ObjectStoreExt, PutMode, PutMultipartOptions, PutPayload, UpdateVersion,
+    WriteMultipart,
 };
 use bytes::Bytes;
 use futures_util::stream::FuturesUnordered;
@@ -1051,6 +1052,41 @@ pub async fn multipart(storage: &dyn ObjectStore, multipart: &dyn MultipartStore
 
     let meta = storage.head(&path).await.unwrap();
     assert_eq!(meta.size, 0);
+}
+
+/// Tests [`MultipartStore::create_multipart_opts`]
+pub async fn multipart_with_opts(storage: &dyn ObjectStore, multipart: &dyn MultipartStore) {
+    let path = Path::from("test_multipart_with_opts");
+    let chunk_size = 5 * 1024 * 1024;
+    let chunks = get_chunks(chunk_size, 2);
+    let attributes =
+        Attributes::from_iter([(Attribute::Metadata("test_key".into()), "test_value")]);
+    let opts = PutMultipartOptions {
+        attributes: attributes.clone(),
+        ..Default::default()
+    };
+
+    let id = multipart.create_multipart_opts(&path, opts).await.unwrap();
+
+    let parts: Vec<_> = futures_util::stream::iter(chunks)
+        .enumerate()
+        .map(|(idx, b)| multipart.put_part(&path, &id, idx, b.into()))
+        .buffered(2)
+        .try_collect()
+        .await
+        .unwrap();
+
+    multipart
+        .complete_multipart(&path, &id, parts)
+        .await
+        .unwrap();
+
+    let result = storage.get(&path).await.unwrap();
+    assert_eq!(result.meta.size, chunk_size as u64 * 2);
+    // Some providers add default attributes, e.g. S3 may report a default Content-Type.
+    for (attribute, value) in &attributes {
+        assert_eq!(result.attributes.get(attribute), Some(value));
+    }
 }
 
 /// Tests that [`MultipartStore::put_part`] may be invoked with non-sequential part indices.
