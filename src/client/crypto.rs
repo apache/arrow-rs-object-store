@@ -18,7 +18,7 @@
 use crate::Result;
 
 /// Algorithm for computing digests
-#[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Clone, Copy)]
 #[non_exhaustive]
 pub enum DigestAlgorithm {
     /// SHA-256
@@ -26,7 +26,7 @@ pub enum DigestAlgorithm {
 }
 
 /// Algorithm for signing payloads
-#[derive(Debug, Ord, PartialOrd, Eq, PartialEq)]
+#[derive(Debug, Ord, PartialOrd, Eq, PartialEq, Clone, Copy)]
 #[non_exhaustive]
 pub enum SigningAlgorithm {
     /// RSASSA-PKCS1-v1_5 using SHA-256
@@ -35,40 +35,14 @@ pub enum SigningAlgorithm {
 
 /// Provides cryptographic primitives
 pub trait CryptoProvider: std::fmt::Debug + Send + Sync {
-    /// Compute a digest
-    fn digest(&self, algorithm: DigestAlgorithm) -> Result<Box<dyn DigestContext>>;
+    /// Compute the digest of `data`
+    fn digest(&self, algorithm: DigestAlgorithm, data: &[&[u8]]) -> Result<Vec<u8>>;
 
-    /// Compute an HMAC with the provided `secret`
-    fn hmac(&self, algorithm: DigestAlgorithm, secret: &[u8]) -> Result<Box<dyn HmacContext>>;
+    /// Compute the HMAC of `data` with the provided `secret`
+    fn hmac(&self, algorithm: DigestAlgorithm, secret: &[u8], data: &[u8]) -> Result<Vec<u8>>;
 
     /// Sign a payload with the provided PEM-encoded secret
     fn sign(&self, algorithm: SigningAlgorithm, pem: &[u8]) -> Result<Box<dyn Signer>>;
-}
-
-/// Incrementally compute a digest, see [`CryptoProvider::digest`]
-pub trait DigestContext: Send {
-    /// Updates the digest with all the data in data.
-    ///
-    /// It is implementation-defined behaviour to call this after calling [`Self::finish`]
-    fn update(&mut self, data: &[u8]);
-
-    /// Finalizes the digest calculation and returns the digest value.
-    ///
-    /// It is implementation-defined behaviour to call this after calling [`Self::finish`]
-    fn finish(&mut self) -> Result<&[u8]>;
-}
-
-/// Incrementally compute a HMAC, see [`CryptoProvider::hmac`]
-pub trait HmacContext: Send {
-    /// Updates the HMAC with all the data in data.
-    ///
-    /// It is implementation-defined behaviour to call this after calling [`Self::finish`]
-    fn update(&mut self, data: &[u8]);
-
-    /// Finalizes the HMAC calculation and returns the HMAC value.
-    ///
-    /// It is implementation-defined behaviour to call this after calling [`Self::finish`]
-    fn finish(&mut self) -> Result<&[u8]>;
 }
 
 /// Sign a payload, see [`CryptoProvider::sign`]
@@ -150,64 +124,30 @@ pub(crate) mod ring {
     }
 
     impl CryptoProvider for RingCryptoProvider {
-        fn digest(&self, algorithm: DigestAlgorithm) -> Result<Box<dyn DigestContext>> {
+        fn digest(&self, algorithm: DigestAlgorithm, data: &[&[u8]]) -> Result<Vec<u8>> {
             let algorithm = match algorithm {
                 DigestAlgorithm::Sha256 => &digest::SHA256,
             };
-            let ctx = digest::Context::new(algorithm);
-            Ok(Box::new(RingDigestContext {
-                ctx: Some(ctx),
-                out: None,
-            }))
+            let mut ctx = digest::Context::new(algorithm);
+            for chunk in data {
+                ctx.update(chunk);
+            }
+            Ok(ctx.finish().as_ref().to_vec())
         }
 
-        fn hmac(&self, algorithm: DigestAlgorithm, secret: &[u8]) -> Result<Box<dyn HmacContext>> {
+        fn hmac(&self, algorithm: DigestAlgorithm, secret: &[u8], data: &[u8]) -> Result<Vec<u8>> {
             let algorithm = match algorithm {
                 DigestAlgorithm::Sha256 => hmac::HMAC_SHA256,
             };
             let ctx = hmac::Context::with_key(&hmac::Key::new(algorithm, secret));
-            Ok(Box::new(RingHmacContext {
-                ctx: Some(ctx),
-                out: None,
-            }))
+            ctx.update(data);
+            Ok(ctx.sign().as_ref().to_vec())
         }
 
         fn sign(&self, algorithm: SigningAlgorithm, pem: &[u8]) -> Result<Box<dyn Signer>> {
             match algorithm {
                 SigningAlgorithm::RS256 => Ok(Box::new(RsaKeyPair::from_pem(pem)?)),
             }
-        }
-    }
-
-    struct RingDigestContext {
-        ctx: Option<digest::Context>,
-        out: Option<digest::Digest>,
-    }
-
-    impl DigestContext for RingDigestContext {
-        fn update(&mut self, data: &[u8]) {
-            self.ctx.as_mut().unwrap().update(data);
-        }
-
-        fn finish(&mut self) -> Result<&[u8]> {
-            let digest = self.ctx.take().unwrap().finish();
-            Ok(digest::Digest::as_ref(self.out.insert(digest)))
-        }
-    }
-
-    struct RingHmacContext {
-        ctx: Option<hmac::Context>,
-        out: Option<hmac::Tag>,
-    }
-
-    impl HmacContext for RingHmacContext {
-        fn update(&mut self, data: &[u8]) {
-            self.ctx.as_mut().unwrap().update(data);
-        }
-
-        fn finish(&mut self) -> Result<&[u8]> {
-            let tag = self.ctx.take().unwrap().sign();
-            Ok(hmac::Tag::as_ref(self.out.insert(tag)))
         }
     }
 
@@ -302,64 +242,30 @@ pub(crate) mod aws_lc_rs {
     }
 
     impl CryptoProvider for AwsLcCryptoProvider {
-        fn digest(&self, algorithm: DigestAlgorithm) -> Result<Box<dyn DigestContext>> {
+        fn digest(&self, algorithm: DigestAlgorithm, data: &[&[u8]]) -> Result<Vec<u8>> {
             let algorithm = match algorithm {
                 DigestAlgorithm::Sha256 => &digest::SHA256,
             };
-            let ctx = digest::Context::new(algorithm);
-            Ok(Box::new(AwsLcDigestContext {
-                ctx: Some(ctx),
-                out: None,
-            }))
+            let mut ctx = digest::Context::new(algorithm);
+            for chunk in data {
+                ctx.update(chunk);
+            }
+            Ok(ctx.finish().as_ref().to_vec())
         }
 
-        fn hmac(&self, algorithm: DigestAlgorithm, secret: &[u8]) -> Result<Box<dyn HmacContext>> {
+        fn hmac(&self, algorithm: DigestAlgorithm, secret: &[u8], data: &[u8]) -> Result<Vec<u8>> {
             let algorithm = match algorithm {
                 DigestAlgorithm::Sha256 => hmac::HMAC_SHA256,
             };
-            let ctx = hmac::Context::with_key(&hmac::Key::new(algorithm, secret));
-            Ok(Box::new(AwsLcHmacContext {
-                ctx: Some(ctx),
-                out: None,
-            }))
+            let mut ctx = hmac::Context::with_key(&hmac::Key::new(algorithm, secret));
+            ctx.update(data);
+            Ok(ctx.sign().as_ref().to_vec())
         }
 
         fn sign(&self, algorithm: SigningAlgorithm, pem: &[u8]) -> Result<Box<dyn Signer>> {
             match algorithm {
                 SigningAlgorithm::RS256 => Ok(Box::new(RsaKeyPair::from_pem(pem)?)),
             }
-        }
-    }
-
-    struct AwsLcDigestContext {
-        ctx: Option<digest::Context>,
-        out: Option<digest::Digest>,
-    }
-
-    impl DigestContext for AwsLcDigestContext {
-        fn update(&mut self, data: &[u8]) {
-            self.ctx.as_mut().unwrap().update(data);
-        }
-
-        fn finish(&mut self) -> Result<&[u8]> {
-            let digest = self.ctx.take().unwrap().finish();
-            Ok(digest::Digest::as_ref(self.out.insert(digest)))
-        }
-    }
-
-    struct AwsLcHmacContext {
-        ctx: Option<hmac::Context>,
-        out: Option<hmac::Tag>,
-    }
-
-    impl HmacContext for AwsLcHmacContext {
-        fn update(&mut self, data: &[u8]) {
-            self.ctx.as_mut().unwrap().update(data);
-        }
-
-        fn finish(&mut self) -> Result<&[u8]> {
-            let tag = self.ctx.take().unwrap().sign();
-            Ok(hmac::Tag::as_ref(self.out.insert(tag)))
         }
     }
 
