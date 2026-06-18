@@ -72,6 +72,7 @@
 
 **Merged pull requests:**
 
+- Clarify aws-lc-rs feature docs and fix CI comment URL [\#764](https://github.com/apache/arrow-rs-object-store/pull/764) ([alamb](https://github.com/alamb))
 - fix\(local\): fsync create-mode rename source delete [\#758](https://github.com/apache/arrow-rs-object-store/pull/758) ([kevinjqliu](https://github.com/kevinjqliu))
 - Fix flaky local close-file tests [\#757](https://github.com/apache/arrow-rs-object-store/pull/757) ([kevinjqliu](https://github.com/kevinjqliu))
 - build\(deps\): update itertools requirement from 0.14.0 to 0.15.0 [\#755](https://github.com/apache/arrow-rs-object-store/pull/755) ([dependabot[bot]](https://github.com/apps/dependabot))
