@@ -19,12 +19,13 @@
 
 # Changelog
 
-## [v0.13.2](https://github.com/apache/arrow-rs-object-store/tree/v0.13.2) (2026-06-18)
+## [v0.14.0](https://github.com/apache/arrow-rs-object-store/tree/v0.14.0) (2026-06-18)
 
-[Full Changelog](https://github.com/apache/arrow-rs-object-store/compare/v0.13.2...v0.13.2)
+[Full Changelog](https://github.com/apache/arrow-rs-object-store/compare/v0.13.2...v0.14.0)
 
 **Breaking changes:**
 
+- refactor!: remove `cloud` feature alias [\#751](https://github.com/apache/arrow-rs-object-store/pull/751) ([kevinjqliu](https://github.com/kevinjqliu))
 - Add `Extensions` in `*Result` objects [\#743](https://github.com/apache/arrow-rs-object-store/pull/743) ([criccomini](https://github.com/criccomini))
 - Make `reqwest` optional [\#724](https://github.com/apache/arrow-rs-object-store/pull/724) ([awesterb](https://github.com/awesterb))
 - Pluggable Crypto / Update reqwest 0.13 [\#707](https://github.com/apache/arrow-rs-object-store/pull/707) ([goffrie](https://github.com/goffrie))
@@ -78,7 +79,6 @@
 - build\(deps\): update itertools requirement from 0.14.0 to 0.15.0 [\#755](https://github.com/apache/arrow-rs-object-store/pull/755) ([dependabot[bot]](https://github.com/apps/dependabot))
 - Support PutMultipartOptions for MultipartStore::create\_multipart for AWS/GCP. [\#754](https://github.com/apache/arrow-rs-object-store/pull/754) ([BearMinimum98](https://github.com/BearMinimum98))
 - Use path-style URL in `resolve_bucket_region` for dotted bucket names [\#752](https://github.com/apache/arrow-rs-object-store/pull/752) ([brankogrb-db](https://github.com/brankogrb-db))
-- refactor!: remove `cloud` feature alias [\#751](https://github.com/apache/arrow-rs-object-store/pull/751) ([kevinjqliu](https://github.com/kevinjqliu))
 - docs: explain `*-base` features and document the full feature flag set [\#750](https://github.com/apache/arrow-rs-object-store/pull/750) ([kevinjqliu](https://github.com/kevinjqliu))
 - ci: use --locked when installing cargo-msrv and cargo-audit [\#746](https://github.com/apache/arrow-rs-object-store/pull/746) ([kevinjqliu](https://github.com/kevinjqliu))
 - Supporting CPK \(Customer Provided Keys\) in Azure Blob Storage requests [\#742](https://github.com/apache/arrow-rs-object-store/pull/742) ([Braedon-Wooding-Displayr](https://github.com/Braedon-Wooding-Displayr))
