@@ -139,7 +139,7 @@ pub(crate) mod ring {
             let algorithm = match algorithm {
                 DigestAlgorithm::Sha256 => hmac::HMAC_SHA256,
             };
-            let ctx = hmac::Context::with_key(&hmac::Key::new(algorithm, secret));
+            let mut ctx = hmac::Context::with_key(&hmac::Key::new(algorithm, secret));
             ctx.update(data);
             Ok(ctx.sign().as_ref().to_vec())
         }
