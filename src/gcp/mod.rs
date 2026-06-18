@@ -52,7 +52,7 @@ use crate::{
 use async_trait::async_trait;
 use client::GoogleCloudStorageClient;
 use futures_util::stream::{BoxStream, StreamExt};
-use http::Method;
+use http::{HeaderMap, HeaderName, HeaderValue, Method};
 use url::Url;
 
 use crate::client::get::GetClientExt;
@@ -271,6 +271,24 @@ impl MultipartStore for GoogleCloudStorage {
 #[async_trait]
 impl Signer for GoogleCloudStorage {
     async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
+        self.signed_url_with(method, path, &[], &[], expires_in)
+            .await
+    }
+
+    /// Create a signed URL, additionally folding `extra_query` parameters and `signed_headers`
+    /// into the signature.
+    ///
+    /// `extra_query` lets callers sign query parameters the recipient must send, and
+    /// `signed_headers` binds request headers (e.g. `content-type`) to the signature; the
+    /// recipient must send exactly these headers and values.
+    async fn signed_url_with(
+        &self,
+        method: Method,
+        path: &Path,
+        extra_query: &[(String, String)],
+        signed_headers: &[(String, String)],
+        expires_in: Duration,
+    ) -> Result<Url> {
         if expires_in.as_secs() > 604800 {
             return Err(crate::Error::Generic {
                 store: STORE,
@@ -285,12 +303,36 @@ impl Signer for GoogleCloudStorage {
             source: format!("Unable to parse url {path_url}: {e}").into(),
         })?;
 
+        // Validate the caller-provided headers up front so an invalid name/value is surfaced
+        // as a clear error rather than panicking during signing.
+        let mut headers = HeaderMap::with_capacity(signed_headers.len());
+        for (name, value) in signed_headers {
+            let name =
+                HeaderName::from_bytes(name.as_bytes()).map_err(|e| crate::Error::Generic {
+                    store: STORE,
+                    source: format!("Invalid header name {name:?}: {e}").into(),
+                })?;
+            let value = HeaderValue::from_str(value).map_err(|e| crate::Error::Generic {
+                store: STORE,
+                source: format!("Invalid value for header {name:?}: {e}").into(),
+            })?;
+            headers.append(name, value);
+        }
+
         let signing_credentials = self.signing_credentials().get_credential().await?;
         let authorizer = GCSAuthorizer::new(signing_credentials);
 
         let crypto = crypto_provider(self.client.config().crypto.as_deref())?;
         authorizer
-            .sign(crypto, method, &mut url, expires_in, &self.client)
+            .sign_with(
+                crypto,
+                method,
+                &mut url,
+                extra_query,
+                &headers,
+                expires_in,
+                &self.client,
+            )
             .await?;
 
         Ok(url)

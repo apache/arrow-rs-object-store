@@ -759,11 +759,23 @@ impl GCSAuthorizer {
         }
     }
 
-    pub(crate) async fn sign(
+    /// Generate a signed URL, additionally folding `extra_query` parameters and `signed_headers`
+    /// into the [Google SigV4] signature.
+    ///
+    /// `extra_query` lets callers sign query parameters the recipient must send (e.g. an upload
+    /// `partNumber`/`uploadId`), and `signed_headers` binds request headers (e.g. `content-type`)
+    /// to the signature. For a signed URL these values are fixed at signing time. The mandatory
+    /// `host` header is always signed.
+    ///
+    /// [Google SigV4]: https://cloud.google.com/storage/docs/access-control/signed-urls
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn sign_with(
         &self,
         crypto: &dyn CryptoProvider,
         method: Method,
         url: &mut Url,
+        extra_query: &[(String, String)],
+        signed_headers: &HeaderMap,
         expires_in: Duration,
         client: &GoogleCloudStorageClient,
     ) -> crate::Result<()> {
@@ -772,8 +784,22 @@ impl GCSAuthorizer {
         let scope = self.scope(date);
         let credential_with_scope = format!("{email}/{scope}");
 
-        let mut headers = HeaderMap::new();
+        // Append any caller-provided query parameters before signing so they are folded into
+        // the canonical query string and become part of the signature.
+        if !extra_query.is_empty() {
+            let mut query = url.query_pairs_mut();
+            for (key, value) in extra_query {
+                query.append_pair(key, value);
+            }
+        }
+
+        // The `host` header is always signed; callers may bind additional headers whose values
+        // are committed to the signature at signing time.
+        let mut headers = HeaderMap::with_capacity(1 + signed_headers.len());
         headers.insert("host", DEFAULT_GCS_SIGN_BLOB_HOST.parse().unwrap());
+        for (name, value) in signed_headers {
+            headers.append(name.clone(), value.clone());
+        }
 
         let (_, signed_headers) = Self::canonicalize_headers(&headers);
 
@@ -931,6 +957,7 @@ mod tests {
         ClientOptions, DigestAlgorithm, DigestContext, HmacContext, StaticCredentialProvider,
     };
     use crate::gcp::client::{GoogleCloudStorageClient, GoogleCloudStorageConfig};
+    use http::{HeaderName, HeaderValue};
 
     const SIGNATURE_BYTES: &[u8] = &[0x00, 0x01, 0x02, 0xab, 0xcd];
 
@@ -1038,10 +1065,12 @@ mod tests {
             GoogleCloudStorageClient::new(config, HttpClient::new(UnusedHttpService)).unwrap();
         let mut url = Url::parse("https://storage.googleapis.com/bucket/object").unwrap();
 
-        futures_executor::block_on(authorizer.sign(
+        futures_executor::block_on(authorizer.sign_with(
             &FixedCryptoProvider,
             Method::GET,
             &mut url,
+            &[],
+            &HeaderMap::new(),
             Duration::from_secs(60),
             &client,
         ))
@@ -1053,6 +1082,64 @@ mod tests {
             .unwrap()
             .1;
         assert_eq!(signature, hex_encode(SIGNATURE_BYTES));
+    }
+
+    #[test]
+    fn signed_url_with_folds_query_and_headers() {
+        let signing_credential = Arc::new(GcpSigningCredential {
+            email: "service-account@example.com".into(),
+            private_key: Some(ServiceAccountKey::new(Box::new(FixedSigner))),
+        });
+        let authorizer = GCSAuthorizer::new(Arc::clone(&signing_credential));
+        let config = GoogleCloudStorageConfig {
+            base_url: DEFAULT_GCS_BASE_URL.into(),
+            credentials: Arc::new(StaticCredentialProvider::new(GcpCredential {
+                bearer: "bearer".into(),
+            })),
+            signing_credentials: Arc::new(StaticCredentialProvider::new(GcpSigningCredential {
+                email: "service-account@example.com".into(),
+                private_key: None,
+            })),
+            crypto: None,
+            bucket_name: "bucket".into(),
+            retry_config: RetryConfig::default(),
+            client_options: ClientOptions::default(),
+            skip_signature: false,
+        };
+        let client =
+            GoogleCloudStorageClient::new(config, HttpClient::new(UnusedHttpService)).unwrap();
+        let mut url = Url::parse("https://storage.googleapis.com/bucket/object").unwrap();
+
+        let mut signed_headers = HeaderMap::new();
+        signed_headers.insert(
+            HeaderName::from_static("content-type"),
+            HeaderValue::from_static("text/plain"),
+        );
+
+        futures_executor::block_on(authorizer.sign_with(
+            &FixedCryptoProvider,
+            Method::PUT,
+            &mut url,
+            &[
+                ("partNumber".to_string(), "1".to_string()),
+                ("uploadId".to_string(), "abc123".to_string()),
+            ],
+            &signed_headers,
+            Duration::from_secs(60),
+            &client,
+        ))
+        .unwrap();
+
+        let pairs: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+        // Caller-provided query parameters are present in the signed URL.
+        assert_eq!(pairs.get("partNumber").map(String::as_str), Some("1"));
+        assert_eq!(pairs.get("uploadId").map(String::as_str), Some("abc123"));
+        // The extra header is reflected in X-Goog-SignedHeaders, sorted alongside `host`.
+        assert_eq!(
+            pairs.get("X-Goog-SignedHeaders").map(String::as_str),
+            Some("content-type;host")
+        );
+        assert!(pairs.contains_key("X-Goog-Signature"));
     }
 
     #[test]
