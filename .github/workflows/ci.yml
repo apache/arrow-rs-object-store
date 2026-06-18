@@ -36,7 +36,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Setup Clippy
         run: rustup component add clippy
       - name: Verify base features do not enable TLS/signing crypto crates
@@ -145,7 +145,7 @@ jobs:
     env:
       RUSTDOCFLAGS: "-Dwarnings"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Run cargo doc
         run: cargo doc --document-private-items --no-deps --all-features
 
@@ -181,7 +181,7 @@ jobs:
       GOOGLE_SERVICE_ACCOUNT: "/tmp/gcs.json"
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # We are forced to use docker commands instead of service containers as we need to override the entrypoints
       # which is currently not supported - https://github.com/actions/runner/discussions/1872
@@ -268,7 +268,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: true
       - name: Install clang (needed for ring)
@@ -303,7 +303,7 @@ jobs:
     name: cargo test LocalFileSystem (win64)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           submodules: true
       - name: Run LocalFileSystem tests
