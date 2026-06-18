@@ -116,7 +116,7 @@ jobs:
         run: cargo clippy --no-default-features --features http-base -- -D warnings
       # Testing matrix of HTTP and crypto providers
       #
-      # Improvements tracked in  https://githubcom/apache/arrow-rs-object-store/issues/759
+      # Improvements tracked in  https://github.com/apache/arrow-rs-object-store/issues/759
       #
       # Notes:
       # Direct `reqwest` needs a TLS backend. Use `rustls-no-provider` so TLS
