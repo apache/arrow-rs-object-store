@@ -34,8 +34,8 @@
 use async_trait::async_trait;
 use futures_util::stream::BoxStream;
 use futures_util::{StreamExt, TryStreamExt};
-use http::header::{HeaderName, IF_MATCH, IF_NONE_MATCH};
-use http::{Method, StatusCode};
+use http::header::{HeaderName, HeaderValue, IF_MATCH, IF_NONE_MATCH};
+use http::{HeaderMap, Method, StatusCode};
 use std::{sync::Arc, time::Duration};
 use url::Url;
 
@@ -141,6 +141,52 @@ impl Signer for AmazonS3 {
     /// # }
     /// ```
     async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
+        self.signed_url_with(method, path, &[], &[], expires_in)
+            .await
+    }
+
+    /// Create a signed URL, additionally folding `extra_query` parameters and `signed_headers`
+    /// into the SigV4 signature.
+    ///
+    /// `extra_query` lets callers sign query parameters that the recipient must send, such as
+    /// `partNumber` and `uploadId` for a multipart `UploadPart`, or a `versionId`. `signed_headers`
+    /// binds specific request headers (e.g. `x-amz-checksum-sha256`, `content-type`, SSE headers)
+    /// to the signature; the recipient must send exactly these headers and values.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # use object_store::{aws::AmazonS3Builder, path::Path, signer::Signer};
+    /// # use http::Method;
+    /// # use std::time::Duration;
+    /// #
+    /// let s3 = AmazonS3Builder::new()
+    ///     .with_region("us-east-1")
+    ///     .with_bucket_name("my-bucket")
+    ///     .with_access_key_id("my-access-key-id")
+    ///     .with_secret_access_key("my-secret-access-key")
+    ///     .build()?;
+    ///
+    /// // Presign a multipart UploadPart request.
+    /// let url = s3.signed_url_with(
+    ///     Method::PUT,
+    ///     &Path::from("some-folder/some-file.txt"),
+    ///     &[("partNumber".into(), "1".into()), ("uploadId".into(), "abc123".into())],
+    ///     &[],
+    ///     Duration::from_secs(60 * 60),
+    /// ).await?;
+    /// #     Ok(())
+    /// # }
+    /// ```
+    async fn signed_url_with(
+        &self,
+        method: Method,
+        path: &Path,
+        extra_query: &[(String, String)],
+        signed_headers: &[(String, String)],
+        expires_in: Duration,
+    ) -> Result<Url> {
         let crypto = self.client.config.crypto()?;
         let credential = self.credentials().get_credential().await?;
         let authorizer = AwsAuthorizer::new(&credential, "s3", &self.client.config.region)
@@ -153,7 +199,22 @@ impl Signer for AmazonS3 {
             source: format!("Unable to parse url {path_url}: {e}").into(),
         })?;
 
-        authorizer.sign(method, &mut url, expires_in)?;
+        // Validate the caller-provided headers up front so an invalid name/value is surfaced
+        // as a clear error rather than panicking during signing.
+        let mut headers = HeaderMap::with_capacity(signed_headers.len());
+        for (name, value) in signed_headers {
+            let name = HeaderName::from_bytes(name.as_bytes()).map_err(|e| Error::Generic {
+                store: STORE,
+                source: format!("Invalid header name {name:?}: {e}").into(),
+            })?;
+            let value = HeaderValue::from_str(value).map_err(|e| Error::Generic {
+                store: STORE,
+                source: format!("Invalid value for header {name:?}: {e}").into(),
+            })?;
+            headers.append(name, value);
+        }
+
+        authorizer.sign_with(method, &mut url, extra_query, &headers, expires_in)?;
 
         Ok(url)
     }
@@ -590,6 +651,65 @@ mod tests {
 
             store.delete(&path).await.unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn signed_url_multipart_upload() {
+        maybe_skip_integration!();
+
+        // Exercises presigning a multipart `UploadPart` request: the `partNumber` and `uploadId`
+        // query parameters must be folded into the signature, and the resulting URL must be
+        // usable by a client that has no access to the credentials.
+        let integration = AmazonS3Builder::from_env().build().unwrap();
+
+        let path = Path::from("test_signed_multipart_upload.bin");
+        let _ = integration.delete(&path).await;
+
+        let upload_id = integration.create_multipart(&path).await.unwrap();
+
+        let part = vec![42u8; 1024];
+        let url = integration
+            .signed_url_with(
+                Method::PUT,
+                &path,
+                &[
+                    ("partNumber".to_string(), "1".to_string()),
+                    ("uploadId".to_string(), upload_id.clone()),
+                ],
+                &[],
+                Duration::from_secs(300),
+            )
+            .await
+            .unwrap();
+
+        // Upload the part using only the presigned URL, as a credential-less client would.
+        let resp = reqwest::Client::new()
+            .put(url)
+            .body(part.clone())
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            resp.status().is_success(),
+            "UploadPart via presigned URL failed: {resp:?}"
+        );
+        let etag = resp
+            .headers()
+            .get(http::header::ETAG)
+            .expect("ETag in UploadPart response")
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        integration
+            .complete_multipart(&path, &upload_id, vec![PartId { content_id: etag }])
+            .await
+            .unwrap();
+
+        let got = integration.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(got.as_ref(), part.as_slice());
+
+        integration.delete(&path).await.unwrap();
     }
 
     #[tokio::test]

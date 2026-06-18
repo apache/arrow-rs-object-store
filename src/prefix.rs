@@ -260,6 +260,25 @@ impl<T: Signer> Signer for PrefixStore<T> {
             .await
     }
 
+    async fn signed_url_with(
+        &self,
+        method: http::Method,
+        path: &Path,
+        extra_query: &[(String, String)],
+        signed_headers: &[(String, String)],
+        expires_in: std::time::Duration,
+    ) -> Result<url::Url> {
+        self.inner
+            .signed_url_with(
+                method,
+                &self.full_path(path),
+                extra_query,
+                signed_headers,
+                expires_in,
+            )
+            .await
+    }
+
     async fn signed_urls(
         &self,
         method: http::Method,
