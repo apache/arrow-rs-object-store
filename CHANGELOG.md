@@ -19,7 +19,7 @@
 
 # Changelog
 
-## [v0.13.2](https://github.com/apache/arrow-rs-object-store/tree/v0.13.2) (2026-06-17)
+## [v0.13.2](https://github.com/apache/arrow-rs-object-store/tree/v0.13.2) (2026-06-18)
 
 [Full Changelog](https://github.com/apache/arrow-rs-object-store/compare/v0.13.2...v0.13.2)
 
@@ -72,6 +72,7 @@
 
 **Merged pull requests:**
 
+- fix\(local\): fsync create-mode rename source delete [\#758](https://github.com/apache/arrow-rs-object-store/pull/758) ([kevinjqliu](https://github.com/kevinjqliu))
 - Fix flaky local close-file tests [\#757](https://github.com/apache/arrow-rs-object-store/pull/757) ([kevinjqliu](https://github.com/kevinjqliu))
 - build\(deps\): update itertools requirement from 0.14.0 to 0.15.0 [\#755](https://github.com/apache/arrow-rs-object-store/pull/755) ([dependabot[bot]](https://github.com/apps/dependabot))
 - Support PutMultipartOptions for MultipartStore::create\_multipart for AWS/GCP. [\#754](https://github.com/apache/arrow-rs-object-store/pull/754) ([BearMinimum98](https://github.com/BearMinimum98))
