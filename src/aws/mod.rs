@@ -872,6 +872,317 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn signed_url_baseline_roundtrip_without_options() {
+        maybe_skip_integration!();
+
+        // Regression: the no-options path (now routed through `signed_url_opts`) still produces a
+        // working presigned PUT and GET.
+        let integration = AmazonS3Builder::from_env().build().unwrap();
+        let path = Path::from("test_signed_baseline.bin");
+        let _ = integration.delete(&path).await;
+        let body = b"baseline body".to_vec();
+        let client = reqwest::Client::new();
+
+        let put_url = integration
+            .signed_url(Method::PUT, &path, Duration::from_secs(300))
+            .await
+            .unwrap();
+        let put = client.put(put_url).body(body.clone()).send().await.unwrap();
+        assert!(put.status().is_success(), "baseline PUT failed: {put:?}");
+
+        let get_url = integration
+            .signed_url(Method::GET, &path, Duration::from_secs(300))
+            .await
+            .unwrap();
+        let got = client.get(get_url).send().await.unwrap();
+        assert!(got.status().is_success(), "baseline GET failed: {got:?}");
+        assert_eq!(got.bytes().await.unwrap().as_ref(), body.as_slice());
+
+        integration.delete(&path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn signed_url_multipart_multiple_parts_roundtrip() {
+        maybe_skip_integration!();
+
+        // Full multipart round trip with three parts (exercising S3's 5 MiB minimum-part rule)
+        // and query parameters supplied in non-alphabetical order, proving the signer sorts the
+        // canonical query string rather than signing in call order.
+        let integration = AmazonS3Builder::from_env().build().unwrap();
+        let path = Path::from("test_signed_multipart_large.bin");
+        let _ = integration.delete(&path).await;
+
+        const MIB: usize = 1024 * 1024;
+        let parts_data = [vec![1u8; 6 * MIB], vec![2u8; 6 * MIB], vec![3u8; MIB]];
+
+        let upload_id = integration.create_multipart(&path).await.unwrap();
+        let client = reqwest::Client::new();
+        let mut part_ids = Vec::new();
+
+        for (idx, data) in parts_data.iter().enumerate() {
+            let part_number = (idx + 1).to_string();
+            // `uploadId` is supplied before `partNumber` — i.e. not in canonical (sorted) order.
+            let options = SignedUrlOptions::default().with_query([
+                ("uploadId", upload_id.as_str()),
+                ("partNumber", part_number.as_str()),
+            ]);
+            let url = integration
+                .signed_url_opts(Method::PUT, &path, Duration::from_secs(600), &options)
+                .await
+                .unwrap();
+            let resp = client.put(url).body(data.clone()).send().await.unwrap();
+            assert!(
+                resp.status().is_success(),
+                "UploadPart {part_number} failed: {resp:?}"
+            );
+            let etag = resp
+                .headers()
+                .get(http::header::ETAG)
+                .expect("ETag")
+                .to_str()
+                .unwrap()
+                .to_string();
+            part_ids.push(PartId { content_id: etag });
+        }
+
+        integration
+            .complete_multipart(&path, &upload_id, part_ids)
+            .await
+            .unwrap();
+
+        let got = integration.get(&path).await.unwrap().bytes().await.unwrap();
+        let expected: Vec<u8> = parts_data.concat();
+        assert_eq!(got.len(), expected.len(), "assembled length mismatch");
+        assert_eq!(
+            got.as_ref(),
+            expected.as_slice(),
+            "assembled bytes mismatch"
+        );
+
+        integration.delete(&path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn signed_url_tampering_is_rejected() {
+        maybe_skip_integration!();
+
+        // Proves the signed query parameters and headers are actually bound to the signature:
+        // mutating them must produce SignatureDoesNotMatch, while an extra *unsigned* header is
+        // accepted (we don't over-constrain).
+        let integration = AmazonS3Builder::from_env().build().unwrap();
+        let path = Path::from("test_signed_tamper.bin");
+        let _ = integration.delete(&path).await;
+        let client = reqwest::Client::new();
+
+        // --- query parameter tampering, in a multipart context ---
+        let upload_id = integration.create_multipart(&path).await.unwrap();
+        let options = SignedUrlOptions::default()
+            .with_query([("partNumber", "1"), ("uploadId", upload_id.as_str())]);
+        let url = integration
+            .signed_url_opts(Method::PUT, &path, Duration::from_secs(300), &options)
+            .await
+            .unwrap();
+        let url_str = url.as_str();
+
+        // Mutating partNumber breaks the signature.
+        let tampered_part = Url::parse(&url_str.replace("partNumber=1", "partNumber=2")).unwrap();
+        let resp = client
+            .put(tampered_part)
+            .body(vec![0u8; 16])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status().as_u16(),
+            403,
+            "tampered partNumber was accepted: {resp:?}"
+        );
+
+        // Mutating uploadId breaks the signature.
+        let bogus = format!("{}XXXX", upload_id);
+        let tampered_id = Url::parse(&url_str.replace(upload_id.as_str(), bogus.as_str())).unwrap();
+        let resp = client
+            .put(tampered_id)
+            .body(vec![0u8; 16])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status().as_u16(),
+            403,
+            "tampered uploadId was accepted: {resp:?}"
+        );
+
+        // An extra *unsigned* header is fine — only signed headers are bound. This also actually
+        // uploads the part, leaving the multipart upload to be reaped by teardown.
+        let resp = client
+            .put(url)
+            .header("x-custom-unsigned", "anything")
+            .body(vec![0u8; 16])
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            resp.status().is_success(),
+            "extra unsigned header was rejected: {resp:?}"
+        );
+
+        // --- signed header value tampering ---
+        const CHECKSUM: &str = "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek=";
+        let options = SignedUrlOptions::default().with_signed_header(
+            HeaderName::from_static("x-amz-checksum-sha256"),
+            HeaderValue::from_static(CHECKSUM),
+        );
+        let url = integration
+            .signed_url_opts(Method::PUT, &path, Duration::from_secs(300), &options)
+            .await
+            .unwrap();
+        // Sending a *different* (well-formed) value than was signed breaks the signature itself,
+        // i.e. 403 rather than a checksum (400) error.
+        let resp = client
+            .put(url)
+            .header(
+                "x-amz-checksum-sha256",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            )
+            .body(b"hello world".to_vec())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status().as_u16(),
+            403,
+            "tampered signed header value was accepted: {resp:?}"
+        );
+
+        integration.abort_multipart(&path, &upload_id).await.ok();
+        let _ = integration.delete(&path).await;
+    }
+
+    #[tokio::test]
+    async fn signed_url_special_character_key() {
+        maybe_skip_integration!();
+
+        // Proves path percent-encoding and signed query parameters coexist: a key containing a
+        // space, `=`, and a non-ASCII character is presigned for a multipart part and lands at the
+        // correct key. This is the exact path/query conflation class of bug we fixed.
+        let integration = AmazonS3Builder::from_env().build().unwrap();
+        let path = Path::from("test signed/a b=c/π.bin");
+        let _ = integration.delete(&path).await;
+
+        let upload_id = integration.create_multipart(&path).await.unwrap();
+        let body = vec![7u8; 2048];
+        let options = SignedUrlOptions::default()
+            .with_query([("partNumber", "1"), ("uploadId", upload_id.as_str())]);
+        let url = integration
+            .signed_url_opts(Method::PUT, &path, Duration::from_secs(300), &options)
+            .await
+            .unwrap();
+        let resp = reqwest::Client::new()
+            .put(url)
+            .body(body.clone())
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            resp.status().is_success(),
+            "special-key UploadPart failed: {resp:?}"
+        );
+        let etag = resp
+            .headers()
+            .get(http::header::ETAG)
+            .expect("ETag")
+            .to_str()
+            .unwrap()
+            .to_string();
+        integration
+            .complete_multipart(&path, &upload_id, vec![PartId { content_id: etag }])
+            .await
+            .unwrap();
+
+        // Read back through the normal (credentialed) path to confirm the object landed at the
+        // intended key.
+        let got = integration.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(got.as_ref(), body.as_slice());
+
+        integration.delete(&path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn signed_url_expires() {
+        maybe_skip_integration!();
+
+        // A short-lived signed URL is rejected after it expires, confirming the TTL is part of the
+        // signed policy.
+        let integration = AmazonS3Builder::from_env().build().unwrap();
+        let path = Path::from("test_signed_expiry.bin");
+        let _ = integration.delete(&path).await;
+
+        let url = integration
+            .signed_url(Method::PUT, &path, Duration::from_secs(1))
+            .await
+            .unwrap();
+        std::thread::sleep(Duration::from_secs(3));
+        let resp = reqwest::Client::new()
+            .put(url)
+            .body(b"too late".to_vec())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status().as_u16(),
+            403,
+            "expired signed URL was accepted: {resp:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn signed_url_conditional_create_blocks_overwrite() {
+        maybe_skip_integration!();
+
+        // A presigned PUT that signs `If-None-Match: *` succeeds when the object is absent and is
+        // rejected (412) on replay once the object exists — the leaked-URL replay guard.
+        let integration = AmazonS3Builder::from_env().build().unwrap();
+        let path = Path::from("test_signed_conditional.bin");
+        let _ = integration.delete(&path).await;
+        let client = reqwest::Client::new();
+
+        let options = SignedUrlOptions::default()
+            .with_signed_header(IF_NONE_MATCH, HeaderValue::from_static("*"));
+        let url = integration
+            .signed_url_opts(Method::PUT, &path, Duration::from_secs(300), &options)
+            .await
+            .unwrap();
+
+        let first = client
+            .put(url.clone())
+            .header(IF_NONE_MATCH, "*")
+            .body(b"first write".to_vec())
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            first.status().is_success(),
+            "conditional create on absent object failed: {first:?}"
+        );
+
+        let replay = client
+            .put(url)
+            .header(IF_NONE_MATCH, "*")
+            .body(b"overwrite attempt".to_vec())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            replay.status().as_u16(),
+            412,
+            "replay overwrite was not blocked: {replay:?}"
+        );
+
+        integration.delete(&path).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn copy_multipart_file_with_signature() {
         maybe_skip_integration!();
 
