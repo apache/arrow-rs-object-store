@@ -23,7 +23,7 @@ use crate::client::{
     CryptoProvider, HttpClient, HttpError, Signer, SigningAlgorithm, TokenProvider,
 };
 use crate::gcp::{GcpSigningCredentialProvider, STORE};
-use crate::util::{STRICT_ENCODE_SET, hex_digest, hex_encode};
+use crate::util::{STRICT_ENCODE_SET, append_strict_query_pairs, hex_digest, hex_encode};
 use crate::{RetryConfig, StaticCredentialProvider};
 use async_trait::async_trait;
 use base64::Engine;
@@ -760,21 +760,21 @@ impl GCSAuthorizer {
     }
 
     /// Generate a signed URL, additionally folding `extra_query` parameters and `signed_headers`
-    /// into the [Google SigV4] signature.
+    /// into the [GOOG4 signed URLs] signature.
     ///
     /// `extra_query` lets callers sign query parameters the recipient must send (e.g. an upload
     /// `partNumber`/`uploadId`), and `signed_headers` binds request headers (e.g. `content-type`)
     /// to the signature. For a signed URL these values are fixed at signing time. The mandatory
     /// `host` header is always signed.
     ///
-    /// [Google SigV4]: https://cloud.google.com/storage/docs/access-control/signed-urls
+    /// [GOOG4 signed URLs]: https://cloud.google.com/storage/docs/access-control/signed-urls
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn sign_with(
         &self,
         crypto: &dyn CryptoProvider,
         method: Method,
         url: &mut Url,
-        extra_query: &[(String, String)],
+        extra_query: &[(&str, &str)],
         signed_headers: &HeaderMap,
         expires_in: Duration,
         client: &GoogleCloudStorageClient,
@@ -786,12 +786,7 @@ impl GCSAuthorizer {
 
         // Append any caller-provided query parameters before signing so they are folded into
         // the canonical query string and become part of the signature.
-        if !extra_query.is_empty() {
-            let mut query = url.query_pairs_mut();
-            for (key, value) in extra_query {
-                query.append_pair(key, value);
-            }
-        }
+        append_strict_query_pairs(url, extra_query);
 
         // The `host` header is always signed; callers may bind additional headers whose values
         // are committed to the signature at signing time.
@@ -1120,10 +1115,7 @@ mod tests {
             &FixedCryptoProvider,
             Method::PUT,
             &mut url,
-            &[
-                ("partNumber".to_string(), "1".to_string()),
-                ("uploadId".to_string(), "abc123".to_string()),
-            ],
+            &[("partNumber", "1"), ("uploadId", "abc123")],
             &signed_headers,
             Duration::from_secs(60),
             &client,

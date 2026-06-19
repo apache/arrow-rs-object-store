@@ -34,8 +34,8 @@
 use async_trait::async_trait;
 use futures_util::stream::BoxStream;
 use futures_util::{StreamExt, TryStreamExt};
-use http::header::{HeaderName, HeaderValue, IF_MATCH, IF_NONE_MATCH};
-use http::{HeaderMap, Method, StatusCode};
+use http::header::{HeaderName, IF_MATCH, IF_NONE_MATCH};
+use http::{Method, StatusCode};
 use std::{sync::Arc, time::Duration};
 use url::Url;
 
@@ -45,7 +45,7 @@ use crate::client::get::GetClientExt;
 use crate::client::list::{ListClient, ListClientExt};
 use crate::multipart::{MultipartStore, PartId};
 use crate::signer::Signer;
-use crate::util::STRICT_ENCODE_SET;
+use crate::util::{STRICT_ENCODE_SET, validate_signed_url_extras};
 use crate::{
     CopyMode, CopyOptions, Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
     ObjectMeta, ObjectStore, Path, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult,
@@ -172,7 +172,7 @@ impl Signer for AmazonS3 {
     /// let url = s3.signed_url_with(
     ///     Method::PUT,
     ///     &Path::from("some-folder/some-file.txt"),
-    ///     &[("partNumber".into(), "1".into()), ("uploadId".into(), "abc123".into())],
+    ///     &[("partNumber", "1"), ("uploadId", "abc123")],
     ///     &[],
     ///     Duration::from_secs(60 * 60),
     /// ).await?;
@@ -183,10 +183,14 @@ impl Signer for AmazonS3 {
         &self,
         method: Method,
         path: &Path,
-        extra_query: &[(String, String)],
-        signed_headers: &[(String, String)],
+        extra_query: &[(&str, &str)],
+        signed_headers: &[(&str, &str)],
         expires_in: Duration,
     ) -> Result<Url> {
+        // Validate and convert the caller-provided extras up front, rejecting reserved query
+        // parameters/headers and invalid header names/values.
+        let headers = validate_signed_url_extras(STORE, extra_query, signed_headers, "x-amz-")?;
+
         let crypto = self.client.config.crypto()?;
         let credential = self.credentials().get_credential().await?;
         let authorizer = AwsAuthorizer::new(&credential, "s3", &self.client.config.region)
@@ -198,21 +202,6 @@ impl Signer for AmazonS3 {
             store: STORE,
             source: format!("Unable to parse url {path_url}: {e}").into(),
         })?;
-
-        // Validate the caller-provided headers up front so an invalid name/value is surfaced
-        // as a clear error rather than panicking during signing.
-        let mut headers = HeaderMap::with_capacity(signed_headers.len());
-        for (name, value) in signed_headers {
-            let name = HeaderName::from_bytes(name.as_bytes()).map_err(|e| Error::Generic {
-                store: STORE,
-                source: format!("Invalid header name {name:?}: {e}").into(),
-            })?;
-            let value = HeaderValue::from_str(value).map_err(|e| Error::Generic {
-                store: STORE,
-                source: format!("Invalid value for header {name:?}: {e}").into(),
-            })?;
-            headers.append(name, value);
-        }
 
         authorizer.sign_with(method, &mut url, extra_query, &headers, expires_in)?;
 
@@ -672,10 +661,7 @@ mod tests {
             .signed_url_with(
                 Method::PUT,
                 &path,
-                &[
-                    ("partNumber".to_string(), "1".to_string()),
-                    ("uploadId".to_string(), upload_id.clone()),
-                ],
+                &[("partNumber", "1"), ("uploadId", upload_id.as_str())],
                 &[],
                 Duration::from_secs(300),
             )

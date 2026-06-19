@@ -45,15 +45,16 @@ pub trait Signer: Send + Sync + fmt::Debug + 'static {
     /// and headers, with these values, for the request to be accepted.
     ///
     /// The default implementation delegates to [`Signer::signed_url`] when `extra_query` and
-    /// `signed_headers` are both empty, and otherwise returns an error: implementations that do
-    /// not support signing additional query parameters or headers must not silently drop them, as
-    /// that would produce a URL that does not enforce the requested constraints.
+    /// `signed_headers` are both empty, and otherwise returns [`crate::Error::NotSupported`]:
+    /// implementations that do not support signing additional query parameters or headers must not
+    /// silently drop them, as that would produce a URL that does not enforce the requested
+    /// constraints.
     async fn signed_url_with(
         &self,
         method: Method,
         path: &Path,
-        extra_query: &[(String, String)],
-        signed_headers: &[(String, String)],
+        extra_query: &[(&str, &str)],
+        signed_headers: &[(&str, &str)],
         expires_in: Duration,
     ) -> Result<Url> {
         if extra_query.is_empty() && signed_headers.is_empty() {
@@ -89,7 +90,7 @@ mod tests {
     use crate::Error;
 
     /// A [`Signer`] that only implements the required `signed_url`, relying on the default
-    /// `signed_url_with` — mirroring providers such as Azure and GCS.
+    /// `signed_url_with` — mirroring providers, such as Azure, that only implement `signed_url`.
     #[derive(Debug)]
     struct MinimalSigner;
 
@@ -129,7 +130,7 @@ mod tests {
             .signed_url_with(
                 Method::PUT,
                 &Path::from("file.txt"),
-                &[("partNumber".to_string(), "1".to_string())],
+                &[("partNumber", "1")],
                 &[],
                 Duration::from_secs(60),
             )
@@ -142,7 +143,7 @@ mod tests {
                 Method::PUT,
                 &Path::from("file.txt"),
                 &[],
-                &[("content-type".to_string(), "text/plain".to_string())],
+                &[("content-type", "text/plain")],
                 Duration::from_secs(60),
             )
             .await

@@ -44,6 +44,7 @@ use crate::CopyOptions;
 use crate::client::{CredentialProvider, crypto_provider};
 use crate::gcp::credential::GCSAuthorizer;
 use crate::signer::Signer;
+use crate::util::validate_signed_url_extras;
 use crate::{
     GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
     PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart, multipart::PartId,
@@ -52,7 +53,7 @@ use crate::{
 use async_trait::async_trait;
 use client::GoogleCloudStorageClient;
 use futures_util::stream::{BoxStream, StreamExt};
-use http::{HeaderMap, HeaderName, HeaderValue, Method};
+use http::Method;
 use url::Url;
 
 use crate::client::get::GetClientExt;
@@ -285,8 +286,8 @@ impl Signer for GoogleCloudStorage {
         &self,
         method: Method,
         path: &Path,
-        extra_query: &[(String, String)],
-        signed_headers: &[(String, String)],
+        extra_query: &[(&str, &str)],
+        signed_headers: &[(&str, &str)],
         expires_in: Duration,
     ) -> Result<Url> {
         if expires_in.as_secs() > 604800 {
@@ -296,28 +297,16 @@ impl Signer for GoogleCloudStorage {
             });
         }
 
+        // Validate and convert the caller-provided extras up front, rejecting reserved query
+        // parameters/headers and invalid header names/values.
+        let headers = validate_signed_url_extras(STORE, extra_query, signed_headers, "x-goog-")?;
+
         let config = self.client.config();
         let path_url = config.path_url(path);
         let mut url = Url::parse(&path_url).map_err(|e| crate::Error::Generic {
             store: STORE,
             source: format!("Unable to parse url {path_url}: {e}").into(),
         })?;
-
-        // Validate the caller-provided headers up front so an invalid name/value is surfaced
-        // as a clear error rather than panicking during signing.
-        let mut headers = HeaderMap::with_capacity(signed_headers.len());
-        for (name, value) in signed_headers {
-            let name =
-                HeaderName::from_bytes(name.as_bytes()).map_err(|e| crate::Error::Generic {
-                    store: STORE,
-                    source: format!("Invalid header name {name:?}: {e}").into(),
-                })?;
-            let value = HeaderValue::from_str(value).map_err(|e| crate::Error::Generic {
-                store: STORE,
-                source: format!("Invalid value for header {name:?}: {e}").into(),
-            })?;
-            headers.append(name, value);
-        }
 
         let signing_credentials = self.signing_credentials().get_credential().await?;
         let authorizer = GCSAuthorizer::new(signing_credentials);

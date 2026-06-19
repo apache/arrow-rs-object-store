@@ -301,6 +301,93 @@ pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet = percent_encodin
     .remove(b'_')
     .remove(b'~');
 
+/// Append `pairs` to the query string of `url`, percent-encoding keys and values with
+/// [`STRICT_ENCODE_SET`].
+///
+/// [`url::Url::query_pairs_mut`]'s `append_pair` serializes using
+/// `application/x-www-form-urlencoded`, which encodes spaces as `+`. AWS SigV4 and GCS V4 require
+/// spaces as `%20` and sign the canonicalized query string, so the bytes in the URL must match what
+/// is signed. Encoding the pairs ourselves keeps the URL and the signature consistent regardless of
+/// the characters a caller supplies.
+#[cfg(any(feature = "aws-base", feature = "gcp-base"))]
+pub(crate) fn append_strict_query_pairs(url: &mut url::Url, pairs: &[(&str, &str)]) {
+    use percent_encoding::utf8_percent_encode;
+    use std::fmt::Write;
+
+    if pairs.is_empty() {
+        return;
+    }
+
+    let mut query = url.query().unwrap_or_default().to_owned();
+    for (key, value) in pairs {
+        if !query.is_empty() {
+            query.push('&');
+        }
+        let _ = write!(
+            query,
+            "{}={}",
+            utf8_percent_encode(key, &STRICT_ENCODE_SET),
+            utf8_percent_encode(value, &STRICT_ENCODE_SET),
+        );
+    }
+    url.set_query(Some(&query));
+}
+
+/// Headers that are controlled by the signer (`host`) or silently dropped during canonicalization
+/// (`authorization`, `content-length`, `user-agent`). Allowing a caller to "sign" these would
+/// either corrupt the signature or be a silent no-op, so they are rejected.
+#[cfg(any(feature = "aws-base", feature = "gcp-base"))]
+const RESERVED_SIGNED_HEADERS: [&str; 4] =
+    ["host", "authorization", "content-length", "user-agent"];
+
+/// Validate the `extra_query` and `signed_headers` passed to `signed_url_with` and return the
+/// headers as a [`http::HeaderMap`].
+///
+/// Query parameter names that are reserved for the signing protocol (those starting with
+/// `reserved_query_prefix`, e.g. `x-amz-`/`x-goog-`) are rejected so a caller cannot inject a
+/// duplicate `X-Amz-Signature`, `X-Amz-Expires`, etc. Header names in [`RESERVED_SIGNED_HEADERS`]
+/// are likewise rejected. Invalid header names/values are surfaced as a clear error rather than
+/// panicking during signing.
+#[cfg(any(feature = "aws-base", feature = "gcp-base"))]
+pub(crate) fn validate_signed_url_extras(
+    store: &'static str,
+    extra_query: &[(&str, &str)],
+    signed_headers: &[(&str, &str)],
+    reserved_query_prefix: &str,
+) -> Result<http::HeaderMap> {
+    let err = |source: String| crate::Error::Generic {
+        store,
+        source: source.into(),
+    };
+
+    for (name, _) in extra_query {
+        if name.is_empty() {
+            return Err(err("query parameter name must not be empty".to_string()));
+        }
+        if name.to_ascii_lowercase().starts_with(reserved_query_prefix) {
+            return Err(err(format!(
+                "query parameter {name:?} is reserved for request signing and cannot be set via signed_url_with"
+            )));
+        }
+    }
+
+    let mut headers = http::HeaderMap::with_capacity(signed_headers.len());
+    for (name, value) in signed_headers {
+        let header = http::HeaderName::from_bytes(name.as_bytes())
+            .map_err(|e| err(format!("invalid header name {name:?}: {e}")))?;
+        if RESERVED_SIGNED_HEADERS.contains(&header.as_str()) {
+            return Err(err(format!(
+                "header {name:?} is controlled by the signer and cannot be signed via signed_url_with"
+            )));
+        }
+        let value = http::HeaderValue::from_str(value)
+            .map_err(|e| err(format!("invalid value for header {name:?}: {e}")))?;
+        headers.append(header, value);
+    }
+
+    Ok(headers)
+}
+
 /// Computes the SHA256 digest of `body` returned as a hex encoded string
 #[cfg(any(feature = "aws-base", feature = "gcp-base"))]
 pub(crate) fn hex_digest(
@@ -485,5 +572,74 @@ mod tests {
 
         let range = GetRange::Offset(1);
         assert_eq!(range.as_range(2).unwrap(), 1..2);
+    }
+
+    #[cfg(any(feature = "aws-base", feature = "gcp-base"))]
+    #[test]
+    fn append_strict_query_pairs_uses_percent_encoding() {
+        let mut url = url::Url::parse("https://example.com/object").unwrap();
+        append_strict_query_pairs(&mut url, &[("a key", "a value"), ("plus", "a+b/c=d")]);
+        // Spaces are `%20` (not `+`), and reserved characters are percent-encoded.
+        assert_eq!(url.query().unwrap(), "a%20key=a%20value&plus=a%2Bb%2Fc%3Dd");
+        // Appending to an existing query preserves it.
+        append_strict_query_pairs(&mut url, &[("x", "y")]);
+        assert!(url.query().unwrap().ends_with("&x=y"));
+        // Empty input is a no-op.
+        let before = url.query().unwrap().to_owned();
+        append_strict_query_pairs(&mut url, &[]);
+        assert_eq!(url.query().unwrap(), before);
+    }
+
+    #[cfg(any(feature = "aws-base", feature = "gcp-base"))]
+    #[test]
+    fn validate_signed_url_extras_accepts_and_rejects() {
+        // Legitimate extras are accepted and returned as headers.
+        let headers = validate_signed_url_extras(
+            "S3",
+            &[("partNumber", "1"), ("uploadId", "abc")],
+            &[("content-type", "text/plain")],
+            "x-amz-",
+        )
+        .unwrap();
+        assert_eq!(headers.get("content-type").unwrap(), "text/plain");
+
+        // Reserved query parameters are rejected (case-insensitively).
+        for key in ["X-Amz-Signature", "x-amz-expires", "X-Amz-Security-Token"] {
+            let err = validate_signed_url_extras("S3", &[(key, "x")], &[], "x-amz-").unwrap_err();
+            assert!(
+                matches!(err, Error::Generic { .. }),
+                "{key} should be rejected"
+            );
+        }
+        // GCS uses a different reserved prefix.
+        assert!(
+            validate_signed_url_extras("GCS", &[("X-Goog-Signature", "x")], &[], "x-goog-")
+                .is_err()
+        );
+
+        // Empty query parameter names are rejected.
+        assert!(validate_signed_url_extras("S3", &[("", "x")], &[], "x-amz-").is_err());
+
+        // Headers controlled by the signer or dropped during canonicalization are rejected.
+        for header in [
+            "host",
+            "Host",
+            "authorization",
+            "content-length",
+            "user-agent",
+        ] {
+            let err =
+                validate_signed_url_extras("S3", &[], &[(header, "v")], "x-amz-").unwrap_err();
+            assert!(
+                matches!(err, Error::Generic { .. }),
+                "{header} should be rejected"
+            );
+        }
+
+        // Invalid header names/values surface as errors, not panics.
+        assert!(validate_signed_url_extras("S3", &[], &[("bad header", "v")], "x-amz-").is_err());
+        assert!(
+            validate_signed_url_extras("S3", &[], &[("x-test", "bad\nvalue")], "x-amz-").is_err()
+        );
     }
 }

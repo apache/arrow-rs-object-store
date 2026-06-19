@@ -264,8 +264,8 @@ impl<T: Signer> Signer for PrefixStore<T> {
         &self,
         method: http::Method,
         path: &Path,
-        extra_query: &[(String, String)],
-        signed_headers: &[(String, String)],
+        extra_query: &[(&str, &str)],
+        signed_headers: &[(&str, &str)],
         expires_in: std::time::Duration,
     ) -> Result<url::Url> {
         self.inner

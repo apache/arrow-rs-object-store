@@ -23,7 +23,7 @@ use crate::client::{
     CryptoProvider, DigestAlgorithm, HttpClient, HttpError, HttpRequest, TokenProvider,
     crypto_provider,
 };
-use crate::util::{hex_digest, hex_encode};
+use crate::util::{append_strict_query_pairs, hex_digest, hex_encode};
 use crate::{CredentialProvider, Result, RetryConfig};
 use async_trait::async_trait;
 use bytes::Buf;
@@ -309,7 +309,7 @@ impl<'a> AwsAuthorizer<'a> {
         &self,
         method: Method,
         url: &mut Url,
-        extra_query: &[(String, String)],
+        extra_query: &[(&str, &str)],
         signed_headers: &HeaderMap,
         expires_in: Duration,
     ) -> Result<()> {
@@ -320,12 +320,7 @@ impl<'a> AwsAuthorizer<'a> {
 
         // Append any caller-provided query parameters before signing so they are folded into
         // `canonicalize_query` and become part of the signature.
-        if !extra_query.is_empty() {
-            let mut query = url.query_pairs_mut();
-            for (key, value) in extra_query {
-                query.append_pair(key, value);
-            }
-        }
+        append_strict_query_pairs(url, extra_query);
 
         // The `host` header is always signed; callers may bind additional headers whose values
         // are committed to the signature at signing time.
@@ -1200,6 +1195,60 @@ mod tests {
     }
 
     #[test]
+    fn signed_url_with_query_value_containing_space() {
+        // A space in a query value must be encoded as `%20` in the URL (not `+`, as
+        // application/x-www-form-urlencoded would produce) so that the URL bytes match the
+        // canonical query string that is signed. The expected signature was computed with an
+        // independent SigV4 implementation.
+        let credential = AwsCredential {
+            key_id: "AKIAIOSFODNN7EXAMPLE".to_string(),
+            secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string(),
+            token: None,
+        };
+
+        let date = DateTime::parse_from_rfc3339("2013-05-24T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let authorizer = AwsAuthorizer {
+            date: Some(date),
+            crypto: None,
+            credential: &credential,
+            service: "s3",
+            region: "us-east-1",
+            token_header: None,
+            sign_payload: false,
+            request_payer: false,
+        };
+
+        let mut url = Url::parse("https://examplebucket.s3.amazonaws.com/test.txt").unwrap();
+        authorizer
+            .sign_with(
+                Method::PUT,
+                &mut url,
+                &[("prefix", "a b")],
+                &HeaderMap::new(),
+                Duration::from_secs(86400),
+            )
+            .unwrap();
+
+        // The URL carries `%20`, never `+`.
+        assert!(url.query().unwrap().contains("prefix=a%20b"));
+        assert!(!url.query().unwrap().contains('+'));
+
+        let signature = url
+            .query_pairs()
+            .find(|(k, _)| k == "X-Amz-Signature")
+            .unwrap()
+            .1
+            .into_owned();
+        assert_eq!(
+            signature,
+            "e392940dfa4480f872625b35ef1224bfa1ae989c73874df01022e6d1fa4c2f00"
+        );
+    }
+
+    #[test]
     fn signed_url_with_query_params() {
         // Presign a multipart `UploadPart` request, where `partNumber` and `uploadId` must be
         // folded into the signature.
@@ -1229,10 +1278,7 @@ mod tests {
             .sign_with(
                 Method::PUT,
                 &mut url,
-                &[
-                    ("partNumber".to_string(), "1".to_string()),
-                    ("uploadId".to_string(), "abc123".to_string()),
-                ],
+                &[("partNumber", "1"), ("uploadId", "abc123")],
                 &HeaderMap::new(),
                 Duration::from_secs(86400),
             )
