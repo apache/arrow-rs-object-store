@@ -2492,7 +2492,7 @@ mod tests {
             location: Path::from("test"),
             last_modified: Utc.timestamp_nanos(100),
             size: 100,
-            e_tag: Some("123".to_string()),
+            e_tag: Some("\"123\"".to_string()),
             version: None,
         };
 
@@ -2521,16 +2521,16 @@ mod tests {
 
         options = GetOptions::default();
 
-        options.if_match = Some("123".to_string());
+        options.if_match = Some("\"123\"".to_string());
         options.check_preconditions(&meta).unwrap();
 
-        options.if_match = Some("123,354".to_string());
+        options.if_match = Some("\"123\",\"354\"".to_string());
         options.check_preconditions(&meta).unwrap();
 
-        options.if_match = Some("354, 123,".to_string());
+        options.if_match = Some("\"354\", \"123\"".to_string());
         options.check_preconditions(&meta).unwrap();
 
-        options.if_match = Some("354".to_string());
+        options.if_match = Some("\"354\"".to_string());
         options.check_preconditions(&meta).unwrap_err();
 
         options.if_match = Some("*".to_string());
@@ -2542,16 +2542,16 @@ mod tests {
 
         options = GetOptions::default();
 
-        options.if_none_match = Some("123".to_string());
+        options.if_none_match = Some("\"123\"".to_string());
         options.check_preconditions(&meta).unwrap_err();
 
         options.if_none_match = Some("*".to_string());
         options.check_preconditions(&meta).unwrap_err();
 
-        options.if_none_match = Some("1232".to_string());
+        options.if_none_match = Some("\"1232\"".to_string());
         options.check_preconditions(&meta).unwrap();
 
-        options.if_none_match = Some("23, 123".to_string());
+        options.if_none_match = Some("\"23\", \"123\"".to_string());
         options.check_preconditions(&meta).unwrap_err();
 
         // If-None-Match takes precedence

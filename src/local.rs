@@ -1418,7 +1418,7 @@ fn get_etag(metadata: &Metadata) -> String {
     // Use an ETag scheme based on that used by many popular HTTP servers
     // <https://httpd.apache.org/docs/2.2/mod/core.html#fileetag>
     // <https://stackoverflow.com/questions/47512043/how-etags-are-generated-and-configured>
-    format!("{inode:x}-{mtime:x}-{size:x}")
+    format!("\"{inode:x}-{mtime:x}-{size:x}\"")
 }
 
 fn convert_metadata(metadata: Metadata, location: Path) -> ObjectMeta {
