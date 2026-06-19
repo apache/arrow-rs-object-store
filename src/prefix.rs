@@ -260,22 +260,15 @@ impl<T: Signer> Signer for PrefixStore<T> {
             .await
     }
 
-    async fn signed_url_with(
+    async fn signed_url_opts(
         &self,
         method: http::Method,
         path: &Path,
-        extra_query: &[(&str, &str)],
-        signed_headers: &[(&str, &str)],
         expires_in: std::time::Duration,
+        options: &crate::signer::SignedUrlOptions,
     ) -> Result<url::Url> {
         self.inner
-            .signed_url_with(
-                method,
-                &self.full_path(path),
-                extra_query,
-                signed_headers,
-                expires_in,
-            )
+            .signed_url_opts(method, &self.full_path(path), expires_in, options)
             .await
     }
 

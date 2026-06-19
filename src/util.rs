@@ -310,7 +310,7 @@ pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet = percent_encodin
 /// is signed. Encoding the pairs ourselves keeps the URL and the signature consistent regardless of
 /// the characters a caller supplies.
 #[cfg(any(feature = "aws-base", feature = "gcp-base"))]
-pub(crate) fn append_strict_query_pairs(url: &mut url::Url, pairs: &[(&str, &str)]) {
+pub(crate) fn append_strict_query_pairs(url: &mut url::Url, pairs: &[(String, String)]) {
     use percent_encoding::utf8_percent_encode;
     use std::fmt::Write;
 
@@ -340,21 +340,21 @@ pub(crate) fn append_strict_query_pairs(url: &mut url::Url, pairs: &[(&str, &str
 const RESERVED_SIGNED_HEADERS: [&str; 4] =
     ["host", "authorization", "content-length", "user-agent"];
 
-/// Validate the `extra_query` and `signed_headers` passed to `signed_url_with` and return the
-/// headers as a [`http::HeaderMap`].
+/// Validate the `extra_query` and `signed_headers` from a [`SignedUrlOptions`].
 ///
 /// Query parameter names that are reserved for the signing protocol (those starting with
 /// `reserved_query_prefix`, e.g. `x-amz-`/`x-goog-`) are rejected so a caller cannot inject a
 /// duplicate `X-Amz-Signature`, `X-Amz-Expires`, etc. Header names in [`RESERVED_SIGNED_HEADERS`]
-/// are likewise rejected. Invalid header names/values are surfaced as a clear error rather than
-/// panicking during signing.
+/// are likewise rejected.
+///
+/// [`SignedUrlOptions`]: crate::signer::SignedUrlOptions
 #[cfg(any(feature = "aws-base", feature = "gcp-base"))]
 pub(crate) fn validate_signed_url_extras(
     store: &'static str,
-    extra_query: &[(&str, &str)],
-    signed_headers: &[(&str, &str)],
+    extra_query: &[(String, String)],
+    signed_headers: &http::HeaderMap,
     reserved_query_prefix: &str,
-) -> Result<http::HeaderMap> {
+) -> Result<()> {
     let err = |source: String| crate::Error::Generic {
         store,
         source: source.into(),
@@ -366,26 +366,20 @@ pub(crate) fn validate_signed_url_extras(
         }
         if name.to_ascii_lowercase().starts_with(reserved_query_prefix) {
             return Err(err(format!(
-                "query parameter {name:?} is reserved for request signing and cannot be set via signed_url_with"
+                "query parameter {name:?} is reserved for request signing and cannot be set via SignedUrlOptions"
             )));
         }
     }
 
-    let mut headers = http::HeaderMap::with_capacity(signed_headers.len());
-    for (name, value) in signed_headers {
-        let header = http::HeaderName::from_bytes(name.as_bytes())
-            .map_err(|e| err(format!("invalid header name {name:?}: {e}")))?;
-        if RESERVED_SIGNED_HEADERS.contains(&header.as_str()) {
+    for name in signed_headers.keys() {
+        if RESERVED_SIGNED_HEADERS.contains(&name.as_str()) {
             return Err(err(format!(
-                "header {name:?} is controlled by the signer and cannot be signed via signed_url_with"
+                "header {name:?} is controlled by the signer and cannot be signed via SignedUrlOptions"
             )));
         }
-        let value = http::HeaderValue::from_str(value)
-            .map_err(|e| err(format!("invalid value for header {name:?}: {e}")))?;
-        headers.append(header, value);
     }
 
-    Ok(headers)
+    Ok(())
 }
 
 /// Computes the SHA256 digest of `body` returned as a hex encoded string
@@ -575,14 +569,25 @@ mod tests {
     }
 
     #[cfg(any(feature = "aws-base", feature = "gcp-base"))]
+    fn owned_pairs(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[cfg(any(feature = "aws-base", feature = "gcp-base"))]
     #[test]
     fn append_strict_query_pairs_uses_percent_encoding() {
         let mut url = url::Url::parse("https://example.com/object").unwrap();
-        append_strict_query_pairs(&mut url, &[("a key", "a value"), ("plus", "a+b/c=d")]);
+        append_strict_query_pairs(
+            &mut url,
+            &owned_pairs(&[("a key", "a value"), ("plus", "a+b/c=d")]),
+        );
         // Spaces are `%20` (not `+`), and reserved characters are percent-encoded.
         assert_eq!(url.query().unwrap(), "a%20key=a%20value&plus=a%2Bb%2Fc%3Dd");
         // Appending to an existing query preserves it.
-        append_strict_query_pairs(&mut url, &[("x", "y")]);
+        append_strict_query_pairs(&mut url, &owned_pairs(&[("x", "y")]));
         assert!(url.query().unwrap().ends_with("&x=y"));
         // Empty input is a no-op.
         let before = url.query().unwrap().to_owned();
@@ -593,19 +598,32 @@ mod tests {
     #[cfg(any(feature = "aws-base", feature = "gcp-base"))]
     #[test]
     fn validate_signed_url_extras_accepts_and_rejects() {
-        // Legitimate extras are accepted and returned as headers.
-        let headers = validate_signed_url_extras(
+        use http::{HeaderMap, HeaderName, HeaderValue};
+
+        let header = |name: &'static str| {
+            let mut h = HeaderMap::new();
+            h.insert(HeaderName::from_static(name), HeaderValue::from_static("v"));
+            h
+        };
+
+        // Legitimate extras are accepted.
+        validate_signed_url_extras(
             "S3",
-            &[("partNumber", "1"), ("uploadId", "abc")],
-            &[("content-type", "text/plain")],
+            &owned_pairs(&[("partNumber", "1"), ("uploadId", "abc")]),
+            &header("content-type"),
             "x-amz-",
         )
         .unwrap();
-        assert_eq!(headers.get("content-type").unwrap(), "text/plain");
 
         // Reserved query parameters are rejected (case-insensitively).
         for key in ["X-Amz-Signature", "x-amz-expires", "X-Amz-Security-Token"] {
-            let err = validate_signed_url_extras("S3", &[(key, "x")], &[], "x-amz-").unwrap_err();
+            let err = validate_signed_url_extras(
+                "S3",
+                &owned_pairs(&[(key, "x")]),
+                &HeaderMap::new(),
+                "x-amz-",
+            )
+            .unwrap_err();
             assert!(
                 matches!(err, Error::Generic { .. }),
                 "{key} should be rejected"
@@ -613,33 +631,33 @@ mod tests {
         }
         // GCS uses a different reserved prefix.
         assert!(
-            validate_signed_url_extras("GCS", &[("X-Goog-Signature", "x")], &[], "x-goog-")
-                .is_err()
+            validate_signed_url_extras(
+                "GCS",
+                &owned_pairs(&[("X-Goog-Signature", "x")]),
+                &HeaderMap::new(),
+                "x-goog-"
+            )
+            .is_err()
         );
 
         // Empty query parameter names are rejected.
-        assert!(validate_signed_url_extras("S3", &[("", "x")], &[], "x-amz-").is_err());
+        assert!(
+            validate_signed_url_extras(
+                "S3",
+                &owned_pairs(&[("", "x")]),
+                &HeaderMap::new(),
+                "x-amz-"
+            )
+            .is_err()
+        );
 
         // Headers controlled by the signer or dropped during canonicalization are rejected.
-        for header in [
-            "host",
-            "Host",
-            "authorization",
-            "content-length",
-            "user-agent",
-        ] {
-            let err =
-                validate_signed_url_extras("S3", &[], &[(header, "v")], "x-amz-").unwrap_err();
+        for name in ["host", "authorization", "content-length", "user-agent"] {
+            let err = validate_signed_url_extras("S3", &[], &header(name), "x-amz-").unwrap_err();
             assert!(
                 matches!(err, Error::Generic { .. }),
-                "{header} should be rejected"
+                "{name} should be rejected"
             );
         }
-
-        // Invalid header names/values surface as errors, not panics.
-        assert!(validate_signed_url_extras("S3", &[], &[("bad header", "v")], "x-amz-").is_err());
-        assert!(
-            validate_signed_url_extras("S3", &[], &[("x-test", "bad\nvalue")], "x-amz-").is_err()
-        );
     }
 }

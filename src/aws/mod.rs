@@ -44,7 +44,7 @@ use crate::client::CredentialProvider;
 use crate::client::get::GetClientExt;
 use crate::client::list::{ListClient, ListClientExt};
 use crate::multipart::{MultipartStore, PartId};
-use crate::signer::Signer;
+use crate::signer::{SignedUrlOptions, Signer};
 use crate::util::{STRICT_ENCODE_SET, validate_signed_url_extras};
 use crate::{
     CopyMode, CopyOptions, Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
@@ -141,11 +141,11 @@ impl Signer for AmazonS3 {
     /// # }
     /// ```
     async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
-        self.signed_url_with(method, path, &[], &[], expires_in)
+        self.signed_url_opts(method, path, expires_in, &SignedUrlOptions::default())
             .await
     }
 
-    /// Create a signed URL, additionally folding `extra_query` parameters and `signed_headers`
+    /// Create a signed URL, additionally folding the query parameters and headers in `options`
     /// into the SigV4 signature.
     ///
     /// `extra_query` lets callers sign query parameters that the recipient must send, such as
@@ -157,7 +157,7 @@ impl Signer for AmazonS3 {
     ///
     /// ```
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # use object_store::{aws::AmazonS3Builder, path::Path, signer::Signer};
+    /// # use object_store::{aws::AmazonS3Builder, path::Path, signer::{Signer, SignedUrlOptions}};
     /// # use http::Method;
     /// # use std::time::Duration;
     /// #
@@ -169,27 +169,32 @@ impl Signer for AmazonS3 {
     ///     .build()?;
     ///
     /// // Presign a multipart UploadPart request.
-    /// let url = s3.signed_url_with(
+    /// let options = SignedUrlOptions::default()
+    ///     .with_query([("partNumber", "1"), ("uploadId", "abc123")]);
+    /// let url = s3.signed_url_opts(
     ///     Method::PUT,
     ///     &Path::from("some-folder/some-file.txt"),
-    ///     &[("partNumber", "1"), ("uploadId", "abc123")],
-    ///     &[],
     ///     Duration::from_secs(60 * 60),
+    ///     &options,
     /// ).await?;
     /// #     Ok(())
     /// # }
     /// ```
-    async fn signed_url_with(
+    async fn signed_url_opts(
         &self,
         method: Method,
         path: &Path,
-        extra_query: &[(&str, &str)],
-        signed_headers: &[(&str, &str)],
         expires_in: Duration,
+        options: &SignedUrlOptions,
     ) -> Result<Url> {
-        // Validate and convert the caller-provided extras up front, rejecting reserved query
-        // parameters/headers and invalid header names/values.
-        let headers = validate_signed_url_extras(STORE, extra_query, signed_headers, "x-amz-")?;
+        // Validate the caller-provided extras up front, rejecting reserved query parameters and
+        // headers controlled by the signer.
+        validate_signed_url_extras(
+            STORE,
+            &options.extra_query,
+            &options.signed_headers,
+            "x-amz-",
+        )?;
 
         let crypto = self.client.config.crypto()?;
         let credential = self.credentials().get_credential().await?;
@@ -203,7 +208,13 @@ impl Signer for AmazonS3 {
             source: format!("Unable to parse url {path_url}: {e}").into(),
         })?;
 
-        authorizer.sign_with(method, &mut url, extra_query, &headers, expires_in)?;
+        authorizer.sign_with(
+            method,
+            &mut url,
+            &options.extra_query,
+            &options.signed_headers,
+            expires_in,
+        )?;
 
         Ok(url)
     }
@@ -657,14 +668,10 @@ mod tests {
         let upload_id = integration.create_multipart(&path).await.unwrap();
 
         let part = vec![42u8; 1024];
+        let options = SignedUrlOptions::default()
+            .with_query([("partNumber", "1"), ("uploadId", upload_id.as_str())]);
         let url = integration
-            .signed_url_with(
-                Method::PUT,
-                &path,
-                &[("partNumber", "1"), ("uploadId", upload_id.as_str())],
-                &[],
-                Duration::from_secs(300),
-            )
+            .signed_url_opts(Method::PUT, &path, Duration::from_secs(300), &options)
             .await
             .unwrap();
 

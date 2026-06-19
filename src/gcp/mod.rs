@@ -43,7 +43,7 @@ use std::time::Duration;
 use crate::CopyOptions;
 use crate::client::{CredentialProvider, crypto_provider};
 use crate::gcp::credential::GCSAuthorizer;
-use crate::signer::Signer;
+use crate::signer::{SignedUrlOptions, Signer};
 use crate::util::validate_signed_url_extras;
 use crate::{
     GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
@@ -272,23 +272,22 @@ impl MultipartStore for GoogleCloudStorage {
 #[async_trait]
 impl Signer for GoogleCloudStorage {
     async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url> {
-        self.signed_url_with(method, path, &[], &[], expires_in)
+        self.signed_url_opts(method, path, expires_in, &SignedUrlOptions::default())
             .await
     }
 
-    /// Create a signed URL, additionally folding `extra_query` parameters and `signed_headers`
+    /// Create a signed URL, additionally folding the query parameters and headers in `options`
     /// into the signature.
     ///
     /// `extra_query` lets callers sign query parameters the recipient must send, and
     /// `signed_headers` binds request headers (e.g. `content-type`) to the signature; the
     /// recipient must send exactly these headers and values.
-    async fn signed_url_with(
+    async fn signed_url_opts(
         &self,
         method: Method,
         path: &Path,
-        extra_query: &[(&str, &str)],
-        signed_headers: &[(&str, &str)],
         expires_in: Duration,
+        options: &SignedUrlOptions,
     ) -> Result<Url> {
         if expires_in.as_secs() > 604800 {
             return Err(crate::Error::Generic {
@@ -297,9 +296,14 @@ impl Signer for GoogleCloudStorage {
             });
         }
 
-        // Validate and convert the caller-provided extras up front, rejecting reserved query
-        // parameters/headers and invalid header names/values.
-        let headers = validate_signed_url_extras(STORE, extra_query, signed_headers, "x-goog-")?;
+        // Validate the caller-provided extras up front, rejecting reserved query parameters and
+        // headers controlled by the signer.
+        validate_signed_url_extras(
+            STORE,
+            &options.extra_query,
+            &options.signed_headers,
+            "x-goog-",
+        )?;
 
         let config = self.client.config();
         let path_url = config.path_url(path);
@@ -317,8 +321,8 @@ impl Signer for GoogleCloudStorage {
                 crypto,
                 method,
                 &mut url,
-                extra_query,
-                &headers,
+                &options.extra_query,
+                &options.signed_headers,
                 expires_in,
                 &self.client,
             )

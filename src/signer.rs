@@ -19,9 +19,69 @@
 
 use crate::{Result, path::Path};
 use async_trait::async_trait;
-use http::Method;
+use http::{HeaderMap, HeaderName, HeaderValue, Method};
 use std::{fmt, time::Duration};
 use url::Url;
+
+/// Additional parameters to fold into a presigned URL's signature, used with
+/// [`Signer::signed_url_opts`].
+///
+/// All values are fixed at signing time: the recipient of the presigned URL must send exactly
+/// these query parameters and headers, with these values, for the request to be accepted.
+///
+/// Construct with [`SignedUrlOptions::default`] (or the builder methods) and set only the fields
+/// you need, so that future additions remain backwards compatible:
+///
+/// ```
+/// # use object_store::signer::SignedUrlOptions;
+/// # use http::header::{CONTENT_TYPE, HeaderValue};
+/// let options = SignedUrlOptions::default()
+///     .with_query([("partNumber", "1"), ("uploadId", "abc123")])
+///     .with_signed_header(CONTENT_TYPE, HeaderValue::from_static("text/plain"));
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct SignedUrlOptions {
+    /// Query parameters to sign and append to the URL.
+    ///
+    /// Used for requests that carry signed query parameters — for example a multipart
+    /// `UploadPart` (`partNumber`, `uploadId`) or pinning a `versionId`.
+    pub extra_query: Vec<(String, String)>,
+    /// Request headers to bind to the signature.
+    ///
+    /// Used to require the recipient to send specific headers, such as a checksum
+    /// (`x-amz-checksum-sha256`), `content-type`, or server-side-encryption headers.
+    pub signed_headers: HeaderMap,
+}
+
+impl SignedUrlOptions {
+    /// Create an empty set of options, equivalent to [`SignedUrlOptions::default`].
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Append query parameters to sign.
+    pub fn with_query<I, K, V>(mut self, query: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        self.extra_query
+            .extend(query.into_iter().map(|(k, v)| (k.into(), v.into())));
+        self
+    }
+
+    /// Bind a request header to the signature.
+    pub fn with_signed_header(mut self, name: HeaderName, value: HeaderValue) -> Self {
+        self.signed_headers.append(name, value);
+        self
+    }
+
+    /// Returns `true` if no extra query parameters or signed headers have been set.
+    pub fn is_empty(&self) -> bool {
+        self.extra_query.is_empty() && self.signed_headers.is_empty()
+    }
+}
 
 /// Universal API to generate presigned URLs from multiple object store services.
 #[async_trait]
@@ -32,32 +92,29 @@ pub trait Signer: Send + Sync + fmt::Debug + 'static {
     /// access to the object store's credentials, to allow limited access to the object store.
     async fn signed_url(&self, method: Method, path: &Path, expires_in: Duration) -> Result<Url>;
 
-    /// Like [`Signer::signed_url`], but additionally folds `extra_query` parameters and
-    /// `signed_headers` into the signature.
+    /// Like [`Signer::signed_url`], but additionally folds the query parameters and headers in
+    /// `options` into the signature. See [`SignedUrlOptions`].
     ///
-    /// This is required for presigned requests that carry signed query parameters — for example
-    /// signing a multipart `UploadPart` URL with `partNumber` and `uploadId`, or pinning a
-    /// `versionId` — and for binding request headers to the signature, such as a checksum
-    /// (`x-amz-checksum-sha256`), `content-type`, or server-side-encryption headers.
+    /// This presigns a *single* request (for example one multipart `UploadPart`). Orchestrating a
+    /// multipart upload — creating and completing it — is not in scope and is typically done by
+    /// the credential-holding server via [`MultipartStore`](crate::multipart::MultipartStore).
     ///
-    /// Both `extra_query` and `signed_headers` are `(name, value)` pairs. For a presigned URL the
-    /// values are fixed at signing time, so the recipient must send exactly these query parameters
-    /// and headers, with these values, for the request to be accepted.
+    /// The default implementation delegates to [`Signer::signed_url`] when `options` is empty, and
+    /// otherwise returns [`crate::Error::NotSupported`]: implementations that do not support
+    /// signing additional query parameters or headers must not silently drop them, as that would
+    /// produce a URL that does not enforce the requested constraints.
     ///
-    /// The default implementation delegates to [`Signer::signed_url`] when `extra_query` and
-    /// `signed_headers` are both empty, and otherwise returns [`crate::Error::NotSupported`]:
-    /// implementations that do not support signing additional query parameters or headers must not
-    /// silently drop them, as that would produce a URL that does not enforce the requested
-    /// constraints.
-    async fn signed_url_with(
+    /// There is intentionally no `signed_urls_opts` batch counterpart: signed parameters such as
+    /// `partNumber` are per-request, so a batch sharing one set of options across many paths has
+    /// no clear meaning.
+    async fn signed_url_opts(
         &self,
         method: Method,
         path: &Path,
-        extra_query: &[(&str, &str)],
-        signed_headers: &[(&str, &str)],
         expires_in: Duration,
+        options: &SignedUrlOptions,
     ) -> Result<Url> {
-        if extra_query.is_empty() && signed_headers.is_empty() {
+        if options.is_empty() {
             return self.signed_url(method, path, expires_in).await;
         }
         Err(crate::Error::NotSupported {
@@ -88,9 +145,10 @@ pub trait Signer: Send + Sync + fmt::Debug + 'static {
 mod tests {
     use super::*;
     use crate::Error;
+    use http::header::CONTENT_TYPE;
 
     /// A [`Signer`] that only implements the required `signed_url`, relying on the default
-    /// `signed_url_with` — mirroring providers, such as Azure, that only implement `signed_url`.
+    /// `signed_url_opts` — mirroring providers, such as Azure, that only implement `signed_url`.
     #[derive(Debug)]
     struct MinimalSigner;
 
@@ -107,15 +165,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_signed_url_with_delegates_when_empty() {
+    async fn default_signed_url_opts_delegates_when_empty() {
         let signer = MinimalSigner;
         let url = signer
-            .signed_url_with(
+            .signed_url_opts(
                 Method::GET,
                 &Path::from("file.txt"),
-                &[],
-                &[],
                 Duration::from_secs(60),
+                &SignedUrlOptions::default(),
             )
             .await
             .unwrap();
@@ -123,28 +180,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_signed_url_with_rejects_extras() {
+    async fn default_signed_url_opts_rejects_extras() {
         let signer = MinimalSigner;
 
         let query_err = signer
-            .signed_url_with(
+            .signed_url_opts(
                 Method::PUT,
                 &Path::from("file.txt"),
-                &[("partNumber", "1")],
-                &[],
                 Duration::from_secs(60),
+                &SignedUrlOptions::default().with_query([("partNumber", "1")]),
             )
             .await
             .unwrap_err();
         assert!(matches!(query_err, Error::NotSupported { .. }));
 
         let header_err = signer
-            .signed_url_with(
+            .signed_url_opts(
                 Method::PUT,
                 &Path::from("file.txt"),
-                &[],
-                &[("content-type", "text/plain")],
                 Duration::from_secs(60),
+                &SignedUrlOptions::default()
+                    .with_signed_header(CONTENT_TYPE, HeaderValue::from_static("text/plain")),
             )
             .await
             .unwrap_err();

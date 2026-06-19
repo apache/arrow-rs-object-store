@@ -309,7 +309,7 @@ impl<'a> AwsAuthorizer<'a> {
         &self,
         method: Method,
         url: &mut Url,
-        extra_query: &[(&str, &str)],
+        extra_query: &[(String, String)],
         signed_headers: &HeaderMap,
         expires_in: Duration,
     ) -> Result<()> {
@@ -466,6 +466,10 @@ impl CredentialExt for HttpRequestBuilder {
 
 /// Canonicalizes query parameters into the AWS canonical form
 ///
+/// Parameters are sorted by encoded name, with ties broken by encoded value, as required by the
+/// canonical request specification — sorting by the decoded name (or ignoring the value for
+/// duplicate names) can order parameters differently from how the server verifies them.
+///
 /// <https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html>
 fn canonicalize_query(url: &Url) -> String {
     use std::fmt::Write;
@@ -474,23 +478,24 @@ fn canonicalize_query(url: &Url) -> String {
         Some(q) if !q.is_empty() => q.len(),
         _ => return String::new(),
     };
+
+    let mut params = url
+        .query_pairs()
+        .map(|(k, v)| {
+            (
+                utf8_percent_encode(k.as_ref(), &STRICT_ENCODE_SET).to_string(),
+                utf8_percent_encode(v.as_ref(), &STRICT_ENCODE_SET).to_string(),
+            )
+        })
+        .collect::<Vec<_>>();
+    params.sort_unstable();
+
     let mut encoded = String::with_capacity(capacity + 1);
-
-    let mut headers = url.query_pairs().collect::<Vec<_>>();
-    headers.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
-
-    let mut first = true;
-    for (k, v) in headers {
-        if !first {
+    for (i, (k, v)) in params.iter().enumerate() {
+        if i > 0 {
             encoded.push('&');
         }
-        first = false;
-        let _ = write!(
-            encoded,
-            "{}={}",
-            utf8_percent_encode(k.as_ref(), &STRICT_ENCODE_SET),
-            utf8_percent_encode(v.as_ref(), &STRICT_ENCODE_SET)
-        );
+        let _ = write!(encoded, "{k}={v}");
     }
     encoded
 }
@@ -1226,7 +1231,7 @@ mod tests {
             .sign_with(
                 Method::PUT,
                 &mut url,
-                &[("prefix", "a b")],
+                &[("prefix".to_string(), "a b".to_string())],
                 &HeaderMap::new(),
                 Duration::from_secs(86400),
             )
@@ -1245,6 +1250,59 @@ mod tests {
         assert_eq!(
             signature,
             "e392940dfa4480f872625b35ef1224bfa1ae989c73874df01022e6d1fa4c2f00"
+        );
+    }
+
+    #[test]
+    fn signed_url_with_duplicate_query_keys_sorted_by_value() {
+        // Duplicate query parameter names must be sorted by encoded value in the canonical
+        // request, regardless of the order they are supplied. The expected signature was computed
+        // with an independent SigV4 implementation for the sorted form `partNumber=1&partNumber=2`.
+        let credential = AwsCredential {
+            key_id: "AKIAIOSFODNN7EXAMPLE".to_string(),
+            secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string(),
+            token: None,
+        };
+
+        let date = DateTime::parse_from_rfc3339("2013-05-24T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        let authorizer = AwsAuthorizer {
+            date: Some(date),
+            crypto: None,
+            credential: &credential,
+            service: "s3",
+            region: "us-east-1",
+            token_header: None,
+            sign_payload: false,
+            request_payer: false,
+        };
+
+        let mut url = Url::parse("https://examplebucket.s3.amazonaws.com/test.txt").unwrap();
+        authorizer
+            .sign_with(
+                Method::PUT,
+                &mut url,
+                // Supplied in reverse value order; canonicalization must sort them.
+                &[
+                    ("partNumber".to_string(), "2".to_string()),
+                    ("partNumber".to_string(), "1".to_string()),
+                ],
+                &HeaderMap::new(),
+                Duration::from_secs(86400),
+            )
+            .unwrap();
+
+        let signature = url
+            .query_pairs()
+            .find(|(k, _)| k == "X-Amz-Signature")
+            .unwrap()
+            .1
+            .into_owned();
+        assert_eq!(
+            signature,
+            "d3d68662bef0097adce4878c453f22ce9449c7084789b03d9abe9e8c05db38e7"
         );
     }
 
@@ -1278,7 +1336,10 @@ mod tests {
             .sign_with(
                 Method::PUT,
                 &mut url,
-                &[("partNumber", "1"), ("uploadId", "abc123")],
+                &[
+                    ("partNumber".to_string(), "1".to_string()),
+                    ("uploadId".to_string(), "abc123".to_string()),
+                ],
                 &HeaderMap::new(),
                 Duration::from_secs(86400),
             )

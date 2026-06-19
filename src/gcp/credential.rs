@@ -734,11 +734,13 @@ impl TokenProvider for AuthorizedUserCredentials {
     }
 }
 
-/// Trim whitespace from header values
+/// Normalize a header value for the canonical request: trim leading/trailing whitespace and
+/// collapse runs of internal whitespace to a single space, as required by the canonical request
+/// specification.
+///
+/// <https://cloud.google.com/storage/docs/authentication/canonical-requests#about-headers>
 fn trim_header_value(value: &str) -> String {
-    let mut ret = value.to_string();
-    ret.retain(|c| !c.is_whitespace());
-    ret
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// A Google Cloud Storage Authorizer for generating signed URL using [Google SigV4]
@@ -774,7 +776,7 @@ impl GCSAuthorizer {
         crypto: &dyn CryptoProvider,
         method: Method,
         url: &mut Url,
-        extra_query: &[(&str, &str)],
+        extra_query: &[(String, String)],
         signed_headers: &HeaderMap,
         expires_in: Duration,
         client: &GoogleCloudStorageClient,
@@ -850,17 +852,21 @@ impl GCSAuthorizer {
     /// Canonicalizes query parameters into the GCP canonical form
     /// form like `max-keys=2&prefix=object`
     ///
+    /// Parameters are sorted by encoded name, with ties broken by encoded value, as required by
+    /// the canonical request specification — sorting by the decoded name (or ignoring the value
+    /// for duplicate names) can order parameters differently from how the server verifies them.
+    ///
     /// <https://cloud.google.com/storage/docs/authentication/canonical-requests#about-query-strings>
     fn canonicalize_query(url: &Url) -> String {
         url.query_pairs()
-            .sorted_unstable_by(|a, b| a.0.cmp(&b.0))
             .map(|(k, v)| {
-                format!(
-                    "{}={}",
-                    utf8_percent_encode(k.as_ref(), &STRICT_ENCODE_SET),
-                    utf8_percent_encode(v.as_ref(), &STRICT_ENCODE_SET)
+                (
+                    utf8_percent_encode(k.as_ref(), &STRICT_ENCODE_SET).to_string(),
+                    utf8_percent_encode(v.as_ref(), &STRICT_ENCODE_SET).to_string(),
                 )
             })
+            .sorted_unstable()
+            .map(|(k, v)| format!("{k}={v}"))
             .join("&")
     }
 
@@ -1115,7 +1121,10 @@ mod tests {
             &FixedCryptoProvider,
             Method::PUT,
             &mut url,
-            &[("partNumber", "1"), ("uploadId", "abc123")],
+            &[
+                ("partNumber".to_string(), "1".to_string()),
+                ("uploadId".to_string(), "abc123".to_string()),
+            ],
             &signed_headers,
             Duration::from_secs(60),
             &client,
@@ -1163,5 +1172,18 @@ x-goog-meta-reviewer:jane,john"
             GCSAuthorizer::canonicalize_query(&url),
             "max-keys=2&prefix=object".to_string()
         );
+    }
+
+    #[test]
+    fn trim_header_value_collapses_internal_whitespace() {
+        // The canonical request collapses runs of whitespace to a single space and trims the
+        // ends, rather than stripping all whitespace, so a signed `content-type` with parameters
+        // matches the value the recipient sends.
+        assert_eq!(trim_header_value("  foo   bar  "), "foo bar");
+        assert_eq!(
+            trim_header_value("text/plain;  charset=utf-8"),
+            "text/plain; charset=utf-8"
+        );
+        assert_eq!(trim_header_value("single"), "single");
     }
 }
