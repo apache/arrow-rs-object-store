@@ -617,6 +617,7 @@ mod tests {
     use base64::Engine;
     use base64::prelude::BASE64_STANDARD;
     use http::HeaderMap;
+    use http::HeaderValue;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
 
@@ -701,6 +702,171 @@ mod tests {
 
         let got = integration.get(&path).await.unwrap().bytes().await.unwrap();
         assert_eq!(got.as_ref(), part.as_slice());
+
+        integration.delete(&path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn signed_url_with_signed_checksum_header_is_enforced() {
+        maybe_skip_integration!();
+
+        // Presign a PUT that binds `x-amz-checksum-sha256` to a fixed value. This is the
+        // storage-enforced-checksum path: the server must accept a body matching the signed
+        // checksum and reject one that does not, and the header is part of the signature so it
+        // cannot be omitted.
+        let integration = AmazonS3Builder::from_env().build().unwrap();
+
+        let path = Path::from("test_signed_checksum.bin");
+        let _ = integration.delete(&path).await;
+
+        let body = b"hello world".to_vec();
+        // base64(sha256(b"hello world")), computed independently.
+        const CHECKSUM: &str = "uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek=";
+
+        let options = SignedUrlOptions::default().with_signed_header(
+            HeaderName::from_static("x-amz-checksum-sha256"),
+            HeaderValue::from_static(CHECKSUM),
+        );
+        let url = integration
+            .signed_url_opts(Method::PUT, &path, Duration::from_secs(300), &options)
+            .await
+            .unwrap();
+
+        let client = reqwest::Client::new();
+
+        // 1. Matching body + checksum header is accepted.
+        let ok = client
+            .put(url.clone())
+            .header("x-amz-checksum-sha256", CHECKSUM)
+            .body(body.clone())
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            ok.status().is_success(),
+            "matching checksum rejected: {ok:?}"
+        );
+
+        // 2. A body that does not match the signed checksum is rejected (server enforces it).
+        let bad_body = client
+            .put(url.clone())
+            .header("x-amz-checksum-sha256", CHECKSUM)
+            .body(b"tampered content".to_vec())
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            !bad_body.status().is_success(),
+            "mismatched body was NOT rejected: {bad_body:?}"
+        );
+
+        // 3. Omitting the signed header is rejected (the header is bound to the signature).
+        let missing_header = client.put(url).body(body.clone()).send().await.unwrap();
+        assert!(
+            !missing_header.status().is_success(),
+            "missing signed header was NOT rejected: {missing_header:?}"
+        );
+
+        let got = integration.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(got.as_ref(), body.as_slice());
+
+        integration.delete(&path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn signed_url_with_signed_content_type_is_enforced() {
+        maybe_skip_integration!();
+
+        // Presign a PUT binding a `content-type` (with internal whitespace). The recipient must
+        // send exactly this value; a different one breaks the signature.
+        let integration = AmazonS3Builder::from_env().build().unwrap();
+
+        let path = Path::from("test_signed_content_type.bin");
+        let _ = integration.delete(&path).await;
+
+        let body = b"some body".to_vec();
+        const CONTENT_TYPE_VALUE: &str = "text/plain; charset=utf-8";
+
+        let options = SignedUrlOptions::default().with_signed_header(
+            http::header::CONTENT_TYPE,
+            HeaderValue::from_static(CONTENT_TYPE_VALUE),
+        );
+        let url = integration
+            .signed_url_opts(Method::PUT, &path, Duration::from_secs(300), &options)
+            .await
+            .unwrap();
+
+        let client = reqwest::Client::new();
+
+        // Matching content-type is accepted.
+        let ok = client
+            .put(url.clone())
+            .header(http::header::CONTENT_TYPE, CONTENT_TYPE_VALUE)
+            .body(body.clone())
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            ok.status().is_success(),
+            "matching content-type rejected: {ok:?}"
+        );
+
+        // A different content-type is rejected (the header is bound to the signature).
+        let wrong = client
+            .put(url)
+            .header(http::header::CONTENT_TYPE, "application/octet-stream")
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            !wrong.status().is_success(),
+            "mismatched content-type was NOT rejected: {wrong:?}"
+        );
+
+        integration.delete(&path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn signed_url_query_value_with_space() {
+        maybe_skip_integration!();
+
+        // A signed query value containing a space must be `%20`-encoded so the URL bytes match
+        // the canonical query string; a real server rejects the signature otherwise. Uses a GET
+        // with a `response-content-disposition` override, whose value contains spaces.
+        let integration = AmazonS3Builder::from_env().build().unwrap();
+
+        let path = Path::from("test_signed_query_space.bin");
+        let body = b"contents".to_vec();
+        integration.put(&path, body.clone().into()).await.unwrap();
+
+        let options = SignedUrlOptions::default().with_query([(
+            "response-content-disposition",
+            "attachment; filename=\"a b.txt\"",
+        )]);
+        let url = integration
+            .signed_url_opts(Method::GET, &path, Duration::from_secs(300), &options)
+            .await
+            .unwrap();
+
+        let resp = reqwest::Client::new().get(url).send().await.unwrap();
+        assert!(
+            resp.status().is_success(),
+            "GET with space-containing signed query rejected: {resp:?}"
+        );
+        // The server honoured the override, echoing it back in the response.
+        let disposition = resp
+            .headers()
+            .get(http::header::CONTENT_DISPOSITION)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let got = resp.bytes().await.unwrap();
+        assert_eq!(got.as_ref(), body.as_slice());
+        assert!(
+            disposition.contains("a b.txt"),
+            "unexpected content-disposition: {disposition:?}"
+        );
 
         integration.delete(&path).await.unwrap();
     }
