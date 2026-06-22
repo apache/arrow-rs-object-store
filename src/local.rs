@@ -42,7 +42,7 @@ use crate::{
     ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
     UploadPart, maybe_spawn_blocking,
     path::{Path, absolute_path_to_url},
-    util::InvalidGetRange,
+    util::{InvalidGetRange, merge_ranges},
 };
 use crate::{CopyMode, CopyOptions, RenameOptions, RenameTargetMode};
 
@@ -502,13 +502,39 @@ impl ObjectStore for LocalFileSystem {
         let path = self.path_to_filesystem(location)?;
         let ranges = ranges.to_vec();
         maybe_spawn_blocking(move || {
-            // Vectored IO might be faster
             // We do not read the metadata here, but error in `read_range` if necessary
             let mut file = File::open(&path).map_err(|e| map_open_error(e, &path))?;
-            ranges
-                .into_iter()
-                .map(|r| read_range(&mut file, &path, r))
-                .collect()
+
+            // Coalesce only contiguous/overlapping ranges (gap 0), so we never
+            // read bytes that weren't requested while still collapsing adjacent
+            // ranges into fewer reads.
+            let fetch_ranges = merge_ranges(&ranges, 0);
+
+            // Fast path: nothing coalesced, read each range directly in order.
+            if fetch_ranges.len() == ranges.len() {
+                return ranges
+                    .iter()
+                    .map(|r| read_range(&mut file, &path, r.clone()))
+                    .collect();
+            }
+
+            let fetched = fetch_ranges
+                .iter()
+                .map(|r| read_range(&mut file, &path, r.clone()))
+                .collect::<Result<Vec<_>>>()?;
+
+            Ok(ranges
+                .iter()
+                .map(|range| {
+                    let idx = fetch_ranges.partition_point(|v| v.start <= range.start) - 1;
+                    let fetch_range = &fetch_ranges[idx];
+                    let fetch_bytes = &fetched[idx];
+
+                    let start = (range.start - fetch_range.start) as usize;
+                    let end = (range.end - fetch_range.start) as usize;
+                    fetch_bytes.slice(start..end.min(fetch_bytes.len()))
+                })
+                .collect())
         })
         .await
     }
@@ -1737,6 +1763,42 @@ mod tests {
 
         let read_data = integration.get_range(&location, 0..100).await.unwrap();
         assert_eq!(&*read_data, data);
+    }
+
+    #[tokio::test]
+    async fn get_ranges_coalesces() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        let location = Path::from("some_file");
+
+        // Position-dependent content so a misrouted slice is detectable.
+        let data: Bytes = (0..4096u32)
+            .map(|i| (i % 251) as u8)
+            .collect::<Vec<_>>()
+            .into();
+        integration
+            .put(&location, data.clone().into())
+            .await
+            .unwrap();
+
+        let cases: Vec<Vec<Range<u64>>> = vec![
+            vec![0..16, 16..32, 32..48],                    // adjacent -> coalesced
+            vec![0..16, 64..80, 1000..1016],                // gapped -> not coalesced
+            vec![100..120, 0..50, 40..60, 0..50, 110..130], // out-of-order, overlapping, duplicate
+            vec![],                                         // empty
+        ];
+
+        for ranges in cases {
+            let got = integration.get_ranges(&location, &ranges).await.unwrap();
+            assert_eq!(got.len(), ranges.len());
+            for (range, bytes) in ranges.iter().zip(got) {
+                assert_eq!(
+                    bytes,
+                    data.slice(range.start as usize..range.end as usize),
+                    "mismatch for range {range:?}"
+                );
+            }
+        }
     }
 
     #[tokio::test]
