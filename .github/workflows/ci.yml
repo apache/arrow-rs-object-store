@@ -188,7 +188,8 @@ jobs:
       - name: Configure Fake GCS Server (GCP emulation)
         # Custom image - see fsouza/fake-gcs-server#1164
         run: |
-          echo "GCS_CONTAINER=$(docker run -d -p 4443:4443 tustvold/fake-gcs-server -scheme http -backend memory -public-host localhost:4443)" >> $GITHUB_ENV
+          GCS_CONTAINER=$(docker run -d -p 4443:4443 tustvold/fake-gcs-server -scheme http -backend memory -public-host localhost:4443)
+          echo "GCS_CONTAINER=$GCS_CONTAINER" >> $GITHUB_ENV
           # Give the container a moment to start up prior to configuring it
           sleep 1
           curl -v -X POST --data-binary '{"name":"test-bucket"}' -H "Content-Type: application/json" "http://localhost:4443/storage/v1/b"
@@ -199,8 +200,10 @@ jobs:
 
       - name: Setup LocalStack (AWS emulation)
         run: |
-          echo "LOCALSTACK_CONTAINER=$(docker run -d -p 4566:4566 localstack/localstack:4.11.1)" >> $GITHUB_ENV
-          echo "EC2_METADATA_CONTAINER=$(docker run -d -p 1338:1338 amazon/amazon-ec2-metadata-mock:v1.9.2 --imdsv2)" >> $GITHUB_ENV
+          LOCALSTACK_CONTAINER=$(docker run -d -p 4566:4566 localstack/localstack:4.11.1)
+          echo "LOCALSTACK_CONTAINER=$LOCALSTACK_CONTAINER" >> $GITHUB_ENV
+          EC2_METADATA_CONTAINER=$(docker run -d -p 1338:1338 amazon/amazon-ec2-metadata-mock:v1.9.2 --imdsv2)
+          echo "EC2_METADATA_CONTAINER=$EC2_METADATA_CONTAINER" >> $GITHUB_ENV
           aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket
           aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-for-spawn
           aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-for-checksum
@@ -208,7 +211,8 @@ jobs:
           aws --endpoint-url=http://localhost:4566 s3api create-bucket --bucket test-object-lock --object-lock-enabled-for-bucket
 
           KMS_KEY=$(aws --endpoint-url=http://localhost:4566 kms create-key --description "test key")
-          echo "AWS_SSE_KMS_KEY_ID=$(echo $KMS_KEY | jq -r .KeyMetadata.KeyId)" >> $GITHUB_ENV
+          AWS_SSE_KMS_KEY_ID=$(jq -r .KeyMetadata.KeyId <<< "$KMS_KEY")
+          echo "AWS_SSE_KMS_KEY_ID=$AWS_SSE_KMS_KEY_ID" >> $GITHUB_ENV
 
       - name: Configure Azurite (Azure emulation)
         # the magical connection string is from
@@ -216,7 +220,8 @@ jobs:
         # We skip the API version check to prevent breaks related to differences between Azurite, Azure and the azure-cli,
         # see https://github.com/Azure/Azurite/issues/2623
         run: |
-          echo "AZURITE_CONTAINER=$(docker run -d -p 10000:10000 -p 10001:10001 -p 10002:10002 mcr.microsoft.com/azure-storage/azurite azurite -l /data --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck)" >> $GITHUB_ENV
+          AZURITE_CONTAINER=$(docker run -d -p 10000:10000 -p 10001:10001 -p 10002:10002 mcr.microsoft.com/azure-storage/azurite azurite -l /data --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck)
+          echo "AZURITE_CONTAINER=$AZURITE_CONTAINER" >> $GITHUB_ENV
           az storage container create -n test-bucket --connection-string 'DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;QueueEndpoint=http://localhost:10001/devstoreaccount1;'
 
       - name: Setup Rust toolchain
