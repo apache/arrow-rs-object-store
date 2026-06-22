@@ -1133,14 +1133,15 @@ mod tests {
             .send()
             .await
             .unwrap();
+        let status = resp.status();
+        // Clean up before asserting: if the PUT was wrongly accepted, the object exists and would
+        // otherwise leak past the panic into the shared bucket.
+        let _ = integration.delete(&path).await;
         assert_eq!(
-            resp.status().as_u16(),
+            status.as_u16(),
             403,
             "expired signed URL was accepted: {resp:?}"
         );
-
-        // The rejected PUT must not have written anything; clean up defensively in case it did.
-        let _ = integration.delete(&path).await;
     }
 
     #[tokio::test]
