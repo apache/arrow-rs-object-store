@@ -190,7 +190,7 @@ impl Signer for MicrosoftAzure {
     /// Create a URL containing the relevant [Service SAS] query parameters that authorize a request
     /// via `method` to the resource at `path` valid for the duration specified in `expires_in`.
     ///
-    /// Unlike S3 and GCS, Azure does not implement [`Signer::signed_url_with`]: a SAS signs a
+    /// Unlike S3 and GCS, Azure does not implement [`Signer::signed_url_opts`]: a SAS signs a
     /// fixed set of fields rather than folding arbitrary query parameters or request headers into
     /// the signature, so that method returns an error if extra query parameters or headers are
     /// supplied. This is not needed for presigned block-blob uploads — a SAS authorizes by
