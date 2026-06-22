@@ -621,6 +621,17 @@ mod tests {
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
 
+    /// Presigned-URL tests run against a dedicated bucket so their concurrent writes cannot
+    /// contaminate the shared `test-bucket`, whose exact contents `s3_test` asserts.
+    const SIGNING_BUCKET: &str = "test-bucket-for-signing";
+
+    fn signing_store() -> AmazonS3 {
+        AmazonS3Builder::from_env()
+            .with_bucket_name(SIGNING_BUCKET)
+            .build()
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn write_multipart_file_with_signature() {
         maybe_skip_integration!();
@@ -661,7 +672,7 @@ mod tests {
         // Exercises presigning a multipart `UploadPart` request: the `partNumber` and `uploadId`
         // query parameters must be folded into the signature, and the resulting URL must be
         // usable by a client that has no access to the credentials.
-        let integration = AmazonS3Builder::from_env().build().unwrap();
+        let integration = signing_store();
 
         let path = Path::from("test_signed_multipart_upload.bin");
         let _ = integration.delete(&path).await;
@@ -715,7 +726,7 @@ mod tests {
         // storage-enforced-checksum path: the server must accept a body matching the signed
         // checksum and reject one that does not, and the header is part of the signature so it
         // cannot be omitted.
-        let integration = AmazonS3Builder::from_env().build().unwrap();
+        let integration = signing_store();
 
         let path = Path::from("test_signed_checksum.bin");
         let _ = integration.delete(&path).await;
@@ -781,7 +792,7 @@ mod tests {
 
         // Presign a PUT binding a `content-type` (with internal whitespace). The recipient must
         // send exactly this value; a different one breaks the signature.
-        let integration = AmazonS3Builder::from_env().build().unwrap();
+        let integration = signing_store();
 
         let path = Path::from("test_signed_content_type.bin");
         let _ = integration.delete(&path).await;
@@ -836,7 +847,7 @@ mod tests {
         // A signed query value containing a space must be `%20`-encoded so the URL bytes match
         // the canonical query string; a real server rejects the signature otherwise. Uses a GET
         // with a `response-content-disposition` override, whose value contains spaces.
-        let integration = AmazonS3Builder::from_env().build().unwrap();
+        let integration = signing_store();
 
         let path = Path::from("test_signed_query_space.bin");
         let body = b"contents".to_vec();
@@ -879,7 +890,7 @@ mod tests {
 
         // Regression: the no-options path (now routed through `signed_url_opts`) still produces a
         // working presigned PUT and GET.
-        let integration = AmazonS3Builder::from_env().build().unwrap();
+        let integration = signing_store();
         let path = Path::from("test_signed_baseline.bin");
         let _ = integration.delete(&path).await;
         let body = b"baseline body".to_vec();
@@ -910,7 +921,7 @@ mod tests {
         // Full multipart round trip with three parts (exercising S3's 5 MiB minimum-part rule)
         // and query parameters supplied in non-alphabetical order, proving the signer sorts the
         // canonical query string rather than signing in call order.
-        let integration = AmazonS3Builder::from_env().build().unwrap();
+        let integration = signing_store();
         let path = Path::from("test_signed_multipart_large.bin");
         let _ = integration.delete(&path).await;
 
@@ -972,7 +983,7 @@ mod tests {
         // Proves the signed query parameters and headers are actually bound to the signature:
         // mutating them must produce SignatureDoesNotMatch, while an extra *unsigned* header is
         // accepted (we don't over-constrain).
-        let integration = AmazonS3Builder::from_env().build().unwrap();
+        let integration = signing_store();
         let path = Path::from("test_signed_tamper.bin");
         let _ = integration.delete(&path).await;
         let client = reqwest::Client::new();
@@ -1069,7 +1080,7 @@ mod tests {
         // Proves path percent-encoding and signed query parameters coexist: a key containing a
         // space, `=`, and a non-ASCII character is presigned for a multipart part and lands at the
         // correct key. This is the exact path/query conflation class of bug we fixed.
-        let integration = AmazonS3Builder::from_env().build().unwrap();
+        let integration = signing_store();
         let path = Path::from("test signed/a b=c/π.bin");
         let _ = integration.delete(&path).await;
 
@@ -1118,7 +1129,7 @@ mod tests {
 
         // A short-lived signed URL is rejected after it expires, confirming the TTL is part of the
         // signed policy.
-        let integration = AmazonS3Builder::from_env().build().unwrap();
+        let integration = signing_store();
         let path = Path::from("test_signed_expiry.bin");
         let _ = integration.delete(&path).await;
 
@@ -1150,7 +1161,7 @@ mod tests {
 
         // A presigned PUT that signs `If-None-Match: *` succeeds when the object is absent and is
         // rejected (412) on replay once the object exists — the leaked-URL replay guard.
-        let integration = AmazonS3Builder::from_env().build().unwrap();
+        let integration = signing_store();
         let path = Path::from("test_signed_conditional.bin");
         let _ = integration.delete(&path).await;
         let client = reqwest::Client::new();

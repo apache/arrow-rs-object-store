@@ -67,6 +67,7 @@ Or directly with:
 ```shell
 aws s3 mb s3://test-bucket --endpoint-url=http://localhost:4566
 aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-for-spawn
+aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-for-signing
 aws --endpoint-url=http://localhost:4566 dynamodb create-table --table-name test-table --key-schema AttributeName=path,KeyType=HASH AttributeName=etag,KeyType=RANGE --attribute-definitions AttributeName=path,AttributeType=S AttributeName=etag,AttributeType=S --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
 ```
 
@@ -155,6 +156,10 @@ a tampered signature, an expired URL, or a signed header whose value the client 
 require a backend that actually validates SigV4. LocalStack does not validate presigned
 signatures or expiry — it accepts the request regardless — so these tests are gated behind a
 separate `TEST_S3_SIGNATURE_ENFORCEMENT` variable and skipped in the default integration suite.
+
+All presigned-URL tests use a dedicated `test-bucket-for-signing` bucket (created above) so their
+writes cannot contaminate the shared `test-bucket` whose exact contents `s3_test` asserts. Create
+that bucket on whichever backend you point at before running them.
 
 Run them against real S3, or against MinIO using the setup above:
 
