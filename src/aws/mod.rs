@@ -709,6 +709,7 @@ mod tests {
     #[tokio::test]
     async fn signed_url_with_signed_checksum_header_is_enforced() {
         maybe_skip_integration!();
+        maybe_skip_signature_enforcement!();
 
         // Presign a PUT that binds `x-amz-checksum-sha256` to a fixed value. This is the
         // storage-enforced-checksum path: the server must accept a body matching the signed
@@ -776,6 +777,7 @@ mod tests {
     #[tokio::test]
     async fn signed_url_with_signed_content_type_is_enforced() {
         maybe_skip_integration!();
+        maybe_skip_signature_enforcement!();
 
         // Presign a PUT binding a `content-type` (with internal whitespace). The recipient must
         // send exactly this value; a different one breaks the signature.
@@ -965,6 +967,7 @@ mod tests {
     #[tokio::test]
     async fn signed_url_tampering_is_rejected() {
         maybe_skip_integration!();
+        maybe_skip_signature_enforcement!();
 
         // Proves the signed query parameters and headers are actually bound to the signature:
         // mutating them must produce SignatureDoesNotMatch, while an extra *unsigned* header is
@@ -1111,6 +1114,7 @@ mod tests {
     #[tokio::test]
     async fn signed_url_expires() {
         maybe_skip_integration!();
+        maybe_skip_signature_enforcement!();
 
         // A short-lived signed URL is rejected after it expires, confirming the TTL is part of the
         // signed policy.
@@ -1134,6 +1138,9 @@ mod tests {
             403,
             "expired signed URL was accepted: {resp:?}"
         );
+
+        // The rejected PUT must not have written anything; clean up defensively in case it did.
+        let _ = integration.delete(&path).await;
     }
 
     #[tokio::test]

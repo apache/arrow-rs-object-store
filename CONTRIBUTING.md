@@ -148,6 +148,22 @@ export TEST_S3_SSEC_ENCRYPTION=1
 cargo test --features aws --package object_store --lib aws::tests::test_s3_ssec_encryption_with_minio -- --exact --nocapture
 ```
 
+#### Presigned URL signature-enforcement tests
+
+A handful of presigned-URL tests assert that the *storage backend* rejects an invalid request:
+a tampered signature, an expired URL, or a signed header whose value the client changed. These
+require a backend that actually validates SigV4. LocalStack does not validate presigned
+signatures or expiry — it accepts the request regardless — so these tests are gated behind a
+separate `TEST_S3_SIGNATURE_ENFORCEMENT` variable and skipped in the default integration suite.
+
+Run them against real S3, or against MinIO using the setup above:
+
+```shell
+export TEST_INTEGRATION=1
+export TEST_S3_SIGNATURE_ENFORCEMENT=1
+cargo test --features aws --package object_store --lib aws::tests::signed_url -- --nocapture
+```
+
 ### Azure
 
 To test the Azure integration
