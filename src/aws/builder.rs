@@ -625,6 +625,8 @@ impl AmazonS3Builder {
     /// - `s3a://<bucket>/<path>`
     /// - `https://s3.<region>.amazonaws.com/<bucket>`
     /// - `https://<bucket>.s3.<region>.amazonaws.com`
+    /// - `https://s3.dualstack.<region>.amazonaws.com/<bucket>`
+    /// - `https://<bucket>.s3.dualstack.<region>.amazonaws.com`
     /// - `https://ACCOUNT_ID.r2.cloudflarestorage.com/bucket`
     ///
     /// Note: Settings derived from the URL will override any others set on this builder
@@ -807,8 +809,32 @@ impl AmazonS3Builder {
                         self.bucket_name = Some(bucket.into());
                     }
                 }
+                // Path-style dual-stack endpoint, e.g. `s3.dualstack.<region>.amazonaws.com`.
+                Some(("s3", "dualstack", region, "amazonaws.com")) => {
+                    self.region = Some(region.to_string());
+                    // Override endpoint to explicitly preserve dualstack address
+                    self.endpoint = Some(format!("https://s3.dualstack.{region}.amazonaws.com"));
+                    let bucket = parsed.path_segments().into_iter().flatten().next();
+                    if let Some(bucket) = bucket {
+                        self.bucket_name = Some(bucket.into());
+                    }
+                }
                 Some((bucket, "s3", "amazonaws", "com")) => {
                     self.bucket_name = Some(bucket.to_string());
+                    self.virtual_hosted_style_request = true.into();
+                }
+                // Virtual-hosted dual-stack endpoint, e.g.
+                // `<bucket>.s3.dualstack.<region>.amazonaws.com`
+                Some((bucket, "s3", "dualstack", rest)) => {
+                    let region = rest
+                        .strip_suffix(".amazonaws.com")
+                        .ok_or_else(|| Error::UrlNotRecognised { url: url.into() })?;
+                    self.bucket_name = Some(bucket.to_string());
+                    self.region = Some(region.to_string());
+                    // Override endpoint to explicitly preserve dualstack address
+                    self.endpoint = Some(format!(
+                        "https://{bucket}.s3.dualstack.{region}.amazonaws.com"
+                    ));
                     self.virtual_hosted_style_request = true.into();
                 }
                 Some((bucket, "s3", region, "amazonaws.com")) => {
@@ -1780,6 +1806,32 @@ mod tests {
             .unwrap();
         assert_eq!(builder.bucket_name, Some("bucket".to_string()));
         assert_eq!(builder.region, Some("region".to_string()));
+        assert!(builder.virtual_hosted_style_request.get().unwrap());
+
+        // Path-style dual-stack endpoint
+        let mut builder = AmazonS3Builder::new();
+        builder
+            .parse_url("https://s3.dualstack.us-east-1.amazonaws.com/bucket/path")
+            .unwrap();
+        assert_eq!(builder.region, Some("us-east-1".to_string()));
+        assert_eq!(builder.bucket_name, Some("bucket".to_string()));
+        assert_eq!(
+            builder.endpoint,
+            Some("https://s3.dualstack.us-east-1.amazonaws.com".to_string())
+        );
+        assert!(!builder.virtual_hosted_style_request.get().unwrap());
+
+        // Virtual-hosted dual-stack endpoint
+        let mut builder = AmazonS3Builder::new();
+        builder
+            .parse_url("https://bucket.s3.dualstack.us-east-1.amazonaws.com")
+            .unwrap();
+        assert_eq!(builder.bucket_name, Some("bucket".to_string()));
+        assert_eq!(builder.region, Some("us-east-1".to_string()));
+        assert_eq!(
+            builder.endpoint,
+            Some("https://bucket.s3.dualstack.us-east-1.amazonaws.com".to_string())
+        );
         assert!(builder.virtual_hosted_style_request.get().unwrap());
 
         let mut builder = AmazonS3Builder::new();
