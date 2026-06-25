@@ -1461,7 +1461,7 @@ impl BlockList {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Clone, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub(crate) struct UserDelegationKey {
     pub signed_oid: String,
@@ -1471,6 +1471,29 @@ pub(crate) struct UserDelegationKey {
     pub signed_service: String,
     pub signed_version: String,
     pub value: String,
+}
+
+impl std::fmt::Debug for UserDelegationKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            signed_oid,
+            signed_tid,
+            signed_start,
+            signed_expiry,
+            signed_service,
+            signed_version,
+            value: _, // secret => redacted
+        } = self;
+        f.debug_struct("UserDelegationKey")
+            .field("signed_oid", signed_oid)
+            .field("signed_tid", signed_tid)
+            .field("signed_start", signed_start)
+            .field("signed_expiry", signed_expiry)
+            .field("signed_service", signed_service)
+            .field("signed_version", signed_version)
+            .field("value", &"******")
+            .finish()
+    }
 }
 
 #[cfg(test)]
