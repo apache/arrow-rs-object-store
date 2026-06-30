@@ -82,6 +82,36 @@ pub trait ObjectStoreRegistry: Send + Sync + std::fmt::Debug + 'static {
     /// assert!(Arc::ptr_eq(&ret, &bucket3));
     /// ```
     fn resolve(&self, url: &Url) -> crate::Result<(Arc<dyn ObjectStore>, Path)>;
+
+    /// Deregister the store registered for exactly `url`, returning it if present.
+    ///
+    /// Unlike [`resolve`](Self::resolve), which matches the longest registered
+    /// path that is a prefix of the object URL, this removes the store
+    /// registered at the *exact* scheme, authority and path of `url` (the
+    /// inverse of [`register`](Self::register)). A store registered at a
+    /// different path under the same authority is left in place.
+    ///
+    /// The default implementation does nothing and returns `None`.
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use url::Url;
+    /// # use object_store::memory::InMemory;
+    /// # use object_store::ObjectStore;
+    /// # use object_store::registry::{DefaultObjectStoreRegistry, ObjectStoreRegistry};
+    /// #
+    /// let registry = DefaultObjectStoreRegistry::new();
+    /// let bucket = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+    /// let url = Url::parse("s3://bucket/path").unwrap();
+    /// registry.register(url.clone(), bucket.clone());
+    ///
+    /// let removed = registry.deregister(&url).unwrap();
+    /// assert!(Arc::ptr_eq(&removed, &bucket));
+    /// ```
+    fn deregister(&self, url: &Url) -> Option<Arc<dyn ObjectStore>> {
+        let _ = url;
+        None
+    }
 }
 
 /// Error type for [`DefaultObjectStoreRegistry`]
@@ -164,6 +194,22 @@ impl PathEntry {
         }
         ret
     }
+
+    /// Remove the store registered at the exact `segments` path under this
+    /// entry, returning it. Child entries left empty are pruned.
+    fn remove(&mut self, segments: &[&str]) -> Option<Arc<dyn ObjectStore>> {
+        match segments.split_first() {
+            None => self.store.take(),
+            Some((head, rest)) => {
+                let child = self.children.get_mut(*head)?;
+                let removed = child.remove(rest);
+                if child.store.is_none() && child.children.is_empty() {
+                    self.children.remove(*head);
+                }
+                removed
+            }
+        }
+    }
 }
 
 impl DefaultObjectStoreRegistry {
@@ -214,6 +260,19 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
         }
 
         Err(Error::NotFound.into())
+    }
+
+    fn deregister(&self, url: &Url) -> Option<Arc<dyn ObjectStore>> {
+        let mut map = self.map.write();
+        let key = url_key(url);
+        let segments: Vec<&str> = path_segments(url.path()).collect();
+        let entry = map.get_mut(key)?;
+        let removed = entry.remove(&segments);
+        // Drop the authority entry entirely once it holds no stores.
+        if entry.store.is_none() && entry.children.is_empty() {
+            map.remove(key);
+        }
+        removed
     }
 }
 
@@ -342,5 +401,57 @@ mod tests {
         let (resolved, path) = registry.resolve(&to_resolve).unwrap();
         assert_eq!(path.as_ref(), "6/7");
         assert!(Arc::ptr_eq(&resolved, &custom_scheme));
+    }
+
+    #[test]
+    fn test_deregister() {
+        let registry = DefaultObjectStoreRegistry::new();
+        let a = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let b = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+
+        // Use a scheme `parse_url_opts` cannot lazily create, so a failed
+        // `resolve` reflects deregistration rather than the environment.
+        let a_url = Url::parse("mock://bucket/a").unwrap();
+        let b_url = Url::parse("mock://bucket/b").unwrap();
+        registry.register(a_url.clone(), Arc::clone(&a));
+        registry.register(b_url.clone(), Arc::clone(&b));
+
+        // Removes exactly the store at `a`, leaving its sibling `b` in place.
+        let removed = registry.deregister(&a_url).unwrap();
+        assert!(Arc::ptr_eq(&removed, &a));
+        assert!(registry.resolve(&a_url).is_err());
+        let (resolved, _) = registry.resolve(&b_url).unwrap();
+        assert!(Arc::ptr_eq(&resolved, &b));
+
+        // Deregistering again returns None.
+        assert!(registry.deregister(&a_url).is_none());
+        // A never-registered URL returns None.
+        assert!(
+            registry
+                .deregister(&Url::parse("mock://other/x").unwrap())
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_deregister_keeps_longer_prefix() {
+        let registry = DefaultObjectStoreRegistry::new();
+        let outer = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let inner = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let outer_url = Url::parse("mock://bucket/a").unwrap();
+        let inner_url = Url::parse("mock://bucket/a/b").unwrap();
+        registry.register(outer_url.clone(), Arc::clone(&outer));
+        registry.register(inner_url.clone(), Arc::clone(&inner));
+
+        // Removing the outer mount leaves the nested one resolvable.
+        assert!(Arc::ptr_eq(
+            &registry.deregister(&outer_url).unwrap(),
+            &outer
+        ));
+        let (resolved, path) = registry
+            .resolve(&Url::parse("mock://bucket/a/b/x").unwrap())
+            .unwrap();
+        assert!(Arc::ptr_eq(&resolved, &inner));
+        assert_eq!(path.as_ref(), "x");
     }
 }
