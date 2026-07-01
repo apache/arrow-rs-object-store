@@ -307,9 +307,10 @@ pub(crate) fn hex_digest(
     crypto: &dyn crate::client::CryptoProvider,
     bytes: &[u8],
 ) -> Result<String> {
-    let mut ctx = crypto.digest(crate::client::DigestAlgorithm::Sha256)?;
-    ctx.update(bytes);
-    Ok(hex_encode(ctx.finish()?))
+    Ok(hex_encode(&crypto.digest(
+        crate::client::DigestAlgorithm::Sha256,
+        &[bytes],
+    )?))
 }
 
 /// Returns `bytes` as a lower-case hex encoded string

@@ -282,9 +282,8 @@ impl AzureEncryptionHeaders {
         }
 
         let crypto = crypto_provider(crypto)?;
-        let mut ctx = crypto.digest(DigestAlgorithm::Sha256)?;
-        ctx.update(&decoded_key);
-        let encryption_key_sha256 = BASE64_STANDARD.encode(ctx.finish()?);
+        let encryption_key_sha256 =
+            BASE64_STANDARD.encode(crypto.digest(DigestAlgorithm::Sha256, &[&decoded_key])?);
 
         Ok(Self {
             encryption_key: Some(encryption_key),

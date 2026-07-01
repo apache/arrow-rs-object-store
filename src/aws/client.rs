@@ -411,11 +411,15 @@ impl Request<'_> {
             if let Some(digest) = cached_digest {
                 return Ok(digest);
             }
-            let mut ctx = self.config.crypto()?.digest(DigestAlgorithm::Sha256)?;
-            for part in &payload {
-                ctx.update(part);
-            }
-            let digest = ctx.finish()?.try_into().unwrap();
+            let digest = self
+                .config
+                .crypto()?
+                .digest(
+                    DigestAlgorithm::Sha256,
+                    &payload.iter().map(|c| c.as_ref()).collect::<Vec<_>>(),
+                )?
+                .try_into()
+                .unwrap();
             cached_digest = Some(digest);
             Ok(digest)
         };
@@ -582,11 +586,9 @@ impl S3Client {
         }
 
         let crypto = self.config.crypto()?;
-        let mut ctx = crypto.digest(DigestAlgorithm::Sha256)?;
-        ctx.update(body.as_ref());
-        let digest = ctx.finish()?;
+        let digest = crypto.digest(DigestAlgorithm::Sha256, &[&body])?;
 
-        builder = builder.header(SHA256_CHECKSUM, BASE64_STANDARD.encode(digest));
+        builder = builder.header(SHA256_CHECKSUM, BASE64_STANDARD.encode(&digest));
 
         // S3 *requires* DeleteObjects to include a Content-MD5 header:
         // https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
@@ -599,7 +601,7 @@ impl S3Client {
         let response = builder
             .header(CONTENT_TYPE, "application/xml")
             .body(body)
-            .with_aws_sigv4(authorizer, Some(digest))?
+            .with_aws_sigv4(authorizer, Some(digest.as_ref()))?
             .retryable(&self.config.retry_config)
             .retry_error_body(true)
             .send()

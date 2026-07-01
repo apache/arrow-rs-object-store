@@ -927,9 +927,7 @@ impl CredentialExt for HttpRequestBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::{
-        ClientOptions, DigestAlgorithm, DigestContext, HmacContext, StaticCredentialProvider,
-    };
+    use crate::client::{ClientOptions, DigestAlgorithm, StaticCredentialProvider};
     use crate::gcp::client::{GoogleCloudStorageClient, GoogleCloudStorageConfig};
 
     const SIGNATURE_BYTES: &[u8] = &[0x00, 0x01, 0x02, 0xab, 0xcd];
@@ -946,15 +944,16 @@ mod tests {
     struct FixedCryptoProvider;
 
     impl CryptoProvider for FixedCryptoProvider {
-        fn digest(&self, _algorithm: DigestAlgorithm) -> crate::Result<Box<dyn DigestContext>> {
-            Ok(Box::new(FixedDigestContext))
+        fn digest(&self, _algorithm: DigestAlgorithm, _data: &[&[u8]]) -> crate::Result<Vec<u8>> {
+            Ok(vec![0x12, 0x34])
         }
 
         fn hmac(
             &self,
             _algorithm: DigestAlgorithm,
             _secret: &[u8],
-        ) -> crate::Result<Box<dyn HmacContext>> {
+            _data: &[u8],
+        ) -> crate::Result<Vec<u8>> {
             panic!("GCS signed URL should not use HMAC")
         }
 
@@ -964,16 +963,6 @@ mod tests {
             _pem: &[u8],
         ) -> crate::Result<Box<dyn Signer>> {
             Ok(Box::new(FixedSigner))
-        }
-    }
-
-    struct FixedDigestContext;
-
-    impl DigestContext for FixedDigestContext {
-        fn update(&mut self, _data: &[u8]) {}
-
-        fn finish(&mut self) -> crate::Result<&[u8]> {
-            Ok(&[0x12, 0x34])
         }
     }
 
