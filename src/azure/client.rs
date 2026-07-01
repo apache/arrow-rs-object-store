@@ -1075,6 +1075,7 @@ impl GetClient for AzureClient {
     const HEADER_CONFIG: HeaderConfig = HeaderConfig {
         etag_required: true,
         last_modified_required: true,
+        stored_size_header: None,
         version_header: Some(VERSION_HEADER),
         user_defined_metadata_prefix: Some(USER_DEFINED_METADATA_HEADER_PREFIX),
     };

@@ -359,6 +359,7 @@ impl GetClient for Client {
     const HEADER_CONFIG: HeaderConfig = HeaderConfig {
         etag_required: false,
         last_modified_required: false,
+        stored_size_header: None,
         version_header: None,
         user_defined_metadata_prefix: None,
     };
