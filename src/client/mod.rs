@@ -23,6 +23,8 @@ pub(crate) mod backoff;
 
 #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
 mod dns;
+#[cfg(not(target_arch = "wasm32"))]
+pub use dns::{DnsError, DnsFuture, DnsResolver};
 
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
@@ -339,14 +341,6 @@ impl Certificate {
     }
 }
 
-#[derive(Clone)]
-struct DynResolver(Arc<dyn Resolve>);
-
-impl std::fmt::Debug for DynResolver {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("DynResolver")
-    }
-}
 /// HTTP client configuration for remote object stores
 #[derive(Debug, Clone)]
 pub struct ClientOptions {
@@ -374,7 +368,8 @@ pub struct ClientOptions {
     http1_only: ConfigValue<bool>,
     http2_only: ConfigValue<bool>,
     randomize_addresses: ConfigValue<bool>,
-    dns_resolver: Option<DynResolver>,
+    #[cfg(not(target_arch = "wasm32"))]
+    dns_resolver: Option<Arc<dyn DnsResolver>>,
 }
 
 impl Default for ClientOptions {
@@ -809,13 +804,30 @@ impl ClientOptions {
         self
     }
 
-    /// Override the default DNS resolver with a custom [`reqwest::dns::Resolve`] implementation.
+    /// Override the default DNS resolution with a custom [`DnsResolver`]
     ///
-    /// When set, [`ClientConfigKey::RandomizeAddresses`] will be ignored. The provided
-    /// resolver is responsible for resolving, shuffling, caching, etc.
-    pub fn with_dns_resolver(mut self, resolver: Arc<dyn Resolve>) -> Self {
-        self.dns_resolver = Some(DynResolver(resolver));
+    /// When set, [`ClientConfigKey::RandomizeAddresses`] is ignored: the
+    /// provided resolver is fully responsible for resolution, ordering,
+    /// shuffling, and caching.
+    ///
+    /// The built-in reqwest-based transport applies this automatically.
+    /// Custom [`HttpConnector`] implementations should read it via
+    /// [`Self::dns_resolver`] and honor it.
+    ///
+    /// Note: unlike other options, this cannot be configured via
+    /// [`ClientConfigKey`] / string configuration.
+    ///
+    /// [`HttpConnector`]: crate::client::HttpConnector
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_dns_resolver(mut self, resolver: Arc<dyn DnsResolver>) -> Self {
+        self.dns_resolver = Some(resolver);
         self
+    }
+
+    /// Return the custom [`DnsResolver`] if any, see [`Self::with_dns_resolver`]
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn dns_resolver(&self) -> Option<&Arc<dyn DnsResolver>> {
+        self.dns_resolver.as_ref()
     }
 
     /// Get the default headers defined through `ClientOptions::with_default_headers`
@@ -950,10 +962,13 @@ impl ClientOptions {
         // size of objects.
         builder = builder.no_gzip().no_brotli().no_zstd().no_deflate();
 
-        if let Some(resolver) = &self.dns_resolver {
-            builder = builder.dns_resolver2(resolver.0.clone());
-        } else if self.randomize_addresses.get()? {
-            builder = builder.dns_resolver(Arc::new(dns::ShuffleResolver));
+        let resolver: Option<Arc<dyn DnsResolver>> = match &self.dns_resolver {
+            Some(resolver) => Some(Arc::clone(resolver)),
+            None if self.randomize_addresses.get()? => Some(Arc::new(dns::ShuffleResolver)),
+            None => None,
+        };
+        if let Some(resolver) = resolver {
+            builder = builder.dns_resolver(Arc::new(dns::ReqwestResolver(resolver)));
         }
 
         builder
@@ -1286,5 +1301,40 @@ mod tests {
                 .unwrap(),
             user_agent
         );
+    }
+
+    #[tokio::test]
+    async fn test_custom_dns_resolver() {
+        use crate::client::mock_server::MockServer;
+        use std::net::{IpAddr, Ipv4Addr};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        #[derive(Debug, Default)]
+        struct CountingResolver(AtomicUsize);
+
+        impl DnsResolver for CountingResolver {
+            fn resolve(&self, host: &str) -> DnsFuture {
+                assert_eq!(host, "localhost");
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async { Ok(vec![IpAddr::V4(Ipv4Addr::LOCALHOST)]) })
+            }
+        }
+
+        let server = MockServer::new().await;
+        server.push(::http::Response::new("hello".to_string()));
+
+        let resolver = Arc::new(CountingResolver::default());
+        let client = ClientOptions::new()
+            .with_allow_http(true)
+            .with_dns_resolver(Arc::clone(&resolver) as Arc<dyn DnsResolver>)
+            .client()
+            .unwrap();
+
+        // Use a hostname (not an IP literal) so resolution actually runs
+        let parsed = url::Url::parse(server.url()).unwrap();
+        let url = format!("http://localhost:{}/", parsed.port().unwrap());
+        let resp = client.get(url).send().await.unwrap();
+        assert!(resp.status().is_success());
+        assert_eq!(resolver.0.load(Ordering::SeqCst), 1);
     }
 }
