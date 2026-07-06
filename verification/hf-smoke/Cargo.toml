@@ -1,0 +1,25 @@
+# Throwaway smoke test for the HF S3 gateway (issue #706).
+#
+# This whole `verification/` directory is committed only so reviewers can see and reproduce how the
+# fix was verified end-to-end against a real Hugging Face bucket; it is removed again by the
+# immediately-following revert commit and is not part of the object_store crate.
+#
+# Path-depends on the object_store crate in this repo (../..) with the `aws` feature.
+[package]
+name = "hf-smoke"
+version = "0.0.0"
+edition = "2024"
+publish = false
+# There are two binaries (hf-smoke + the repro diagnostic); make plain `cargo run` pick this one.
+default-run = "hf-smoke"
+
+# Empty [workspace] so this project is its own root and is NOT absorbed into
+# any parent Cargo workspace discovery.
+[workspace]
+
+[dependencies]
+object_store = { path = "../..", features = ["aws"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+futures = "0.3"
+bytes = "1"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "stream"] }
