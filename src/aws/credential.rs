@@ -28,7 +28,7 @@ use crate::{CredentialProvider, Result, RetryConfig};
 use async_trait::async_trait;
 use bytes::Buf;
 use chrono::{DateTime, Utc};
-use http::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
+use http::header::{AUTHORIZATION, HOST, HeaderMap, HeaderName, HeaderValue};
 use http::{Method, StatusCode};
 use percent_encoding::utf8_percent_encode;
 use serde::Deserialize;
@@ -227,10 +227,6 @@ impl<'a> AwsAuthorizer<'a> {
             request.headers_mut().insert(header, token_val);
         }
 
-        let host = &url[url::Position::BeforeHost..url::Position::AfterPort];
-        let host_val = HeaderValue::from_str(host).unwrap();
-        request.headers_mut().insert("host", host_val);
-
         let date = self.date.unwrap_or_else(Utc::now);
         let date_str = date.format("%Y%m%dT%H%M%SZ").to_string();
         let date_val = HeaderValue::from_str(&date_str).unwrap();
@@ -262,7 +258,14 @@ impl<'a> AwsAuthorizer<'a> {
                 .insert(&REQUEST_PAYER_HEADER, REQUEST_PAYER_HEADER_VALUE.clone());
         }
 
-        let (signed_headers, canonical_headers) = canonicalize_headers(request.headers());
+        // SigV4 must sign the `host` header, but the actual Host header is managed by the HTTP
+        // transport (hyper derives it from the request URL). We therefore add `host` to a
+        // throwaway copy of the headers used only to build the signature, rather than pinning it
+        // on the request.
+        let host = &url[url::Position::BeforeHost..url::Position::AfterPort];
+        let mut headers_to_sign = request.headers().clone();
+        headers_to_sign.insert(&HOST, HeaderValue::from_str(host).unwrap());
+        let (signed_headers, canonical_headers) = canonicalize_headers(&headers_to_sign);
 
         let scope = self.scope(date);
 
@@ -972,6 +975,52 @@ mod tests {
             request.headers().get(&AUTHORIZATION).unwrap(),
             "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20220806/us-east-1/ec2/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=a3c787a7ed37f7fdfbfd2d7056a3d7c9d85e6d52a2bfbec73793c0be6e7862d4"
         )
+    }
+
+    /// `host` must be part of the SigV4 signature, but must NOT be pinned as a header on the
+    /// request itself — the transport (hyper) sets Host from the URL, so a pinned Host header
+    /// would be carried onto a cross-host redirect (e.g. an S3-compatible gateway 302 to a CDN)
+    /// and break the redirected request.
+    #[cfg(feature = "reqwest")]
+    #[test]
+    fn test_host_is_signed_but_not_pinned_on_request() {
+        let client = HttpClient::new(Client::new());
+        let credential = AwsCredential {
+            key_id: "AKIAIOSFODNN7EXAMPLE".to_string(),
+            secret_key: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string(),
+            token: None,
+        };
+        let date = DateTime::parse_from_rfc3339("2022-08-06T18:01:34Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut request = client
+            .request(Method::GET, "https://ec2.amazon.com/")
+            .into_parts()
+            .1
+            .unwrap();
+        let signer = AwsAuthorizer {
+            date: Some(date),
+            crypto: None,
+            credential: &credential,
+            service: "ec2",
+            region: "us-east-1",
+            sign_payload: true,
+            token_header: None,
+            request_payer: false,
+        };
+
+        signer.try_authorize(&mut request, None).unwrap();
+
+        // host is signed ...
+        let auth = request
+            .headers()
+            .get(&AUTHORIZATION)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(auth.contains("SignedHeaders=host;"), "auth was: {auth}");
+        // ... but not pinned as a request header (so it is regenerated across redirects).
+        assert!(request.headers().get(&HOST).is_none());
     }
 
     #[cfg(feature = "reqwest")]
