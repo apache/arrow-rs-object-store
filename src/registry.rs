@@ -263,9 +263,9 @@ impl ObjectStoreRegistry for DefaultObjectStoreRegistry {
     }
 
     fn deregister(&self, url: &Url) -> Option<Arc<dyn ObjectStore>> {
-        let mut map = self.map.write();
         let key = url_key(url);
         let segments: Vec<&str> = path_segments(url.path()).collect();
+        let mut map = self.map.write();
         let entry = map.get_mut(key)?;
         let removed = entry.remove(&segments);
         // Drop the authority entry entirely once it holds no stores.
