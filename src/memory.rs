@@ -157,7 +157,7 @@ impl Storage {
                 source: format!("Object at location {location} not found").into(),
             }),
             Some(e) => {
-                let existing = e.e_tag.to_string();
+                let existing = format!("\"{}\"", e.e_tag);
                 let expected = v.e_tag.ok_or(Error::MissingETag)?;
                 if existing == expected {
                     *e = entry;
@@ -217,7 +217,7 @@ impl ObjectStore for InMemory {
         storage.next_etag += 1;
 
         Ok(PutResult {
-            e_tag: Some(etag.to_string()),
+            e_tag: Some(format!("\"{}\"", etag)),
             version: None,
             extensions: Default::default(),
         })
@@ -238,7 +238,7 @@ impl ObjectStore for InMemory {
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
         let entry = self.entry(location)?;
-        let e_tag = entry.e_tag.to_string();
+        let e_tag = format!("\"{}\"", entry.e_tag);
 
         let meta = ObjectMeta {
             location: location.clone(),
@@ -331,7 +331,7 @@ impl ObjectStore for InMemory {
                     location: key.clone(),
                     last_modified: value.last_modified,
                     size: value.data.len() as u64,
-                    e_tag: Some(value.e_tag.to_string()),
+                    e_tag: Some(format!("\"{}\"", value.e_tag)),
                     version: None,
                 })
             })
@@ -376,7 +376,7 @@ impl ObjectStore for InMemory {
                     location: k.clone(),
                     last_modified: v.last_modified,
                     size: v.data.len() as u64,
-                    e_tag: Some(v.e_tag.to_string()),
+                    e_tag: Some(format!("\"{}\"", v.e_tag)),
                     version: None,
                 };
                 objects.push(object);
@@ -480,7 +480,7 @@ impl MultipartStore for InMemory {
         }
         let etag = storage.insert(path, buf.into(), upload.attributes);
         Ok(PutResult {
-            e_tag: Some(etag.to_string()),
+            e_tag: Some(format!("\"{}\"", etag)),
             version: None,
             extensions: Default::default(),
         })
@@ -547,7 +547,7 @@ impl MultipartUpload for InMemoryUpload {
         );
 
         Ok(PutResult {
-            e_tag: Some(etag.to_string()),
+            e_tag: Some(format!("\"{}\"", etag)),
             version: None,
             extensions: Default::default(),
         })
