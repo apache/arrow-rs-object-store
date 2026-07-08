@@ -1504,6 +1504,7 @@ mod tests {
     use bytes::Bytes;
     use regex::bytes::Regex;
     use reqwest::Client;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn deserde_azure() {
@@ -1714,6 +1715,116 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(delegation_key_expiry(&key, requested), requested);
+    }
+
+    #[cfg(feature = "reqwest")]
+    fn test_client(service: &str) -> AzureClient {
+        let credential_provider = Arc::new(StaticCredentialProvider::new(
+            AzureCredential::BearerToken("static-token".to_string()),
+        ));
+
+        let config = AzureConfig {
+            account: "testaccount".to_string(),
+            container: "testcontainer".to_string(),
+            credentials: credential_provider,
+            crypto: None,
+            service: service.try_into().unwrap(),
+            retry_config: Default::default(),
+            is_emulator: false,
+            skip_signature: false,
+            disable_tagging: false,
+            client_options: Default::default(),
+            encryption_headers: Default::default(),
+        };
+
+        AzureClient::new(config, HttpClient::new(Client::new()))
+    }
+
+    fn delegation_key_response(expiry: DateTime<Utc>) -> String {
+        let expiry = expiry.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<UserDelegationKey>
+    <SignedOid>oid</SignedOid>
+    <SignedTid>tid</SignedTid>
+    <SignedStart>2026-06-25T00:00:00Z</SignedStart>
+    <SignedExpiry>{expiry}</SignedExpiry>
+    <SignedService>b</SignedService>
+    <SignedVersion>2025-11-05</SignedVersion>
+    <Value>secret</Value>
+</UserDelegationKey>"#
+        )
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_user_delegation_key_cache_reuse_and_refresh() {
+        let now = Utc::now();
+        let one_min = Duration::from_secs(60);
+        let three_hours = Duration::from_secs(3 * 60 * 60);
+
+        // A key with more than DELEGATION_KEY_MIN_TTL remaining should be reused
+        // for short-lived SAS tokens instead of triggering another
+        // GetUserDelegationKey request.
+        let server = crate::client::mock_server::MockServer::new().await;
+        let fetches = Arc::new(AtomicUsize::new(0));
+        let client = test_client(server.url());
+
+        let fetches_clone = Arc::clone(&fetches);
+        server.push_fn(move |_| {
+            fetches_clone.fetch_add(1, Ordering::SeqCst);
+            http::Response::new(delegation_key_response(now + three_hours))
+        });
+
+        client
+            .user_delegation_key(now, now + one_min, one_min)
+            .await
+            .unwrap();
+        client
+            .user_delegation_key(now, now + one_min, one_min)
+            .await
+            .unwrap();
+        assert_eq!(fetches.load(Ordering::SeqCst), 1);
+
+        // SAS tokens longer than DELEGATION_KEY_MIN_TTL are not safe to mint
+        // with the cached key, so they fetch a dedicated delegation key.
+        let fetches_clone = Arc::clone(&fetches);
+        server.push_fn(move |_| {
+            fetches_clone.fetch_add(1, Ordering::SeqCst);
+            http::Response::new(delegation_key_response(now + three_hours))
+        });
+
+        client
+            .user_delegation_key(now, now + three_hours, three_hours)
+            .await
+            .unwrap();
+        assert_eq!(fetches.load(Ordering::SeqCst), 2);
+
+        // A newly fetched key whose Azure-granted expiry is already below
+        // DELEGATION_KEY_MIN_TTL is cached, but should be refreshed after the
+        // TokenCache fetch backoff instead of being reused indefinitely.
+        let server = crate::client::mock_server::MockServer::new().await;
+        let fetches = Arc::new(AtomicUsize::new(0));
+        let client = test_client(server.url());
+
+        for _ in 0..2 {
+            let fetches_clone = Arc::clone(&fetches);
+            server.push_fn(move |_| {
+                fetches_clone.fetch_add(1, Ordering::SeqCst);
+                http::Response::new(delegation_key_response(now + one_min))
+            });
+        }
+
+        client
+            .user_delegation_key(now, now + one_min, one_min)
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        client
+            .user_delegation_key(now, now + one_min, one_min)
+            .await
+            .unwrap();
+        assert_eq!(fetches.load(Ordering::SeqCst), 2);
     }
 
     #[cfg(feature = "reqwest")]
