@@ -262,9 +262,11 @@ impl<'a> AwsAuthorizer<'a> {
         // due to a redirect. Therefore do not override the Host header for the http 
         // request, let the client set it. 
         let host = &url[url::Position::BeforeHost..url::Position::AfterPort];
-        let mut headers_to_sign = request.headers().clone();
-        headers_to_sign.insert(&HOST, HeaderValue::from_str(host).unwrap());
-        let (signed_headers, canonical_headers) = canonicalize_headers(&headers_to_sign);
+        request
+            .headers_mut()
+            .insert(&HOST, HeaderValue::from_str(host).unwrap());
+        let (signed_headers, canonical_headers) = canonicalize_headers(request.headers());
+        request.headers_mut().remove(&HOST);
 
         let scope = self.scope(date);
 
