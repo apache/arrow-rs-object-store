@@ -258,10 +258,9 @@ impl<'a> AwsAuthorizer<'a> {
                 .insert(&REQUEST_PAYER_HEADER, REQUEST_PAYER_HEADER_VALUE.clone());
         }
 
-        // SigV4 must sign the `host` header, but the actual Host header is managed by the HTTP
-        // transport (hyper derives it from the request URL). We therefore add `host` to a
-        // throwaway copy of the headers used only to build the signature, rather than pinning it
-        // on the request.
+        // the SigV4 must include a value for `host`, but the actual Host header may need to change 
+        // due to a redirect. Therefore do not override the Host header for the http 
+        // request, let the client set it. 
         let host = &url[url::Position::BeforeHost..url::Position::AfterPort];
         let mut headers_to_sign = request.headers().clone();
         headers_to_sign.insert(&HOST, HeaderValue::from_str(host).unwrap());
