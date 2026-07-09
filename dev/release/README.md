@@ -208,6 +208,15 @@ Move tarball to the release location in SVN, e.g. https://dist.apache.org/repos/
 
 Congratulations! The release is now official!
 
+### Check the GitHub release
+
+The [`release.yml`] workflow automatically creates a GitHub release for
+non-RC `v*` tags. Check that the release is created and contains the
+correct changelog here:
+https://github.com/apache/arrow-rs-object-store/releases
+
+[`release.yml`]: https://github.com/apache/arrow-rs-object-store/blob/main/.github/workflows/release.yml#L1-L0
+
 ### Publish on Crates.io
 
 Only approved releases of the tarball should be published to
