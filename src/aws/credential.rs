@@ -258,9 +258,9 @@ impl<'a> AwsAuthorizer<'a> {
                 .insert(&REQUEST_PAYER_HEADER, REQUEST_PAYER_HEADER_VALUE.clone());
         }
 
-        // the SigV4 must include a value for `host`, but the actual Host header may need to change 
-        // due to a redirect. Therefore do not override the Host header for the http 
-        // request, let the client set it. 
+        // the SigV4 must include a value for `host`, but the actual Host header may need to change
+        // due to a redirect. Therefore do not override the Host header for the http
+        // request, let the client set it.
         let host = &url[url::Position::BeforeHost..url::Position::AfterPort];
         request
             .headers_mut()
