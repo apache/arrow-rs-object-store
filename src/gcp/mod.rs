@@ -230,6 +230,58 @@ impl ObjectStore for GoogleCloudStorage {
 
 #[async_trait]
 impl MultipartStore for GoogleCloudStorage {
+    /// Create a new multipart upload, returning its [`MultipartId`].
+    ///
+    /// This is the low-level [`MultipartStore`] API, which gives direct control
+    /// over individual parts. See [`ObjectStoreExt::put_multipart`] for a
+    /// higher-level API that handles parts automatically.
+    ///
+    /// # Example
+    ///
+    /// Create a multipart upload, upload two parts, and finalize it by calling
+    /// [`complete_multipart`]:
+    ///
+    /// ```no_run
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # use object_store::{gcp::GoogleCloudStorageBuilder, multipart::MultipartStore, path::Path, PutPayload};
+    /// #
+    /// let gcs = GoogleCloudStorageBuilder::new()
+    ///     .with_bucket_name("my-bucket")
+    ///     .with_service_account_path("/path/to/service-account.json")
+    ///     .build()?;
+    ///
+    /// let path = Path::from("data/large_file");
+    ///
+    /// // Start the upload, obtaining an id used to reference it in later calls
+    /// let id = gcs.create_multipart(&path).await?;
+    ///
+    /// // Upload the individual parts. Every part except the last must be at least
+    /// // 5 MiB.
+    /// let part0 = gcs
+    ///     .put_part(&path, &id, 0, PutPayload::from(vec![0; 5 * 1024 * 1024]))
+    ///     .await?;
+    /// let part1 = gcs
+    ///     .put_part(&path, &id, 1, PutPayload::from("the final part"))
+    ///     .await?;
+    ///
+    /// // Finalize the upload. The parts must be provided in `part_idx` order.
+    /// gcs.complete_multipart(&path, &id, vec![part0, part1]).await?;
+    /// #     Ok(())
+    /// # }
+    /// ```
+    ///
+    /// Every part except the last must be at least 5 MiB. Parts may be uploaded
+    /// concurrently and in any order, provided each is given the correct
+    /// `part_idx`. See [Cloud Storage multipart upload limits] for the full set of
+    /// size and count constraints.
+    ///
+    /// To discard an upload instead of completing it, call
+    /// [`abort_multipart`] with the same `id`.
+    ///
+    /// [`ObjectStoreExt::put_multipart`]: crate::ObjectStoreExt::put_multipart
+    /// [`complete_multipart`]: MultipartStore::complete_multipart
+    /// [`abort_multipart`]: MultipartStore::abort_multipart
+    /// [Cloud Storage multipart upload limits]: https://cloud.google.com/storage/docs/multipart-uploads
     async fn create_multipart(&self, path: &Path) -> Result<MultipartId> {
         self.client
             .multipart_initiate(path, PutMultipartOptions::default())
