@@ -15,28 +15,31 @@
 # specific language governing permissions and limitations
 # under the License.
 
----
-name: Typos
-
-concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
-
+# Creates a github release on https://github.com/apache/arrow-rs-object-store/releases
+# when a non-RC release tag is pushed to the repository.
+name: Release
 on:
   push:
-    branches:
-      - main
-  pull_request:
-
+    tags:
+      - 'v*'
+      - '!*-rc*'
+permissions:
+  contents: write
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 jobs:
-  typos:
-    name: Check for typos
+  publish:
+    name: Publish
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
-      - name: Install typos
-        uses: taiki-e/install-action@v2
-        with:
-          tool: typos
-      - name: Run typos
-        run: typos
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - name: Create GitHub Release
+        run: |
+          version=${GITHUB_REF_NAME}
+          title="object_store ${version}"
+          notes_file=CHANGELOG.md
+          gh release create ${GITHUB_REF_NAME} \
+            --title "${title}" \
+            --notes-file ${notes_file} \
+            --verify-tag

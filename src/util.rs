@@ -130,7 +130,7 @@ where
 }
 
 /// Returns a sorted list of ranges that cover `ranges`
-fn merge_ranges(ranges: &[Range<u64>], coalesce: u64) -> Vec<Range<u64>> {
+pub(crate) fn merge_ranges(ranges: &[Range<u64>], coalesce: u64) -> Vec<Range<u64>> {
     if ranges.is_empty() {
         return vec![];
     }

@@ -15,28 +15,6 @@
 # specific language governing permissions and limitations
 # under the License.
 
----
-name: Typos
-
-concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
-
-on:
-  push:
-    branches:
-      - main
-  pull_request:
-
-jobs:
-  typos:
-    name: Check for typos
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: Install typos
-        uses: taiki-e/install-action@v2
-        with:
-          tool: typos
-      - name: Run typos
-        run: typos
+[toolchain]
+channel = "1.97.0"
+components = ["rustfmt", "clippy"]

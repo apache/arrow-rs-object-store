@@ -264,6 +264,14 @@ mod tests {
                 (ObjectStoreScheme::AmazonS3, ""),
             ),
             (
+                "https://s3.dualstack.us-east-1.amazonaws.com/bucket/path",
+                (ObjectStoreScheme::AmazonS3, "path"),
+            ),
+            (
+                "https://bucket.s3.dualstack.us-east-1.amazonaws.com/path",
+                (ObjectStoreScheme::AmazonS3, "path"),
+            ),
+            (
                 "https://ACCOUNT_ID.r2.cloudflarestorage.com/bucket",
                 (ObjectStoreScheme::AmazonS3, ""),
             ),
