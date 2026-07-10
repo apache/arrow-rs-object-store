@@ -1266,9 +1266,9 @@ impl MicrosoftAzureBuilder {
                 Some(account_url) => account_url,
                 None => match self.use_fabric_endpoint.get()? {
                     true => {
-                        format!("https://{}.blob.fabric.microsoft.com", &account_name)
+                        format!("https://{}.blob.fabric.microsoft.com", account_name)
                     }
-                    false => format!("https://{}.blob.core.windows.net", &account_name),
+                    false => format!("https://{}.blob.core.windows.net", account_name),
                 },
             };
 
