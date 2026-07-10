@@ -23,6 +23,7 @@ use crate::client::get::GetClient;
 use crate::client::header::{HeaderConfig, get_put_result};
 use crate::client::list::ListClient;
 use crate::client::retry::{RetryContext, RetryExt};
+use crate::client::token::{TemporaryToken, TokenCache};
 use crate::client::{
     CryptoProvider, DigestAlgorithm, GetOptionsExt, HttpClient, HttpError, HttpRequest,
     HttpResponse, crypto_provider,
@@ -47,7 +48,7 @@ use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use url::Url;
 
 const VERSION_HEADER: &str = "x-ms-version-id";
@@ -662,16 +663,50 @@ async fn parse_blob_batch_delete_body(
     Ok(results)
 }
 
+/// How long a freshly fetched user delegation key is requested to remain valid.
+///
+/// The shared access signature (SAS) tokens we sign with it stay short-lived;
+/// this only bounds how often we call `GetUserDelegationKey`. Azure caps the key
+/// lifetime at 7 days (the `Start` and `Expiry` of the key must be within seven
+/// days of each other):
+/// <https://learn.microsoft.com/en-us/rest/api/storageservices/get-user-delegation-key#request-body>
+const DELEGATION_KEY_VALIDITY: Duration = Duration::from_secs(12 * 60 * 60);
+
+/// Minimum remaining validity for a cached key to be reused.
+///
+/// The cache only hands back a key with at least this much life left, so it is
+/// also the longest SAS lifetime the cache can safely serve (a SAS must not
+/// outlive the key it is signed with). Longer-lived SAS fetch a dedicated key.
+const DELEGATION_KEY_MIN_TTL: Duration = Duration::from_secs(2 * 60 * 60);
+
+/// Parse the validity Azure actually granted a user delegation key, falling back
+/// to the window we requested if the response can't be parsed.
+fn delegation_key_expiry(key: &UserDelegationKey, requested: DateTime<Utc>) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339(&key.signed_expiry)
+        .map(|t| t.with_timezone(&Utc))
+        .unwrap_or(requested)
+}
+
 #[derive(Debug)]
 pub(crate) struct AzureClient {
     config: AzureConfig,
     client: HttpClient,
+    /// Caches the user delegation key used to sign SAS URLs.
+    ///
+    /// Fetching a key is a network round-trip (`GetUserDelegationKey`) that Azure
+    /// throttles under load, so we fetch a long-lived key once and reuse it to
+    /// mint many short-lived SAS tokens.
+    delegation_key_cache: TokenCache<UserDelegationKey>,
 }
 
 impl AzureClient {
     /// create a new instance of [AzureClient]
     pub(crate) fn new(config: AzureConfig, client: HttpClient) -> Self {
-        Self { config, client }
+        Self {
+            config,
+            client,
+            delegation_key_cache: TokenCache::default().with_min_ttl(DELEGATION_KEY_MIN_TTL),
+        }
     }
 
     /// Returns the config
@@ -966,7 +1001,7 @@ impl AzureClient {
 
     /// Make a Get User Delegation Key request
     /// <https://docs.microsoft.com/en-us/rest/api/storageservices/get-user-delegation-key>
-    async fn get_user_delegation_key(
+    async fn get_delegation_key_inner(
         &self,
         start: &DateTime<Utc>,
         end: &DateTime<Utc>,
@@ -1020,7 +1055,7 @@ impl AzureClient {
         match credential.as_deref() {
             Some(AzureCredential::BearerToken(_)) => {
                 let key = self
-                    .get_user_delegation_key(&signed_start, &signed_expiry)
+                    .user_delegation_key(signed_start, signed_expiry, expires_in)
                     .await?;
                 let signing_key = AzureAccessKey::try_new(&key.value)?;
                 Ok(AzureSigner::new(
@@ -1041,6 +1076,50 @@ impl AzureClient {
             None => Err(Error::SASwithSkipSignature.into()),
             _ => Err(Error::SASforSASNotSupported.into()),
         }
+    }
+
+    /// Return a user delegation key valid for a SAS over `[sas_start, sas_expiry]`.
+    ///
+    /// `GetUserDelegationKey` is a network round-trip that Azure throttles (HTTP
+    /// 503) under load, so a long-lived key is cached and reused to sign many
+    /// short-lived SAS URLs.
+    ///
+    /// The cache only returns a key with more than [`DELEGATION_KEY_MIN_TTL`]
+    /// remaining, so any SAS no longer than that is guaranteed to expire before
+    /// its key. The (rare) longer-lived SAS get a dedicated key instead.
+    async fn user_delegation_key(
+        &self,
+        sas_start: DateTime<Utc>,
+        sas_expiry: DateTime<Utc>,
+        expires_in: Duration,
+    ) -> Result<UserDelegationKey> {
+        if expires_in <= DELEGATION_KEY_MIN_TTL {
+            self.delegation_key_cache
+                .get_or_insert_with(|| self.get_delegation_key(DELEGATION_KEY_VALIDITY))
+                .await
+        } else {
+            self.get_delegation_key_inner(&sas_start, &sas_expiry).await
+        }
+    }
+
+    /// Fetch a user delegation key valid for `validity` and wrap it as a
+    /// [`TemporaryToken`] so [`TokenCache`] can expire it.
+    async fn get_delegation_key(
+        &self,
+        validity: Duration,
+    ) -> Result<TemporaryToken<UserDelegationKey>> {
+        let start = chrono::Utc::now();
+        let requested_expiry = start + validity;
+        let key = self
+            .get_delegation_key_inner(&start, &requested_expiry)
+            .await?;
+        // Expire the cache entry when the key Azure granted does (it may clamp it).
+        let expiry = delegation_key_expiry(&key, requested_expiry);
+        let ttl = (expiry - chrono::Utc::now()).to_std().unwrap_or(validity);
+        Ok(TemporaryToken {
+            token: key,
+            expiry: Some(Instant::now() + ttl),
+        })
     }
 
     #[cfg(test)]
@@ -1385,7 +1464,7 @@ impl BlockList {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Clone, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub(crate) struct UserDelegationKey {
     pub signed_oid: String,
@@ -1397,6 +1476,29 @@ pub(crate) struct UserDelegationKey {
     pub value: String,
 }
 
+impl std::fmt::Debug for UserDelegationKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            signed_oid,
+            signed_tid,
+            signed_start,
+            signed_expiry,
+            signed_service,
+            signed_version,
+            value: _, // secret => redacted
+        } = self;
+        f.debug_struct("UserDelegationKey")
+            .field("signed_oid", signed_oid)
+            .field("signed_tid", signed_tid)
+            .field("signed_start", signed_start)
+            .field("signed_expiry", signed_expiry)
+            .field("signed_service", signed_service)
+            .field("signed_version", signed_version)
+            .field("value", &"******")
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1405,6 +1507,7 @@ mod tests {
     use bytes::Bytes;
     use regex::bytes::Regex;
     use reqwest::Client;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn deserde_azure() {
@@ -1592,6 +1695,139 @@ mod tests {
 
         let _delegated_key_response_internal: UserDelegationKey =
             quick_xml::de::from_str(S).unwrap();
+    }
+
+    #[test]
+    fn test_delegation_key_expiry() {
+        let at = |s: &str| DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc);
+        let requested = at("2026-06-25T06:00:00Z");
+
+        // A well-formed granted expiry is honored (e.g. Azure clamped it shorter).
+        let key = UserDelegationKey {
+            signed_expiry: "2026-06-25T05:00:00Z".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(
+            delegation_key_expiry(&key, requested),
+            at("2026-06-25T05:00:00Z")
+        );
+
+        // An unparsable expiry falls back to the requested window.
+        let key = UserDelegationKey {
+            signed_expiry: "not a timestamp".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(delegation_key_expiry(&key, requested), requested);
+    }
+
+    #[cfg(feature = "reqwest")]
+    fn test_client(service: &str) -> AzureClient {
+        let credential_provider = Arc::new(StaticCredentialProvider::new(
+            AzureCredential::BearerToken("static-token".to_string()),
+        ));
+
+        let config = AzureConfig {
+            account: "testaccount".to_string(),
+            container: "testcontainer".to_string(),
+            credentials: credential_provider,
+            crypto: None,
+            service: service.try_into().unwrap(),
+            retry_config: Default::default(),
+            is_emulator: false,
+            skip_signature: false,
+            disable_tagging: false,
+            client_options: Default::default(),
+            encryption_headers: Default::default(),
+        };
+
+        AzureClient::new(config, HttpClient::new(Client::new()))
+    }
+
+    fn delegation_key_response(expiry: DateTime<Utc>) -> String {
+        let expiry = expiry.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<UserDelegationKey>
+    <SignedOid>oid</SignedOid>
+    <SignedTid>tid</SignedTid>
+    <SignedStart>2026-06-25T00:00:00Z</SignedStart>
+    <SignedExpiry>{expiry}</SignedExpiry>
+    <SignedService>b</SignedService>
+    <SignedVersion>2025-11-05</SignedVersion>
+    <Value>secret</Value>
+</UserDelegationKey>"#
+        )
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_user_delegation_key_cache_reuse_and_refresh() {
+        let now = Utc::now();
+        let one_min = Duration::from_secs(60);
+        let three_hours = Duration::from_secs(3 * 60 * 60);
+
+        // A key with more than DELEGATION_KEY_MIN_TTL remaining should be reused
+        // for short-lived SAS tokens instead of triggering another
+        // GetUserDelegationKey request.
+        let server = crate::client::mock_server::MockServer::new().await;
+        let fetches = Arc::new(AtomicUsize::new(0));
+        let client = test_client(server.url());
+
+        let fetches_clone = Arc::clone(&fetches);
+        server.push_fn(move |_| {
+            fetches_clone.fetch_add(1, Ordering::SeqCst);
+            http::Response::new(delegation_key_response(now + three_hours))
+        });
+
+        client
+            .user_delegation_key(now, now + one_min, one_min)
+            .await
+            .unwrap();
+        client
+            .user_delegation_key(now, now + one_min, one_min)
+            .await
+            .unwrap();
+        assert_eq!(fetches.load(Ordering::SeqCst), 1);
+
+        // SAS tokens longer than DELEGATION_KEY_MIN_TTL are not safe to mint
+        // with the cached key, so they fetch a dedicated delegation key.
+        let fetches_clone = Arc::clone(&fetches);
+        server.push_fn(move |_| {
+            fetches_clone.fetch_add(1, Ordering::SeqCst);
+            http::Response::new(delegation_key_response(now + three_hours))
+        });
+
+        client
+            .user_delegation_key(now, now + three_hours, three_hours)
+            .await
+            .unwrap();
+        assert_eq!(fetches.load(Ordering::SeqCst), 2);
+
+        // A newly fetched key whose Azure-granted expiry is already below
+        // DELEGATION_KEY_MIN_TTL is cached, but should be refreshed after the
+        // TokenCache fetch backoff instead of being reused indefinitely.
+        let server = crate::client::mock_server::MockServer::new().await;
+        let fetches = Arc::new(AtomicUsize::new(0));
+        let client = test_client(server.url());
+
+        for _ in 0..2 {
+            let fetches_clone = Arc::clone(&fetches);
+            server.push_fn(move |_| {
+                fetches_clone.fetch_add(1, Ordering::SeqCst);
+                http::Response::new(delegation_key_response(now + one_min))
+            });
+        }
+
+        client
+            .user_delegation_key(now, now + one_min, one_min)
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        client
+            .user_delegation_key(now, now + one_min, one_min)
+            .await
+            .unwrap();
+        assert_eq!(fetches.load(Ordering::SeqCst), 2);
     }
 
     #[cfg(feature = "reqwest")]
