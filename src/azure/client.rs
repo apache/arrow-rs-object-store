@@ -665,8 +665,11 @@ async fn parse_blob_batch_delete_body(
 
 /// How long a freshly fetched user delegation key is requested to remain valid.
 ///
-/// The SAS tokens we sign with it stay short-lived; this only bounds how often
-/// we call `GetUserDelegationKey`. Azure caps the key lifetime at 7 days.
+/// The shared access signature (SAS) tokens we sign with it stay short-lived;
+/// this only bounds how often we call `GetUserDelegationKey`. Azure caps the key
+/// lifetime at 7 days (the `Start` and `Expiry` of the key must be within seven
+/// days of each other):
+/// <https://learn.microsoft.com/en-us/rest/api/storageservices/get-user-delegation-key#request-body>
 const DELEGATION_KEY_VALIDITY: Duration = Duration::from_secs(12 * 60 * 60);
 
 /// Minimum remaining validity for a cached key to be reused.
@@ -998,7 +1001,7 @@ impl AzureClient {
 
     /// Make a Get User Delegation Key request
     /// <https://docs.microsoft.com/en-us/rest/api/storageservices/get-user-delegation-key>
-    async fn get_user_delegation_key(
+    async fn get_delegation_key_inner(
         &self,
         start: &DateTime<Utc>,
         end: &DateTime<Utc>,
@@ -1092,23 +1095,23 @@ impl AzureClient {
     ) -> Result<UserDelegationKey> {
         if expires_in <= DELEGATION_KEY_MIN_TTL {
             self.delegation_key_cache
-                .get_or_insert_with(|| self.fetch_delegation_key(DELEGATION_KEY_VALIDITY))
+                .get_or_insert_with(|| self.get_delegation_key(DELEGATION_KEY_VALIDITY))
                 .await
         } else {
-            self.get_user_delegation_key(&sas_start, &sas_expiry).await
+            self.get_delegation_key_inner(&sas_start, &sas_expiry).await
         }
     }
 
     /// Fetch a user delegation key valid for `validity` and wrap it as a
     /// [`TemporaryToken`] so [`TokenCache`] can expire it.
-    async fn fetch_delegation_key(
+    async fn get_delegation_key(
         &self,
         validity: Duration,
     ) -> Result<TemporaryToken<UserDelegationKey>> {
         let start = chrono::Utc::now();
         let requested_expiry = start + validity;
         let key = self
-            .get_user_delegation_key(&start, &requested_expiry)
+            .get_delegation_key_inner(&start, &requested_expiry)
             .await?;
         // Expire the cache entry when the key Azure granted does (it may clamp it).
         let expiry = delegation_key_expiry(&key, requested_expiry);
