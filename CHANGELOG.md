@@ -25,6 +25,7 @@
 
 **Implemented enhancements:**
 
+- Cache Azure user delegation key for SAS signing [\#800](https://github.com/apache/arrow-rs-object-store/issues/800)
 - Add deregister to ObjectStoreRegistry [\#795](https://github.com/apache/arrow-rs-object-store/issues/795)
 - Support for S3 dual-stack endpoints [\#779](https://github.com/apache/arrow-rs-object-store/issues/779)
 - Coalesce contiguous ranges in LocalFileSystem::get\_ranges [\#778](https://github.com/apache/arrow-rs-object-store/issues/778)
@@ -48,6 +49,7 @@
 - impl HttpError::new\_boxed to provide user with ability to ctor from already boxed error [\#789](https://github.com/apache/arrow-rs-object-store/pull/789) ([DoumanAsh](https://github.com/DoumanAsh))
 - build\(deps\): update quick-xml requirement from 0.40.1 to 0.41.0 [\#785](https://github.com/apache/arrow-rs-object-store/pull/785) ([dependabot[bot]](https://github.com/apps/dependabot))
 - feat: add deregister to ObjectStoreRegistry [\#784](https://github.com/apache/arrow-rs-object-store/pull/784) ([kszucs](https://github.com/kszucs))
+- Cache Azure user delegation key for SAS signing [\#781](https://github.com/apache/arrow-rs-object-store/pull/781) ([emilk](https://github.com/emilk))
 - fix\(aws\): recognize S3 dual-stack endpoints in URL parsing [\#780](https://github.com/apache/arrow-rs-object-store/pull/780) ([a10y](https://github.com/a10y))
 - Coalesce contiguous ranges in `LocalFileSystem::get_ranges` [\#777](https://github.com/apache/arrow-rs-object-store/pull/777) ([Dandandan](https://github.com/Dandandan))
 - Update copyright year in NOTICE.txt [\#772](https://github.com/apache/arrow-rs-object-store/pull/772) ([kevinjqliu](https://github.com/kevinjqliu))
