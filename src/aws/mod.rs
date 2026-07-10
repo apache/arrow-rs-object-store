@@ -487,7 +487,7 @@ impl MultipartStore for AmazonS3 {
     /// Create a new multipart upload, returning its [`MultipartId`].
     ///
     /// This is the low-level [`MultipartStore`] API, which gives direct control
-    /// over individual parts. See  [`ObjectStoreExt::put_multipart`] for a
+    /// over individual parts. See [`ObjectStoreExt::put_multipart`] for a
     /// higher-level API that handles parts automatically.
     ///
     /// # Example
@@ -528,7 +528,7 @@ impl MultipartStore for AmazonS3 {
     ///
     /// Every part except the last must be at least 5 MiB. Parts may be uploaded
     /// concurrently and in any order, provided each is given the correct
-    /// `part_idx`. See  [Amazon S3 multipart upload limits] for the full set of
+    /// `part_idx`. See [Amazon S3 multipart upload limits] for the full set of
     /// size and count constraints.
     ///
     /// To discard an upload instead of completing it, call
