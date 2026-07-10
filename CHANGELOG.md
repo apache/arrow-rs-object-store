@@ -19,7 +19,7 @@
 
 # Changelog
 
-## [v0.14.1](https://github.com/apache/arrow-rs-object-store/tree/v0.14.1) (2026-07-09)
+## [v0.14.1](https://github.com/apache/arrow-rs-object-store/tree/v0.14.1) (2026-07-10)
 
 [Full Changelog](https://github.com/apache/arrow-rs-object-store/compare/v0.14.0...v0.14.1)
 
@@ -28,26 +28,28 @@
 - Add deregister to ObjectStoreRegistry [\#795](https://github.com/apache/arrow-rs-object-store/issues/795)
 - Support for S3 dual-stack endpoints [\#779](https://github.com/apache/arrow-rs-object-store/issues/779)
 - Coalesce contiguous ranges in LocalFileSystem::get\_ranges [\#778](https://github.com/apache/arrow-rs-object-store/issues/778)
+- Support for HF Storage Buckets [\#706](https://github.com/apache/arrow-rs-object-store/issues/706)
 
 **Fixed bugs:**
 
+- Clippy failing on main [\#798](https://github.com/apache/arrow-rs-object-store/issues/798)
 - Upgrade quick-xml to resolve RUSTSEC-2026-0194 and RUSTSEC-2026-0195 [\#786](https://github.com/apache/arrow-rs-object-store/issues/786)
 - InMemory and LocalFileSystem return unquoted ETags, violating RFC 9110 [\#769](https://github.com/apache/arrow-rs-object-store/issues/769)
 
 **Closed issues:**
 
 - Bump quick-xml to 0.41.0 for RustSec advisories [\#787](https://github.com/apache/arrow-rs-object-store/issues/787)
-- Release object store `0.14.0` \(breaking\) - Target April 2026 [\#657](https://github.com/apache/arrow-rs-object-store/issues/657)
 
 **Merged pull requests:**
 
+- Pin Rust toolchain to 1.97.0 and fix clippy [\#799](https://github.com/apache/arrow-rs-object-store/pull/799) ([alamb](https://github.com/alamb))
 - chore: reduce lock hold time in DefaultObjectStoreRegistry::deregister [\#792](https://github.com/apache/arrow-rs-object-store/pull/792) ([kszucs](https://github.com/kszucs))
+- Do not explicitly add `Host` header when making requests with  S3Builder [\#790](https://github.com/apache/arrow-rs-object-store/pull/790) ([ntjohnson1](https://github.com/ntjohnson1))
 - impl HttpError::new\_boxed to provide user with ability to ctor from already boxed error [\#789](https://github.com/apache/arrow-rs-object-store/pull/789) ([DoumanAsh](https://github.com/DoumanAsh))
 - build\(deps\): update quick-xml requirement from 0.40.1 to 0.41.0 [\#785](https://github.com/apache/arrow-rs-object-store/pull/785) ([dependabot[bot]](https://github.com/apps/dependabot))
 - feat: add deregister to ObjectStoreRegistry [\#784](https://github.com/apache/arrow-rs-object-store/pull/784) ([kszucs](https://github.com/kszucs))
 - fix\(aws\): recognize S3 dual-stack endpoints in URL parsing [\#780](https://github.com/apache/arrow-rs-object-store/pull/780) ([a10y](https://github.com/a10y))
 - Coalesce contiguous ranges in `LocalFileSystem::get_ranges` [\#777](https://github.com/apache/arrow-rs-object-store/pull/777) ([Dandandan](https://github.com/Dandandan))
-- CI: stop swallowing emulator setup failures [\#776](https://github.com/apache/arrow-rs-object-store/pull/776) ([kevinjqliu](https://github.com/kevinjqliu))
 - Update copyright year in NOTICE.txt [\#772](https://github.com/apache/arrow-rs-object-store/pull/772) ([kevinjqliu](https://github.com/kevinjqliu))
 - fix: quote ETags per RFC 9110 in InMemory and LocalFileSystem [\#770](https://github.com/apache/arrow-rs-object-store/pull/770) ([bidord](https://github.com/bidord))
 - build\(deps\): bump actions/checkout from 6 to 7 [\#768](https://github.com/apache/arrow-rs-object-store/pull/768) ([dependabot[bot]](https://github.com/apps/dependabot))
