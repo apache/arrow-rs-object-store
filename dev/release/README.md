@@ -110,28 +110,29 @@ create a release candidate using the following steps. Note you need to
 be a committer to run these scripts as they upload to the apache `svn`
 distribution servers.
 
-### Create git tag for the release:
-
-While the official release artifact is a signed tarball, we also tag the commit it was created for convenience and code archaeology.
-
-Use a string such as `v0.4.0` as the `<version>`.
-
-Create and push the tag thusly:
-
-```shell
-git fetch apache
-git tag <version> apache/main
-# push tag to apache
-git push apache <version>
-```
-
-### Pick an Release Candidate (RC) number
+### Pick a Release Candidate (RC) number
 
 Pick numbers in sequential order, with `1` for `rc1`, `2` for `rc2`, etc.
 
+### Create git tag for the release candidate:
+
+While the official release artifact is a signed tarball, we also tag the commit it was created for convenience and code archaeology.
+
+Use a string such as `0.4.0` as the `<version>`.
+
+Create and push an RC tag thusly. For example, version `0.4.0` and RC
+number `2` would be `v0.4.0-rc2`:
+
+```shell
+git fetch apache
+git tag v<version>-rc<rc> apache/main
+# push tag to apache
+git push apache v<version>-rc<rc>
+```
+
 ### Create, sign, and upload tarball
 
-Run `create-tarball.sh` with the `<version>` tag and `<rc>` and you found in previous steps.
+Run `create-tarball.sh` with the `<version>` and `<rc>` you found in previous steps.
 
 ```shell
 ./dev/release/create-tarball.sh 0.11.1 1
@@ -148,41 +149,8 @@ The `create-tarball.sh` script
 
 ### Vote on Release Candidate tarball
 
-Send an email, based on the output from the script to dev@arrow.apache.org. The email should look like
-
-```
-Draft email for dev@arrow.apache.org mailing list
-
----------------------------------------------------------
-To: dev@arrow.apache.org
-Subject: [VOTE][RUST] Release Apache Arrow Rust Object Store 0.11.1 RC1
-
-Hi,
-
-I would like to propose a release of Apache Arrow Rust Object
-Store Implementation, version 0.11.1.
-
-This release candidate is based on commit: b945b15de9085f5961a478d4f35b0c5c3427e248 [1]
-
-The proposed release tarball and signatures are hosted at [2].
-
-The changelog is located at [3].
-
-Please download, verify checksums and signatures, run the unit tests,
-and vote on the release. There is a script [4] that automates some of
-the verification.
-
-The vote will be open for at least 72 hours.
-
-[ ] +1 Release this as Apache Arrow Rust Object Store
-[ ] +0
-[ ] -1 Do not release this as Apache Arrow Rust Object Store  because...
-
-[1]: https://github.com/apache/arrow-rs-object-store/tree/b945b15de9085f5961a478d4f35b0c5c3427e248
-[2]: https://dist.apache.org/repos/dist/dev/arrow/apache-arrow-object-store-rs-0.11.1-rc1/
-[3]: https://github.com/apache/arrow-rs-object-store/blob/b945b15de9085f5961a478d4f35b0c5c3427e248/CHANGELOG.md
-[4]: https://github.com/apache/arrow-rs-object-store/blob/main/dev/release/verify-release-candidate.sh
-```
+Send an email, based on the output from the script to dev@arrow.apache.org.
+See an [example of how the email should look](https://lists.apache.org/thread/29v3kjk5x6nlqrgt1kq6c7o8km0wn1w9).
 
 For the release to become "official" it needs at least three Apache Arrow PMC members to vote +1 on it.
 
@@ -200,7 +168,19 @@ If the release is not approved, fix whatever the problem is and try again with t
 
 ### If the release is approved,
 
-Move tarball to the release location in SVN, e.g. https://dist.apache.org/repos/dist/release/arrow/apache-arrow-object-store-rs-4.1.0-rc4/, using the `release-tarball.sh` script:
+Then, create a new release on GitHub using the tag `v<version>` (e.g.
+`v4.1.0`).
+
+Push the release tag to GitHub:
+
+```shell
+git tag v<version> v<version>-rc<rc>
+git push apache v<version>
+```
+
+Move tarball to the release location in SVN, e.g.
+https://dist.apache.org/repos/dist/release/arrow/arrow-object-store-rs-4.1.0/,
+using the `release-tarball.sh` script:
 
 ```shell
 ./dev/release/release-tarball.sh 4.1.0 2
