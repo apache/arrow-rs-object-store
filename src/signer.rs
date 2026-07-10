@@ -40,6 +40,7 @@ use url::Url;
 ///     .with_signed_header(CONTENT_TYPE, HeaderValue::from_static("text/plain"));
 /// ```
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct SignedUrlOptions {
     /// Query parameters to sign and append to the URL.
     ///
