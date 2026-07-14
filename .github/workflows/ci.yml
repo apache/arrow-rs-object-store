@@ -298,7 +298,7 @@ jobs:
         run: cargo build --no-default-features --features aws-base --target wasm32-wasip1
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
       - name: Run wasm32-unknown-unknown tests (via Node)
