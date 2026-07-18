@@ -181,7 +181,7 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         let wait_get_per_byte = self.config().wait_get_per_byte;
 
         let result = self.inner.get_opts(location, options).await?;
-        Ok(throttle_get(result, wait_get_per_byte))
+        Ok(throttle_get(result, wait_get_per_byte).await)
     }
 
     async fn get_ranges(&self, location: &Path, ranges: &[Range<u64>]) -> Result<Vec<Bytes>> {
@@ -270,22 +270,34 @@ fn usize_to_u32_saturate(x: usize) -> u32 {
     x.try_into().unwrap_or(u32::MAX)
 }
 
-fn throttle_get(result: GetResult, wait_get_per_byte: Duration) -> GetResult {
-    #[allow(clippy::infallible_destructuring_match)]
-    let s = match result.payload {
-        GetResultPayload::Stream(s) => s,
+async fn throttle_get(result: GetResult, wait_get_per_byte: Duration) -> GetResult {
+    match result.payload {
+        GetResultPayload::Stream(s) => {
+            let stream = throttle_stream(s, move |bytes| {
+                let bytes_len: u32 = usize_to_u32_saturate(bytes.len());
+                wait_get_per_byte * bytes_len
+            });
+
+            GetResult {
+                payload: GetResultPayload::Stream(stream),
+                ..result
+            }
+        }
+        // A File payload has no byte stream to lazily wrap, so we cannot apply the
+        // per-byte throttle per chunk as we do for streams. Rather than force the
+        // file into a stream (and lose the local-file fast path that callers rely
+        // on), sleep once up front for the per-byte cost of the whole requested
+        // range, mirroring how `get_ranges` throttles, and return the File payload
+        // untouched. When `wait_get_per_byte` is zero this is a no-op and the File
+        // payload passes straight through.
         #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
-        GetResultPayload::File(_, _) => unimplemented!(),
-    };
+        payload @ GetResultPayload::File(_, _) => {
+            let n_bytes = result.range.end - result.range.start;
+            let n_bytes: u32 = n_bytes.try_into().unwrap_or(u32::MAX);
+            sleep(wait_get_per_byte * n_bytes).await;
 
-    let stream = throttle_stream(s, move |bytes| {
-        let bytes_len: u32 = usize_to_u32_saturate(bytes.len());
-        wait_get_per_byte * bytes_len
-    });
-
-    GetResult {
-        payload: GetResultPayload::Stream(stream),
-        ..result
+            GetResult { payload, ..result }
+        }
     }
 }
 
@@ -539,6 +551,37 @@ mod tests {
 
         store.config_mut(|cfg| cfg.wait_put_per_call = ZERO);
         assert_bounds!(measure_put(&store, 0).await, 0);
+    }
+
+    #[tokio::test]
+    #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
+    async fn get_local_file_system() {
+        use crate::local::LocalFileSystem;
+
+        // `LocalFileSystem::get_opts` returns a `GetResultPayload::File`, which the
+        // throttling wrapper previously handled with `unimplemented!()`, panicking on
+        // the first `get`. Wrapping it in a `ThrottledStore` and reading an object back
+        // must work and return the correct bytes.
+        let root = tempfile::TempDir::new().unwrap();
+        let inner = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        let store = ThrottledStore::new(inner, ThrottleConfig::default());
+
+        let path = Path::from("file.txt");
+        let data = Bytes::from_static(b"hello world");
+        store.put(&path, data.clone().into()).await.unwrap();
+
+        // Exercise both the per-call and per-byte throttle components against a File payload.
+        store.config_mut(|cfg| {
+            cfg.wait_get_per_call = Duration::from_millis(1);
+            cfg.wait_get_per_byte = Duration::from_millis(1);
+        });
+
+        let result = store.get(&path).await.unwrap();
+        // The File fast path is preserved rather than being converted into a stream.
+        assert!(matches!(&result.payload, GetResultPayload::File(_, _)));
+
+        let received = result.bytes().await.unwrap();
+        assert_eq!(received, data);
     }
 
     async fn place_test_object(store: &ThrottledStore<InMemory>, n_bytes: Option<usize>) -> Path {
