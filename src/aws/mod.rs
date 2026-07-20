@@ -484,6 +484,60 @@ impl MultipartUpload for S3MultiPartUpload {
 
 #[async_trait]
 impl MultipartStore for AmazonS3 {
+    /// Create a new multipart upload, returning its [`MultipartId`].
+    ///
+    /// This is the low-level [`MultipartStore`] API, which gives direct control
+    /// over individual parts. See [`ObjectStoreExt::put_multipart`] for a
+    /// higher-level API that handles parts automatically.
+    ///
+    /// # Example
+    ///
+    /// Create a multipart upload, upload two parts, and finalize it by calling
+    /// [`complete_multipart`]:
+    ///
+    /// ```no_run
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # use object_store::{aws::AmazonS3Builder, multipart::MultipartStore, path::Path, PutPayload};
+    /// #
+    /// let s3 = AmazonS3Builder::new()
+    ///     .with_region("us-east-1")
+    ///     .with_bucket_name("my-bucket")
+    ///     .with_access_key_id("my-access-key-id")
+    ///     .with_secret_access_key("my-secret-access-key")
+    ///     .build()?;
+    ///
+    /// let path = Path::from("data/large_file");
+    ///
+    /// // Start the upload, obtaining an id used to reference it in later calls
+    /// let id = s3.create_multipart(&path).await?;
+    ///
+    /// // Upload the individual parts. Every part except the last must be at least
+    /// // 5 MiB.
+    /// let part0 = s3
+    ///     .put_part(&path, &id, 0, PutPayload::from(vec![0; 5 * 1024 * 1024]))
+    ///     .await?;
+    /// let part1 = s3
+    ///     .put_part(&path, &id, 1, PutPayload::from("the final part"))
+    ///     .await?;
+    ///
+    /// // Finalize the upload. The parts must be provided in `part_idx` order.
+    /// s3.complete_multipart(&path, &id, vec![part0, part1]).await?;
+    /// #     Ok(())
+    /// # }
+    /// ```
+    ///
+    /// Every part except the last must be at least 5 MiB. Parts may be uploaded
+    /// concurrently and in any order, provided each is given the correct
+    /// `part_idx`. See [Amazon S3 multipart upload limits] for the full set of
+    /// size and count constraints.
+    ///
+    /// To discard an upload instead of completing it, call
+    /// [`abort_multipart`] with the same `id`.
+    ///
+    /// [`ObjectStoreExt::put_multipart`]: crate::ObjectStoreExt::put_multipart
+    /// [`complete_multipart`]: MultipartStore::complete_multipart
+    /// [`abort_multipart`]: MultipartStore::abort_multipart
+    /// [Amazon S3 multipart upload limits]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
     async fn create_multipart(&self, path: &Path) -> Result<MultipartId> {
         self.client
             .create_multipart(path, PutMultipartOptions::default())

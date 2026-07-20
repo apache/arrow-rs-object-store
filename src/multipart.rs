@@ -39,17 +39,28 @@ pub struct PartId {
 /// backends, including [`LocalFileSystem`], and automatically handles uploading fixed
 /// size parts of sufficient size in parallel
 ///
+/// See [`AmazonS3::create_multipart`] for a full example of this API.
+///
 /// [`ObjectStore::put_multipart_opts`]: crate::ObjectStore::put_multipart_opts
 /// [`LocalFileSystem`]: crate::local::LocalFileSystem
+/// [`AmazonS3::create_multipart`]: crate::aws::AmazonS3::create_multipart
 #[async_trait]
 pub trait MultipartStore: Send + Sync + 'static {
     /// Creates a new multipart upload, returning the [`MultipartId`]
+    ///
+    /// See [`AmazonS3::create_multipart`] for a full example of this API.
+    ///
+    /// [`AmazonS3::create_multipart`]: crate::aws::AmazonS3::create_multipart
     async fn create_multipart(&self, path: &Path) -> Result<MultipartId>;
 
     /// Creates a new multipart upload with the given options, returning the [`MultipartId`]
     ///
     /// This allows callers using the low-level multipart API to provide object attributes,
     /// tags, or implementation-specific extensions when initiating the upload.
+    ///
+    /// See [`AmazonS3::create_multipart`] for a full example of this API.
+    ///
+    /// [`AmazonS3::create_multipart`]: crate::aws::AmazonS3::create_multipart
     async fn create_multipart_opts(
         &self,
         path: &Path,
