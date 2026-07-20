@@ -693,11 +693,34 @@ mod tests {
             .unwrap_or_else(|_| DEFAULT_SIGNING_BUCKET.to_string())
     }
 
-    fn signing_store() -> AmazonS3 {
-        AmazonS3Builder::from_env()
+    /// Builds the signing store and preflights it: a plain authenticated `PutObject` /
+    /// `DeleteObject` round-trip that fails fast, with an actionable message, if the credentials
+    /// cannot access the bucket. Without this a permissions problem surfaces as an opaque
+    /// `403 AccessDenied` panic deep inside whichever presign assertion happens to run first
+    /// (which is exactly what made a reviewer's real-S3 run hard to diagnose).
+    async fn signing_store() -> AmazonS3 {
+        let store = AmazonS3Builder::from_env()
             .with_bucket_name(signing_bucket())
             .build()
-            .unwrap()
+            .unwrap();
+
+        let bucket = signing_bucket();
+        let probe = Path::from(".object_store_presign_preflight");
+        if let Err(source) = store.put(&probe, PutPayload::from_static(b"ok")).await {
+            panic!(
+                "presign test preflight failed: the configured credentials cannot write to \
+                 bucket `{bucket}`.\n\
+                 Verify the bucket exists, is in your configured region, and that the credentials \
+                 (from the AWS_* env vars read by `from_env`) grant s3:PutObject, s3:GetObject, \
+                 and s3:DeleteObject on it. Point at a different bucket with \
+                 OBJECT_STORE_SIGNING_BUCKET.\n\
+                 Underlying error: {source}"
+            );
+        }
+        // Best-effort cleanup; the probe object is harmless if it lingers.
+        let _ = store.delete(&probe).await;
+
+        store
     }
 
     #[tokio::test]
@@ -740,7 +763,7 @@ mod tests {
         // Exercises presigning a multipart `UploadPart` request: the `partNumber` and `uploadId`
         // query parameters must be folded into the signature, and the resulting URL must be
         // usable by a client that has no access to the credentials.
-        let integration = signing_store();
+        let integration = signing_store().await;
 
         let path = Path::from("test_signed_multipart_upload.bin");
         let _ = integration.delete(&path).await;
@@ -794,7 +817,7 @@ mod tests {
         // storage-enforced-checksum path: the server must accept a body matching the signed
         // checksum and reject one that does not, and the header is part of the signature so it
         // cannot be omitted.
-        let integration = signing_store();
+        let integration = signing_store().await;
 
         let path = Path::from("test_signed_checksum.bin");
         let _ = integration.delete(&path).await;
@@ -860,7 +883,7 @@ mod tests {
 
         // Presign a PUT binding a `content-type` (with internal whitespace). The recipient must
         // send exactly this value; a different one breaks the signature.
-        let integration = signing_store();
+        let integration = signing_store().await;
 
         let path = Path::from("test_signed_content_type.bin");
         let _ = integration.delete(&path).await;
@@ -915,7 +938,7 @@ mod tests {
         // A signed query value containing a space must be `%20`-encoded so the URL bytes match
         // the canonical query string; a real server rejects the signature otherwise. Uses a GET
         // with a `response-content-disposition` override, whose value contains spaces.
-        let integration = signing_store();
+        let integration = signing_store().await;
 
         let path = Path::from("test_signed_query_space.bin");
         let body = b"contents".to_vec();
@@ -958,7 +981,7 @@ mod tests {
 
         // Regression: the no-options path (now routed through `signed_url_opts`) still produces a
         // working presigned PUT and GET.
-        let integration = signing_store();
+        let integration = signing_store().await;
         let path = Path::from("test_signed_baseline.bin");
         let _ = integration.delete(&path).await;
         let body = b"baseline body".to_vec();
@@ -989,7 +1012,7 @@ mod tests {
         // Full multipart round trip with three parts (exercising S3's 5 MiB minimum-part rule)
         // and query parameters supplied in non-alphabetical order, proving the signer sorts the
         // canonical query string rather than signing in call order.
-        let integration = signing_store();
+        let integration = signing_store().await;
         let path = Path::from("test_signed_multipart_large.bin");
         let _ = integration.delete(&path).await;
 
@@ -1051,7 +1074,7 @@ mod tests {
         // Proves the signed query parameters and headers are actually bound to the signature:
         // mutating them must produce SignatureDoesNotMatch, while an extra *unsigned* header is
         // accepted (we don't over-constrain).
-        let integration = signing_store();
+        let integration = signing_store().await;
         let path = Path::from("test_signed_tamper.bin");
         let _ = integration.delete(&path).await;
         let client = reqwest::Client::new();
@@ -1148,7 +1171,7 @@ mod tests {
         // Proves path percent-encoding and signed query parameters coexist: a key containing a
         // space, `=`, and a non-ASCII character is presigned for a multipart part and lands at the
         // correct key. This is the exact path/query conflation class of bug we fixed.
-        let integration = signing_store();
+        let integration = signing_store().await;
         let path = Path::from("test signed/a b=c/π.bin");
         let _ = integration.delete(&path).await;
 
@@ -1197,7 +1220,7 @@ mod tests {
 
         // A short-lived signed URL is rejected after it expires, confirming the TTL is part of the
         // signed policy.
-        let integration = signing_store();
+        let integration = signing_store().await;
         let path = Path::from("test_signed_expiry.bin");
         let _ = integration.delete(&path).await;
 
@@ -1229,7 +1252,7 @@ mod tests {
 
         // A presigned PUT that signs `If-None-Match: *` succeeds when the object is absent and is
         // rejected (412) on replay once the object exists — the leaked-URL replay guard.
-        let integration = signing_store();
+        let integration = signing_store().await;
         let path = Path::from("test_signed_conditional.bin");
         let _ = integration.delete(&path).await;
         let client = reqwest::Client::new();
