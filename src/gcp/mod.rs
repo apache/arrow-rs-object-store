@@ -281,7 +281,7 @@ impl MultipartStore for GoogleCloudStorage {
     /// [`ObjectStoreExt::put_multipart`]: crate::ObjectStoreExt::put_multipart
     /// [`complete_multipart`]: MultipartStore::complete_multipart
     /// [`abort_multipart`]: MultipartStore::abort_multipart
-    /// [Cloud Storage multipart upload limits]: https://cloud.google.com/storage/docs/multipart-uploads
+    /// [Cloud Storage multipart upload limits]: https://docs.cloud.google.com/storage/docs/xml-api/post-object-complete
     async fn create_multipart(&self, path: &Path) -> Result<MultipartId> {
         self.client
             .multipart_initiate(path, PutMultipartOptions::default())
