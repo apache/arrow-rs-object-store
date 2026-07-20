@@ -153,19 +153,20 @@ cargo test --features aws --package object_store --lib aws::tests::test_s3_ssec_
 
 A handful of presigned-URL tests assert that the *storage backend* rejects an invalid request:
 a tampered signature, an expired URL, or a signed header whose value the client changed. These
-require a backend that actually validates SigV4. LocalStack does not validate presigned
-signatures or expiry — it accepts the request regardless — so these tests are gated behind a
-separate `TEST_S3_SIGNATURE_ENFORCEMENT` variable and skipped in the default integration suite.
-CI runs them automatically against MinIO (see the `signature-enforcement` step in `ci.yml`), so
-they stay exercised; the steps below are for reproducing that locally or pointing at real S3.
+require a backend that actually validates SigV4. LocalStack does not (it accepts presigned
+requests regardless of signature or expiry), so these tests are gated behind a separate
+`TEST_S3_SIGNATURE_ENFORCEMENT` variable rather than running in the main LocalStack integration
+pass. CI runs them against MinIO instead, which does validate SigV4 (the "Run presigned-URL
+signature-enforcement tests (MinIO)" step in `ci.yml`), so they stay exercised. The steps below
+reproduce that locally or point at real S3.
 
 These tests use a dedicated `test-bucket-for-signing` bucket so their writes cannot contaminate the
 shared `test-bucket` whose exact contents `s3_test` asserts. To point at a bucket in your own
-account instead, set `OBJECT_STORE_SIGNING_BUCKET` — no source edit required.
+account instead, set `OBJECT_STORE_SIGNING_BUCKET` (no source edit required).
 
 MinIO is the recommended local backend: unlike LocalStack it validates SigV4 signatures and expiry,
 so the enforcement assertions actually exercise. Plain HTTP is enough (these tests don't use SSE-C,
-so the self-signed-cert setup from the SSE-C section is not needed — and the test client would
+so the self-signed-cert setup from the SSE-C section is not needed, and the test client would
 reject that cert anyway):
 
 ```shell
