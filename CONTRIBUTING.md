@@ -194,6 +194,29 @@ export TEST_S3_SIGNATURE_ENFORCEMENT=1
 cargo test --features aws --package object_store --lib aws::tests::signed_url -- --nocapture
 ```
 
+Required S3 permissions (real S3 only). The tests exercise four object-level actions on the signing
+bucket: `s3:PutObject` (also covers CreateMultipartUpload, UploadPart, and CompleteMultipartUpload),
+`s3:GetObject`, `s3:DeleteObject`, and `s3:AbortMultipartUpload`. A minimal policy:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": [
+      "s3:PutObject",
+      "s3:GetObject",
+      "s3:DeleteObject",
+      "s3:AbortMultipartUpload"
+    ],
+    "Resource": "arn:aws:s3:::YOUR_BUCKET/*"
+  }]
+}
+```
+
+A `403 AccessDenied` (as opposed to `SignatureDoesNotMatch`) means the credentials are missing one
+of these or are blocked by a bucket policy or SCP, not that the signing is wrong.
+
 ### Azure
 
 To test the Azure integration
