@@ -159,16 +159,32 @@ separate `TEST_S3_SIGNATURE_ENFORCEMENT` variable and skipped in the default int
 CI runs them automatically against MinIO (see the `signature-enforcement` step in `ci.yml`), so
 they stay exercised; the steps below are for reproducing that locally or pointing at real S3.
 
-All presigned-URL tests use a dedicated `test-bucket-for-signing` bucket (created above) so their
-writes cannot contaminate the shared `test-bucket` whose exact contents `s3_test` asserts. Create
-that bucket on whichever backend you point at before running them. To point at a bucket in your own
+These tests use a dedicated `test-bucket-for-signing` bucket so their writes cannot contaminate the
+shared `test-bucket` whose exact contents `s3_test` asserts. To point at a bucket in your own
 account instead, set `OBJECT_STORE_SIGNING_BUCKET` — no source edit required.
 
-MinIO is the recommended local backend for these tests: unlike LocalStack it validates SigV4
-signatures and expiry, so the enforcement assertions actually exercise. Use the MinIO setup from the
-SSE-C section above. Running against real S3 also works, but note that a `403 AccessDenied` there
-means your IAM principal lacks permission on the bucket, not a signing bug (an incorrect signature
-returns `SignatureDoesNotMatch`).
+MinIO is the recommended local backend: unlike LocalStack it validates SigV4 signatures and expiry,
+so the enforcement assertions actually exercise. Plain HTTP is enough (these tests don't use SSE-C,
+so the self-signed-cert setup from the SSE-C section is not needed — and the test client would
+reject that cert anyway):
+
+```shell
+docker run -d -p 9000:9000 \
+  -e MINIO_ROOT_USER=minio -e MINIO_ROOT_PASSWORD=minio123 \
+  minio/minio server /data
+
+export AWS_ENDPOINT=http://localhost:9000
+export AWS_ALLOW_HTTP=true
+export AWS_ACCESS_KEY_ID=minio
+export AWS_SECRET_ACCESS_KEY=minio123
+export AWS_REGION=us-east-1
+aws --endpoint-url=http://localhost:9000 s3 mb s3://test-bucket-for-signing
+```
+
+Then run the tests. Running against real S3 also works (unset `AWS_ENDPOINT`/`AWS_ALLOW_HTTP` and
+use real credentials + the bucket's region); note that a `403 AccessDenied` there means your IAM
+principal lacks permission on the bucket, not a signing bug (an incorrect signature returns
+`SignatureDoesNotMatch`).
 
 ```shell
 export TEST_INTEGRATION=1
