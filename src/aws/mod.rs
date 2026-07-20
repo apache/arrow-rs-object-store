@@ -683,11 +683,19 @@ mod tests {
 
     /// Presigned-URL tests run against a dedicated bucket so their concurrent writes cannot
     /// contaminate the shared `test-bucket`, whose exact contents `s3_test` asserts.
-    const SIGNING_BUCKET: &str = "test-bucket-for-signing";
+    ///
+    /// Set `OBJECT_STORE_SIGNING_BUCKET` to run them against a bucket in your own account
+    /// (e.g. real S3) without editing this source; it defaults to `test-bucket-for-signing`.
+    const DEFAULT_SIGNING_BUCKET: &str = "test-bucket-for-signing";
+
+    fn signing_bucket() -> String {
+        std::env::var("OBJECT_STORE_SIGNING_BUCKET")
+            .unwrap_or_else(|_| DEFAULT_SIGNING_BUCKET.to_string())
+    }
 
     fn signing_store() -> AmazonS3 {
         AmazonS3Builder::from_env()
-            .with_bucket_name(SIGNING_BUCKET)
+            .with_bucket_name(signing_bucket())
             .build()
             .unwrap()
     }

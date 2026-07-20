@@ -159,13 +159,20 @@ separate `TEST_S3_SIGNATURE_ENFORCEMENT` variable and skipped in the default int
 
 All presigned-URL tests use a dedicated `test-bucket-for-signing` bucket (created above) so their
 writes cannot contaminate the shared `test-bucket` whose exact contents `s3_test` asserts. Create
-that bucket on whichever backend you point at before running them.
+that bucket on whichever backend you point at before running them. To point at a bucket in your own
+account instead, set `OBJECT_STORE_SIGNING_BUCKET` — no source edit required.
 
-Run them against real S3, or against MinIO using the setup above:
+MinIO is the recommended local backend for these tests: unlike LocalStack it validates SigV4
+signatures and expiry, so the enforcement assertions actually exercise. Use the MinIO setup from the
+SSE-C section above. Running against real S3 also works, but note that a `403 AccessDenied` there
+means your IAM principal lacks permission on the bucket, not a signing bug (an incorrect signature
+returns `SignatureDoesNotMatch`).
 
 ```shell
 export TEST_INTEGRATION=1
 export TEST_S3_SIGNATURE_ENFORCEMENT=1
+# Optional: point at your own bucket instead of the default `test-bucket-for-signing`.
+# export OBJECT_STORE_SIGNING_BUCKET=my-bucket
 cargo test --features aws --package object_store --lib aws::tests::signed_url -- --nocapture
 ```
 
