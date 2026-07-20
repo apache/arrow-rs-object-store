@@ -181,65 +181,10 @@ impl Signer for AmazonS3 {
     /// # }
     /// ```
     ///
-    /// # Example: end-to-end presigned multipart upload
+    /// See [`AmazonS3::create_multipart`] for a complete end-to-end example that presigns every
+    /// part of a multipart upload so a credential-less client can upload them.
     ///
-    /// A common use is to let a credential-less client upload the parts of a multipart upload
-    /// while the server holds the credentials. The server creates the upload, hands out one
-    /// presigned `UploadPart` URL per part, the client `PUT`s each part and returns the `ETag`
-    /// from every response, and the server completes the upload with those ETags.
-    ///
-    /// ```
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// # use object_store::{aws::AmazonS3Builder, path::Path, signer::{Signer, SignedUrlOptions}};
-    /// # use object_store::multipart::{MultipartStore, PartId};
-    /// # use http::Method;
-    /// # use std::time::Duration;
-    /// #
-    /// let s3 = AmazonS3Builder::new()
-    ///     .with_region("us-east-1")
-    ///     .with_bucket_name("my-bucket")
-    ///     .with_access_key_id("my-access-key-id")
-    ///     .with_secret_access_key("my-secret-access-key")
-    ///     .build()?;
-    ///
-    /// let path = Path::from("some-folder/large-file.bin");
-    ///
-    /// // 1. Server: start the multipart upload.
-    /// let upload_id = s3.create_multipart(&path).await?;
-    ///
-    /// // 2. Server: presign an `UploadPart` URL for each part. `partNumber` and `uploadId` must be
-    /// //    signed query parameters, or S3 rejects the request.
-    /// let mut part_urls = Vec::new();
-    /// for part_number in 1..=3 {
-    ///     let options = SignedUrlOptions::default().with_query([
-    ///         ("partNumber", part_number.to_string()),
-    ///         ("uploadId", upload_id.clone()),
-    ///     ]);
-    ///     let url = s3
-    ///         .signed_url_opts(Method::PUT, &path, Duration::from_secs(60 * 60), &options)
-    ///         .await?;
-    ///     part_urls.push(url);
-    /// }
-    ///
-    /// // 3. Client: `PUT` each part's bytes to its URL and read the `ETag` response header, e.g.
-    /// //    with `reqwest`:
-    /// //
-    /// //        let resp = reqwest::Client::new().put(url).body(bytes).send().await?;
-    /// //        let etag = resp.headers()[http::header::ETAG].to_str()?.to_string();
-    /// //
-    /// //    The client returns those ETags to the server, in part order.
-    /// let etags: Vec<String> = // returned by the client
-    /// #     vec![];
-    ///
-    /// // 4. Server: complete the upload with the collected ETags.
-    /// let parts = etags
-    ///     .into_iter()
-    ///     .map(|content_id| PartId { content_id })
-    ///     .collect();
-    /// s3.complete_multipart(&path, &upload_id, parts).await?;
-    /// #     Ok(())
-    /// # }
-    /// ```
+    /// [`AmazonS3::create_multipart`]: crate::aws::AmazonS3::create_multipart
     async fn signed_url_opts(
         &self,
         method: Method,
@@ -655,9 +600,66 @@ impl MultipartStore for AmazonS3 {
     /// To discard an upload instead of completing it, call
     /// [`abort_multipart`] with the same `id`.
     ///
+    /// # Example: presigned multipart upload
+    ///
+    /// The same upload can be driven by a client that holds no credentials. The credential holder
+    /// starts the upload and presigns an `UploadPart` URL for each part with
+    /// [`Signer::signed_url_opts`]; the client `PUT`s its bytes to that URL and returns the `ETag`
+    /// from the response; the credential holder then completes the upload with those ETags. This
+    /// is how you hand out per-part upload URLs without sharing credentials.
+    ///
+    /// ```no_run
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # use object_store::{aws::AmazonS3Builder, multipart::{MultipartStore, PartId}, path::Path};
+    /// # use object_store::signer::{Signer, SignedUrlOptions};
+    /// # use http::Method;
+    /// # use std::time::Duration;
+    /// #
+    /// let s3 = AmazonS3Builder::new()
+    ///     .with_region("us-east-1")
+    ///     .with_bucket_name("my-bucket")
+    ///     .with_access_key_id("my-access-key-id")
+    ///     .with_secret_access_key("my-secret-access-key")
+    ///     .build()?;
+    ///
+    /// let path = Path::from("data/large_file");
+    ///
+    /// // Credential holder: start the upload.
+    /// let id = s3.create_multipart(&path).await?;
+    ///
+    /// // Credential holder: presign an `UploadPart` URL for each part. `partNumber` and `uploadId`
+    /// // must be signed query parameters, or S3 rejects the request.
+    /// let mut part_urls = Vec::new();
+    /// for part_number in 1..=3 {
+    ///     let options = SignedUrlOptions::default().with_query([
+    ///         ("partNumber", part_number.to_string()),
+    ///         ("uploadId", id.clone()),
+    ///     ]);
+    ///     let url = s3
+    ///         .signed_url_opts(Method::PUT, &path, Duration::from_secs(60 * 60), &options)
+    ///         .await?;
+    ///     part_urls.push(url);
+    /// }
+    ///
+    /// // Client (no credentials): `PUT` each part's bytes to its URL, read the `ETag` response
+    /// // header, and return the ETags to the credential holder in part order, e.g. with `reqwest`:
+    /// //
+    /// //     let resp = reqwest::Client::new().put(url).body(bytes).send().await?;
+    /// //     let etag = resp.headers()[http::header::ETAG].to_str()?.to_string();
+    /// let etags: Vec<String> = // returned by the client
+    /// #     vec![];
+    ///
+    /// // Credential holder: complete the upload with the collected ETags.
+    /// let parts = etags.into_iter().map(|content_id| PartId { content_id }).collect();
+    /// s3.complete_multipart(&path, &id, parts).await?;
+    /// #     Ok(())
+    /// # }
+    /// ```
+    ///
     /// [`ObjectStoreExt::put_multipart`]: crate::ObjectStoreExt::put_multipart
     /// [`complete_multipart`]: MultipartStore::complete_multipart
     /// [`abort_multipart`]: MultipartStore::abort_multipart
+    /// [`Signer::signed_url_opts`]: crate::signer::Signer::signed_url_opts
     /// [Amazon S3 multipart upload limits]: https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html
     async fn create_multipart(&self, path: &Path) -> Result<MultipartId> {
         self.client
