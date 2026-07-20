@@ -311,6 +311,59 @@ impl MultipartUpload for AzureMultiPartUpload {
 
 #[async_trait]
 impl MultipartStore for MicrosoftAzure {
+    /// Create a new multipart upload, returning its [`MultipartId`].
+    ///
+    /// This is the low-level [`MultipartStore`] API, which gives direct control
+    /// over individual parts. See [`ObjectStoreExt::put_multipart`] for a
+    /// higher-level API that handles parts automatically.
+    ///
+    /// # Example
+    ///
+    /// Create a multipart upload, upload two parts, and finalize it by calling
+    /// [`complete_multipart`]:
+    ///
+    /// ```no_run
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # use object_store::{azure::MicrosoftAzureBuilder, multipart::MultipartStore, path::Path, PutPayload};
+    /// #
+    /// let azure = MicrosoftAzureBuilder::new()
+    ///     .with_account("my-account")
+    ///     .with_container_name("my-container")
+    ///     .with_access_key("my-access-key")
+    ///     .build()?;
+    ///
+    /// let path = Path::from("data/large_file");
+    ///
+    /// // Start the upload, obtaining an id used to reference it in later calls
+    /// let id = azure.create_multipart(&path).await?;
+    ///
+    /// // Upload the individual parts. Azure stores each part as a block.
+    /// let part0 = azure
+    ///     .put_part(&path, &id, 0, PutPayload::from("the first part"))
+    ///     .await?;
+    /// let part1 = azure
+    ///     .put_part(&path, &id, 1, PutPayload::from("the final part"))
+    ///     .await?;
+    ///
+    /// // Finalize the upload. The parts must be provided in `part_idx` order.
+    /// azure.complete_multipart(&path, &id, vec![part0, part1]).await?;
+    /// #     Ok(())
+    /// # }
+    /// ```
+    ///
+    /// Azure stores each part as a block, so a single blob may contain at most
+    /// 50,000 parts, each up to 4,000 MiB. Parts may be uploaded concurrently and
+    /// in any order, provided each is given the correct `part_idx`. See
+    /// [Azure block blob limits] for the full set of size and count constraints.
+    ///
+    /// Azure has no way to explicitly discard uploaded blocks, so
+    /// [`abort_multipart`] is a no-op: any uncommitted blocks are automatically
+    /// garbage collected roughly one week after the last write.
+    ///
+    /// [`ObjectStoreExt::put_multipart`]: crate::ObjectStoreExt::put_multipart
+    /// [`complete_multipart`]: MultipartStore::complete_multipart
+    /// [`abort_multipart`]: MultipartStore::abort_multipart
+    /// [Azure block blob limits]: https://learn.microsoft.com/en-us/rest/api/storageservices/put-block
     async fn create_multipart(&self, _: &Path) -> Result<MultipartId> {
         Ok(String::new())
     }
