@@ -156,6 +156,8 @@ a tampered signature, an expired URL, or a signed header whose value the client 
 require a backend that actually validates SigV4. LocalStack does not validate presigned
 signatures or expiry — it accepts the request regardless — so these tests are gated behind a
 separate `TEST_S3_SIGNATURE_ENFORCEMENT` variable and skipped in the default integration suite.
+CI runs them automatically against MinIO (see the `signature-enforcement` step in `ci.yml`), so
+they stay exercised; the steps below are for reproducing that locally or pointing at real S3.
 
 All presigned-URL tests use a dedicated `test-bucket-for-signing` bucket (created above) so their
 writes cannot contaminate the shared `test-bucket` whose exact contents `s3_test` asserts. Create
