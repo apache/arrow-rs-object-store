@@ -693,11 +693,11 @@ mod tests {
             .unwrap_or_else(|_| DEFAULT_SIGNING_BUCKET.to_string())
     }
 
-    /// Builds the signing store and preflights it: a plain authenticated `PutObject` /
-    /// `DeleteObject` round-trip that fails fast, with an actionable message, if the credentials
-    /// cannot access the bucket. Without this a permissions problem surfaces as an opaque
-    /// `403 AccessDenied` panic deep inside whichever presign assertion happens to run first
-    /// (which is exactly what made a reviewer's real-S3 run hard to diagnose).
+    /// Builds the signing store and preflights write access with an authenticated `PutObject`
+    /// probe that fails fast, with an actionable message, if the credentials cannot write to the
+    /// bucket. Without this a permissions problem surfaces as an opaque `403 AccessDenied` panic
+    /// deep inside whichever presign assertion happens to run first (which is exactly what made a
+    /// reviewer's real-S3 run hard to diagnose).
     async fn signing_store() -> AmazonS3 {
         let store = AmazonS3Builder::from_env()
             .with_bucket_name(signing_bucket())
@@ -711,9 +711,9 @@ mod tests {
                 "presign test preflight failed: the configured credentials cannot write to \
                  bucket `{bucket}`.\n\
                  Verify the bucket exists, is in your configured region, and that the credentials \
-                 (from the AWS_* env vars read by `from_env`) grant s3:PutObject, s3:GetObject, \
-                 and s3:DeleteObject on it. Point at a different bucket with \
-                 OBJECT_STORE_SIGNING_BUCKET.\n\
+                 (from the AWS_* env vars read by `from_env`) can access it. The tests exercise \
+                 s3:PutObject, s3:GetObject, and s3:DeleteObject; this preflight checks writes. \
+                 Point at a different bucket with OBJECT_STORE_SIGNING_BUCKET.\n\
                  Underlying error: {source}"
             );
         }
