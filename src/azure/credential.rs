@@ -206,9 +206,11 @@ impl AzureSigner {
             ),
             None => string_to_sign_service_sas(url, method, &self.account, &self.start, &self.end),
         };
-        let mut ctx = crypto.hmac(DigestAlgorithm::Sha256, &self.signing_key.0)?;
-        ctx.update(str_to_sign.as_bytes());
-        let auth = ctx.finish()?;
+        let auth = crypto.hmac(
+            DigestAlgorithm::Sha256,
+            &self.signing_key.0,
+            str_to_sign.as_bytes(),
+        )?;
 
         url.query_pairs_mut().extend_pairs(query_pairs);
         url.query_pairs_mut()
@@ -358,9 +360,7 @@ fn generate_authorization(
     key: &AzureAccessKey,
 ) -> crate::Result<String> {
     let str_to_sign = string_to_sign(h, u, method, account);
-    let mut ctx = crypto.hmac(DigestAlgorithm::Sha256, &key.0)?;
-    ctx.update(str_to_sign.as_bytes());
-    let auth = ctx.finish()?;
+    let auth = crypto.hmac(DigestAlgorithm::Sha256, &key.0, str_to_sign.as_bytes())?;
     Ok(format!(
         "SharedKey {}:{}",
         account,

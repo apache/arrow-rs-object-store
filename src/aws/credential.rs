@@ -105,22 +105,21 @@ impl AwsCredential {
         let date_string = date.format("%Y%m%d").to_string();
         let secret_key = format!("AWS4{}", self.secret_key);
 
-        let mut ctx = crypto.hmac(DigestAlgorithm::Sha256, secret_key.as_bytes())?;
-        ctx.update(date_string.as_bytes());
+        let tag = crypto.hmac(
+            DigestAlgorithm::Sha256,
+            secret_key.as_bytes(),
+            date_string.as_bytes(),
+        )?;
 
-        let mut ctx = crypto.hmac(DigestAlgorithm::Sha256, ctx.finish()?)?;
-        ctx.update(region.as_bytes());
+        let tag = crypto.hmac(DigestAlgorithm::Sha256, &tag, region.as_bytes())?;
 
-        let mut ctx = crypto.hmac(DigestAlgorithm::Sha256, ctx.finish()?)?;
-        ctx.update(service.as_bytes());
+        let tag = crypto.hmac(DigestAlgorithm::Sha256, &tag, service.as_bytes())?;
 
-        let mut ctx = crypto.hmac(DigestAlgorithm::Sha256, ctx.finish()?)?;
-        ctx.update(b"aws4_request");
+        let tag = crypto.hmac(DigestAlgorithm::Sha256, &tag, b"aws4_request")?;
 
-        let mut ctx = crypto.hmac(DigestAlgorithm::Sha256, ctx.finish()?)?;
-        ctx.update(to_sign.as_bytes());
+        let tag = crypto.hmac(DigestAlgorithm::Sha256, &tag, to_sign.as_bytes())?;
 
-        Ok(hex_encode(ctx.finish()?))
+        Ok(hex_encode(&tag))
     }
 }
 
