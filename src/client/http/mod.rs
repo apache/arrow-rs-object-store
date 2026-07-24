@@ -25,3 +25,8 @@ pub use connection::*;
 
 mod spawn;
 pub use spawn::*;
+
+#[cfg(feature = "tower")]
+mod tower;
+#[cfg(feature = "tower")]
+pub use tower::TowerHttpConnector;
