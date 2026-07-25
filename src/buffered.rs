@@ -245,6 +245,18 @@ enum BufWriterState {
     Write(Option<WriteMultipart>),
     /// [`ObjectStore::put_opts`]
     Flush(BoxFuture<'static, crate::Result<()>>),
+    /// A previous operation returned an error, leaving the writer unusable
+    Errored,
+}
+
+/// The error returned when a [`BufWriter`] is used after a previous operation
+/// failed. The original error is surfaced once, at the point of failure; any
+/// subsequent use returns this error instead of panicking.
+fn errored_writer() -> crate::Error {
+    crate::Error::Generic {
+        store: "BufWriter",
+        source: "BufWriter cannot be used after a previous error".into(),
+    }
 }
 
 impl BufWriter {
@@ -321,16 +333,23 @@ impl BufWriter {
                 BufWriterState::Write(None) | BufWriterState::Flush(_) => {
                     panic!("Already shut down")
                 }
+                BufWriterState::Errored => Err(errored_writer()),
                 // NOTE
                 //
                 // This case should never happen in practice, but rust async API does
                 // make it possible for users to call `put` before `poll_write` returns `Ready`.
                 //
                 // We allow such usage by `await` the future and continue the loop.
-                BufWriterState::Prepare(f) => {
-                    self.state = BufWriterState::Write(f.await?.into());
-                    continue;
-                }
+                BufWriterState::Prepare(f) => match f.await {
+                    Ok(write) => {
+                        self.state = BufWriterState::Write(Some(write));
+                        continue;
+                    }
+                    Err(e) => {
+                        self.state = BufWriterState::Errored;
+                        Err(e)
+                    }
+                },
                 BufWriterState::Buffer(path, b) => {
                     if b.content_length().saturating_add(bytes.len()) < self.capacity {
                         b.push(bytes);
@@ -368,6 +387,7 @@ impl BufWriter {
             BufWriterState::Buffer(_, _) | BufWriterState::Prepare(_) => Ok(()),
             BufWriterState::Flush(_) => panic!("Already shut down"),
             BufWriterState::Write(x) => x.take().unwrap().abort().await,
+            BufWriterState::Errored => Err(errored_writer()),
         }
     }
 }
@@ -390,10 +410,17 @@ impl AsyncWrite for BufWriter {
                 BufWriterState::Write(None) | BufWriterState::Flush(_) => {
                     panic!("Already shut down")
                 }
-                BufWriterState::Prepare(f) => {
-                    self.state = BufWriterState::Write(ready!(f.poll_unpin(cx)?).into());
-                    continue;
-                }
+                BufWriterState::Errored => Poll::Ready(Err(errored_writer().into())),
+                BufWriterState::Prepare(f) => match ready!(f.poll_unpin(cx)) {
+                    Ok(write) => {
+                        self.state = BufWriterState::Write(Some(write));
+                        continue;
+                    }
+                    Err(e) => {
+                        self.state = BufWriterState::Errored;
+                        Poll::Ready(Err(e.into()))
+                    }
+                },
                 BufWriterState::Buffer(path, b) => {
                     if b.content_length().saturating_add(buf.len()) >= cap {
                         let buffer = std::mem::take(b);
@@ -426,10 +453,17 @@ impl AsyncWrite for BufWriter {
             return match &mut self.state {
                 BufWriterState::Write(_) | BufWriterState::Buffer(_, _) => Poll::Ready(Ok(())),
                 BufWriterState::Flush(_) => panic!("Already shut down"),
-                BufWriterState::Prepare(f) => {
-                    self.state = BufWriterState::Write(ready!(f.poll_unpin(cx)?).into());
-                    continue;
-                }
+                BufWriterState::Errored => Poll::Ready(Err(errored_writer().into())),
+                BufWriterState::Prepare(f) => match ready!(f.poll_unpin(cx)) {
+                    Ok(write) => {
+                        self.state = BufWriterState::Write(Some(write));
+                        continue;
+                    }
+                    Err(e) => {
+                        self.state = BufWriterState::Errored;
+                        Poll::Ready(Err(e.into()))
+                    }
+                },
             };
         }
     }
@@ -437,9 +471,14 @@ impl AsyncWrite for BufWriter {
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         loop {
             match &mut self.state {
-                BufWriterState::Prepare(f) => {
-                    self.state = BufWriterState::Write(ready!(f.poll_unpin(cx)?).into());
-                }
+                BufWriterState::Errored => return Poll::Ready(Err(errored_writer().into())),
+                BufWriterState::Prepare(f) => match ready!(f.poll_unpin(cx)) {
+                    Ok(write) => self.state = BufWriterState::Write(Some(write)),
+                    Err(e) => {
+                        self.state = BufWriterState::Errored;
+                        return Poll::Ready(Err(e.into()));
+                    }
+                },
                 BufWriterState::Buffer(p, b) => {
                     let buf = std::mem::take(b);
                     let path = std::mem::take(p);
@@ -455,7 +494,13 @@ impl AsyncWrite for BufWriter {
                         Ok(())
                     }));
                 }
-                BufWriterState::Flush(f) => return f.poll_unpin(cx).map_err(std::io::Error::from),
+                BufWriterState::Flush(f) => {
+                    let res = ready!(f.poll_unpin(cx));
+                    if res.is_err() {
+                        self.state = BufWriterState::Errored;
+                    }
+                    return Poll::Ready(res.map_err(std::io::Error::from));
+                }
                 BufWriterState::Write(x) => {
                     let upload = x.take().ok_or_else(|| {
                         std::io::Error::new(
@@ -492,6 +537,7 @@ mod tests {
     use crate::memory::InMemory;
     use crate::path::Path;
     use crate::{Attribute, GetOptions, ObjectStoreExt};
+    use futures_util::stream::BoxStream;
     use itertools::Itertools;
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
@@ -653,5 +699,110 @@ mod tests {
             .unwrap();
         assert_eq!(response.meta.size, 40);
         assert_eq!(response.bytes().await.unwrap(), (0..40).collect_vec());
+    }
+
+    /// An [`ObjectStore`] that always fails [`ObjectStore::put_multipart_opts`],
+    /// delegating every other operation to an inner [`InMemory`] store.
+    #[derive(Debug)]
+    struct FailMultipartInit(InMemory);
+
+    impl std::fmt::Display for FailMultipartInit {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "FailMultipartInit")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore for FailMultipartInit {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: crate::PutPayload,
+            opts: crate::PutOptions,
+        ) -> crate::Result<crate::PutResult> {
+            self.0.put_opts(location, payload, opts).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            _location: &Path,
+            _opts: crate::PutMultipartOptions,
+        ) -> crate::Result<Box<dyn crate::MultipartUpload>> {
+            Err(crate::Error::Generic {
+                store: "FailMultipartInit",
+                source: "multipart upload initialisation failed".into(),
+            })
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> crate::Result<crate::GetResult> {
+            self.0.get_opts(location, options).await
+        }
+
+        fn delete_stream(
+            &self,
+            locations: BoxStream<'static, crate::Result<Path>>,
+        ) -> BoxStream<'static, crate::Result<Path>> {
+            self.0.delete_stream(locations)
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> BoxStream<'static, crate::Result<crate::ObjectMeta>> {
+            self.0.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> crate::Result<crate::ListResult> {
+            self.0.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: crate::CopyOptions,
+        ) -> crate::Result<()> {
+            self.0.copy_opts(from, to, options).await
+        }
+    }
+
+    /// Regression test for <https://github.com/apache/arrow-rs-object-store/issues/810>.
+    ///
+    /// When the future preparing a multipart upload fails, [`BufWriter`] used to
+    /// leave the completed future in place and re-poll it on the next call,
+    /// panicking with "`async fn` resumed after completion". Subsequent calls
+    /// on the writer must instead surface an error.
+    #[tokio::test]
+    async fn test_buf_writer_reuse_after_error_returns_error() {
+        let store = Arc::new(FailMultipartInit(InMemory::new())) as Arc<dyn ObjectStore>;
+        let path = Path::from("panic-repro");
+
+        // A capacity of 1 forces the first write to transition into a multipart
+        // upload, whose initialisation fails via `put_multipart_opts`.
+        let mut writer = BufWriter::with_capacity(Arc::clone(&store), path.clone(), 1);
+        let err = writer.write_all(b"trigger-prepare-error").await;
+        assert!(err.is_err(), "expected the multipart init error to surface");
+
+        // Previously panicked; shutdown after an error must now return an error.
+        let err = writer.shutdown().await;
+        assert!(
+            err.is_err(),
+            "shutdown after an error should return an error"
+        );
+
+        // Writing again after an error must also return an error rather than panic.
+        let mut writer = BufWriter::with_capacity(store, path, 1);
+        assert!(writer.write_all(b"trigger-prepare-error").await.is_err());
+        assert!(
+            writer.write_all(b"second-write").await.is_err(),
+            "write after an error should return an error"
+        );
     }
 }
