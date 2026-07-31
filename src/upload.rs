@@ -229,7 +229,10 @@ impl WriteMultipart {
             self.put_part(part.into())
         }
 
-        self.wait_for_capacity(0).await?;
+        if let Err(e) = self.wait_for_capacity(0).await {
+            self.abort().await?;
+            return Err(e);
+        }
 
         match self.upload.complete().await {
             Err(e) => {
@@ -301,6 +304,45 @@ mod tests {
         async fn abort(&mut self) -> Result<()> {
             unimplemented!()
         }
+    }
+
+    #[tokio::test]
+    async fn test_finish_aborts_on_part_failure() {
+        #[derive(Debug)]
+        struct FailingUpload {
+            aborted: Arc<Mutex<bool>>,
+        }
+
+        #[async_trait]
+        impl MultipartUpload for FailingUpload {
+            fn put_part(&mut self, _data: PutPayload) -> UploadPart {
+                futures_util::future::ready(Err(crate::Error::Generic {
+                    store: "Test",
+                    source: std::io::Error::other("part upload failed").into(),
+                }))
+                .boxed()
+            }
+
+            async fn complete(&mut self) -> Result<PutResult> {
+                panic!("complete should not be called after a part failure")
+            }
+
+            async fn abort(&mut self) -> Result<()> {
+                *self.aborted.lock() = true;
+                Ok(())
+            }
+        }
+
+        let aborted = Arc::new(Mutex::new(false));
+        let upload = Box::new(FailingUpload {
+            aborted: Arc::clone(&aborted),
+        });
+        let mut write = WriteMultipart::new_with_chunk_size(upload, 1);
+        write.write(&[0]);
+
+        let err = write.finish().await.unwrap_err();
+        assert!(err.to_string().contains("part upload failed"));
+        assert!(*aborted.lock());
     }
 
     #[tokio::test]
