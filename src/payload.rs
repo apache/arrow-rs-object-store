@@ -20,7 +20,7 @@ use futures_util::Stream;
 use futures_util::stream::{BoxStream, StreamExt};
 use std::error::Error;
 use std::fmt::{Debug, Formatter};
-#[cfg(feature = "fs")]
+#[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 use std::path::Path;
 use std::sync::Arc;
 
@@ -33,7 +33,7 @@ pub type PutPayloadStream = BoxStream<'static, Result<Bytes, PutPayloadError>>;
 type StreamFactory = Arc<dyn Fn() -> PutPayloadStream + Send + Sync>;
 
 /// The default chunk size used by [`PutPayload::from_file`].
-#[cfg(feature = "fs")]
+#[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 pub const DEFAULT_FILE_CHUNK_SIZE: usize = 16 * 1024;
 
 /// A cheaply cloneable payload for a put request.
@@ -116,7 +116,7 @@ impl PutPayload {
     ///
     /// The file is read in 16 KiB chunks and reopened for every upload attempt.
     /// It must remain available and unchanged until the put request completes.
-    #[cfg(feature = "fs")]
+    #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
     pub async fn from_file(path: impl AsRef<Path>) -> std::io::Result<Self> {
         Self::from_file_with_chunk_size(path, DEFAULT_FILE_CHUNK_SIZE).await
     }
@@ -129,7 +129,7 @@ impl PutPayload {
     /// # Panics
     ///
     /// Panics if `chunk_size` is zero.
-    #[cfg(feature = "fs")]
+    #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
     pub async fn from_file_with_chunk_size(
         path: impl AsRef<Path>,
         chunk_size: usize,
@@ -237,7 +237,7 @@ impl PutPayload {
     }
 }
 
-#[cfg(feature = "fs")]
+#[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 enum FileStreamState {
     Open(Arc<std::path::PathBuf>),
     Reading(tokio::fs::File),
@@ -487,9 +487,9 @@ impl From<PutPayloadMut> for PutPayload {
 #[cfg(test)]
 mod test {
     use crate::PutPayloadMut;
-    #[cfg(feature = "fs")]
+    #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
     use crate::{DEFAULT_FILE_CHUNK_SIZE, PutPayload};
-    #[cfg(feature = "fs")]
+    #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
     use futures_util::TryStreamExt;
 
     #[test]
@@ -530,7 +530,7 @@ mod test {
         assert_eq!(payload.content_length(), 148);
     }
 
-    #[cfg(feature = "fs")]
+    #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
     #[tokio::test]
     async fn test_put_payload_from_file() {
         let directory = tempfile::tempdir().unwrap();
