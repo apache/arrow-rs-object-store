@@ -21,7 +21,7 @@
 
 pub(crate) mod backoff;
 
-#[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+#[cfg(not(target_arch = "wasm32"))]
 mod dns;
 #[cfg(not(target_arch = "wasm32"))]
 pub use dns::{DnsError, DnsFuture, DnsResolver};
@@ -63,9 +63,6 @@ pub use crypto::*;
 
 use ::http::header::{HeaderMap, HeaderValue};
 use async_trait::async_trait;
-//kdn KEEP?
-use reqwest::dns::Resolve;
-use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -409,6 +406,7 @@ impl Default for ClientOptions {
             http1_only: true.into(),
             http2_only: Default::default(),
             randomize_addresses: true.into(),
+            #[cfg(not(target_arch = "wasm32"))]
             dns_resolver: Default::default(),
         }
     }
@@ -1304,6 +1302,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
     async fn test_custom_dns_resolver() {
         use crate::client::mock_server::MockServer;
         use std::net::{IpAddr, Ipv4Addr};

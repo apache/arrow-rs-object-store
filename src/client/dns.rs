@@ -17,15 +17,10 @@
 
 //! Customizable DNS resolution for remote object stores
 
-use std::net::ToSocketAddrs;
-
-use rand::prelude::SliceRandom;
 use std::fmt::Debug;
 use std::future::Future;
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::pin::Pin;
-use std::sync::Arc;
-use tokio::task::JoinSet;
 
 /// Error returned by a [`DnsResolver`]
 pub type DnsError = Box<dyn std::error::Error + Send + Sync>;
@@ -43,7 +38,7 @@ pub type DnsFuture = Pin<Box<dyn Future<Output = Result<Vec<IpAddr>, DnsError>> 
 /// HTTP transport.
 ///
 /// Configure via [`ClientOptions::with_dns_resolver`]. The built-in
-/// [`reqwest`]-based transport honors this automatically; custom
+/// reqwest-based transport honors this automatically; custom
 /// [`HttpConnector`] implementations should retrieve it via
 /// [`ClientOptions::dns_resolver`] and apply it themselves.
 ///
@@ -60,56 +55,68 @@ pub trait DnsResolver: Debug + Send + Sync {
     fn resolve(&self, host: &str) -> DnsFuture;
 }
 
-/// Adapts a [`DnsResolver`] to [`reqwest::dns::Resolve`]
-///
-/// This is deliberately private: it is the only place where [`reqwest`]'s
-/// resolver API appears, keeping it out of this crate's public interface.
-pub(crate) struct ReqwestResolver(pub(crate) Arc<dyn DnsResolver>);
+#[cfg(feature = "reqwest")]
+mod reqwest_impl {
+    use super::{DnsError, DnsFuture, DnsResolver};
+    use rand::prelude::SliceRandom;
+    use std::net::{SocketAddr, ToSocketAddrs};
+    use std::sync::Arc;
+    use tokio::task::JoinSet;
 
-impl reqwest::dns::Resolve for ReqwestResolver {
-    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
-        let resolver = Arc::clone(&self.0);
-        let host = name.as_str().to_string();
-        Box::pin(async move {
-            let ips = resolver.resolve(&host).await?;
-            // Port 0 is a placeholder: reqwest documents that it is replaced
-            // by the port from the URL or the scheme's conventional port
-            let addrs: reqwest::dns::Addrs =
-                Box::new(ips.into_iter().map(|ip| SocketAddr::new(ip, 0)));
-            Ok(addrs)
-        })
-    }
-}
+    /// Adapts a [`DnsResolver`] to [`reqwest::dns::Resolve`]
+    ///
+    /// This is deliberately private: it is the only place where [`reqwest`]'s
+    /// resolver API appears, keeping it out of this crate's public interface.
+    pub(crate) struct ReqwestResolver(pub(crate) Arc<dyn DnsResolver>);
 
-/// The built-in shuffling [`DnsResolver`], randomizing the order of the returned
-/// addresses to spread load across servers, see [`ClientConfigKey::RandomizeAddresses`]
-///
-/// [`ClientConfigKey::RandomizeAddresses`]: crate::ClientConfigKey::RandomizeAddresses
-#[derive(Debug)]
-pub(crate) struct ShuffleResolver;
-
-impl DnsResolver for ShuffleResolver {
-    fn resolve(&self, host: &str) -> DnsFuture {
-        let host = host.to_string();
-        Box::pin(async move {
-            // use `JoinSet` to propagate cancellation to tasks that haven't started running yet.
-            let mut tasks = JoinSet::new();
-            tasks.spawn_blocking(move || {
-                let it = (host.as_str(), 0).to_socket_addrs()?;
-                let mut addrs = it.map(|addr| addr.ip()).collect::<Vec<_>>();
-                addrs.shuffle(&mut rand::rng());
+    impl reqwest::dns::Resolve for ReqwestResolver {
+        fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+            let resolver = Arc::clone(&self.0);
+            let host = name.as_str().to_string();
+            Box::pin(async move {
+                let ips = resolver.resolve(&host).await?;
+                // Port 0 is a placeholder: reqwest documents that it is replaced
+                // by the port from the URL or the scheme's conventional port
+                let addrs: reqwest::dns::Addrs =
+                    Box::new(ips.into_iter().map(|ip| SocketAddr::new(ip, 0)));
                 Ok(addrs)
-            });
-            tasks
-                .join_next()
-                .await
-                .expect("spawned one task")
-                .map_err(|err| Box::new(err) as DnsError)?
-        })
+            })
+        }
+    }
+
+    /// The built-in shuffling [`DnsResolver`], randomizing the order of the returned
+    /// addresses to spread load across servers, see [`ClientConfigKey::RandomizeAddresses`]
+    ///
+    /// [`ClientConfigKey::RandomizeAddresses`]: crate::ClientConfigKey::RandomizeAddresses
+    #[derive(Debug)]
+    pub(crate) struct ShuffleResolver;
+
+    impl DnsResolver for ShuffleResolver {
+        fn resolve(&self, host: &str) -> DnsFuture {
+            let host = host.to_string();
+            Box::pin(async move {
+                // use `JoinSet` to propagate cancellation to tasks that haven't started running yet.
+                let mut tasks = JoinSet::new();
+                tasks.spawn_blocking(move || {
+                    let it = (host.as_str(), 0).to_socket_addrs()?;
+                    let mut addrs = it.map(|addr| addr.ip()).collect::<Vec<_>>();
+                    addrs.shuffle(&mut rand::rng());
+                    Ok(addrs)
+                });
+                tasks
+                    .join_next()
+                    .await
+                    .expect("spawned one task")
+                    .map_err(|err| Box::new(err) as DnsError)?
+            })
+        }
     }
 }
 
-#[cfg(test)]
+#[cfg(feature = "reqwest")]
+pub(crate) use reqwest_impl::{ReqwestResolver, ShuffleResolver};
+
+#[cfg(all(test, feature = "reqwest"))]
 mod tests {
     use super::*;
 
@@ -132,6 +139,7 @@ mod tests {
     #[tokio::test]
     async fn adapter_propagates_errors() {
         use reqwest::dns::Resolve;
+        use std::sync::Arc;
         let adapter = ReqwestResolver(Arc::new(FailingResolver));
         let err = match adapter.resolve("localhost".parse().unwrap()).await {
             Ok(_) => panic!("expected resolution to fail"),
