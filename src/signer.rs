@@ -19,9 +19,9 @@
 
 use crate::{Result, path::Path};
 use async_trait::async_trait;
-use http::Method;
+pub use http::Method;
 use std::{fmt, time::Duration};
-use url::Url;
+pub use url::Url;
 
 /// Universal API to generate presigned URLs from multiple object store services.
 #[async_trait]
