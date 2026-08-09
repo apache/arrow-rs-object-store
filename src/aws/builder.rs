@@ -1251,8 +1251,7 @@ impl AmazonS3Builder {
                     Error::ZoneSuffix { bucket }
                 })?;
 
-                // https://docs.aws.amazon.com/AmazonS3/latest/userguide/s3-express-Regions-and-Zones.html
-                let endpoint = format!("https://{bucket}.s3express-{zone}.{region}.amazonaws.com");
+                let endpoint = s3_express_endpoint(&bucket, zone, &region);
 
                 let session = Arc::new(
                     TokenCredentialProvider::new(
@@ -1334,6 +1333,10 @@ fn parse_bucket_az(bucket: &str) -> Option<&str> {
         .strip_suffix("--x-s3")
         .or_else(|| bucket.strip_suffix("--xa-s3"))?;
     Some(base.rsplit_once("--")?.1)
+}
+
+fn s3_express_endpoint(bucket: &str, zone: &str, region: &str) -> String {
+    format!("https://{bucket}.s3express-{zone}.dualstack.{region}.amazonaws.com")
 }
 
 /// Captures `AWS_REQUEST_PAYER`.
@@ -1977,7 +1980,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_bucket_az() {
+    fn test_s3_express_endpoint() {
         let cases = [
             ("bucket-base-name--usw2-az1--x-s3", Some("usw2-az1")),
             ("bucket-base--name--azid--x-s3", Some("azid")),
@@ -1991,6 +1994,11 @@ mod tests {
         for (bucket, expected) in cases {
             assert_eq!(parse_bucket_az(bucket), expected)
         }
+
+        assert_eq!(
+            s3_express_endpoint("bucket-base-name--use1-az4--xa-s3", "use1-az4", "us-east-1"),
+            "https://bucket-base-name--use1-az4--xa-s3.s3express-use1-az4.dualstack.us-east-1.amazonaws.com"
+        );
     }
 
     #[test]
