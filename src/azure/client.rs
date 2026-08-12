@@ -764,7 +764,16 @@ impl AzureClient {
             }
         };
 
-        let response = builder.header(&BLOB_TYPE, "BlockBlob").send().await?;
+        // based on https://learn.microsoft.com/en-us/azure/storage/blobs/concurrency-manage, azure
+        // responds with `Precondition` when any put with a precondition fails, but we promise to
+        // return `AlreadyExists` when that put mode is `Create`.
+        let response = match (builder.header(&BLOB_TYPE, "BlockBlob").send().await, mode) {
+            (Err(crate::Error::Precondition { path, source }), PutMode::Create) => {
+                return Err(crate::Error::AlreadyExists { path, source });
+            }
+            (r, _) => r?,
+        };
+
         Ok(
             get_put_result(response, VERSION_HEADER)
                 .map_err(|source| Error::Metadata { source })?,
