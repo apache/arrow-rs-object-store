@@ -55,4 +55,4 @@ jobs:
       - name: Check
         run: |
           # run `cargo msrv verify` to see problems
-          cargo msrv verify --output-format=json || exit 1
+          cargo msrv verify --all-features --output-format=json || exit 1
