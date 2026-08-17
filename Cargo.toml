@@ -46,7 +46,7 @@ url = "2.2"
 walkdir = { version = "2", optional = true }
 
 # Cloud storage support
-base64 = { version = "0.22", default-features = false, features = ["std"], optional = true }
+base64 = { version = "0.23", default-features = false, features = ["std"], optional = true }
 crc-fast = { version = "1.6" , optional = true }
 form_urlencoded = { version = "1.2", optional = true }
 http-body-util = { version = "0.1.2", optional = true }
