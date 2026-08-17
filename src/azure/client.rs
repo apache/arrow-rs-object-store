@@ -2252,6 +2252,41 @@ Authorization: Bearer static-token\r
         assert!(!msg.contains(&endpoint), "{msg}");
     }
 
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_put_mode_create_translates_precondition_to_already_exists() {
+        let server = crate::client::mock_server::MockServer::new().await;
+        let client = test_client(server.url());
+        let update = PutMode::Update(crate::UpdateVersion {
+            e_tag: Some("\"etag\"".to_string()),
+            version: None,
+        });
+
+        // Real Azure reports a failed put precondition as `412 Precondition Failed`,
+        // Azurite as `409 Conflict`; both must surface as `AlreadyExists` for
+        // `PutMode::Create`, while `PutMode::Update` failures remain `Precondition`
+        for (status, mode, want_already_exists) in [
+            (412, PutMode::Create, true),
+            (409, PutMode::Create, true),
+            (412, update, false),
+        ] {
+            server.push(
+                http::Response::builder()
+                    .status(status)
+                    .body(String::new())
+                    .unwrap(),
+            );
+            let err = client
+                .put_blob(&Path::from("file.txt"), "data".into(), mode.into())
+                .await
+                .unwrap_err();
+            match want_already_exists {
+                true => assert!(matches!(err, crate::Error::AlreadyExists { .. }), "{err}"),
+                false => assert!(matches!(err, crate::Error::Precondition { .. }), "{err}"),
+            }
+        }
+    }
+
     #[tokio::test]
     async fn test_parse_blob_batch_delete_body() {
         let response_body = b"--batchresponse_66925647-d0cb-4109-b6d3-28efe3e1e5ed\r
