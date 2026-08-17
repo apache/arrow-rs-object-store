@@ -55,4 +55,6 @@ jobs:
       - name: Check
         run: |
           # run `cargo msrv verify` to see problems
-          cargo msrv verify --all-features --output-format=json || exit 1
+          # use a custom check command so tests, examples, and benches are
+          # also compiled with the MSRV toolchain
+          cargo msrv verify --output-format=json -- cargo check --all-targets --all-features || exit 1
