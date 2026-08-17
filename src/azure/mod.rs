@@ -62,7 +62,7 @@ pub use credential::AzureCredential;
 const STORE: &str = "MicrosoftAzure";
 
 /// Interface for [Microsoft Azure Blob Storage](https://azure.microsoft.com/en-us/services/storage/blobs/).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MicrosoftAzure {
     client: Arc<AzureClient>,
 }

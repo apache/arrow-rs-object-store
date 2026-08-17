@@ -19,9 +19,10 @@
 
 use crate::{Result, path::Path};
 use async_trait::async_trait;
-use http::{HeaderMap, HeaderName, HeaderValue, Method};
+use http::{HeaderMap, HeaderName, HeaderValue};
+pub use http::Method;
 use std::{fmt, time::Duration};
-use url::Url;
+pub use url::Url;
 
 /// Additional parameters to fold into a presigned URL's signature, used with
 /// [`Signer::signed_url_opts`].

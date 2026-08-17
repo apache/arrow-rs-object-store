@@ -78,18 +78,18 @@ impl<T: Clone + Send + Sync> TokenCache<T> {
             })
         };
 
-        if let Some(cache) = self.cache.read().await.as_ref()
-            && is_token_valid(cache)
-        {
-            return Ok(cache.token.token.clone());
+        if let Some(cache) = self.cache.read().await.as_ref() {
+            if is_token_valid(cache) {
+                return Ok(cache.token.token.clone());
+            }
         }
 
         let mut guard = self.cache.write().await;
-        if let Some(cache) = guard.as_ref()
-            && is_token_valid(cache)
-        {
-            // Refresh race
-            return Ok(cache.token.token.clone());
+        if let Some(cache) = guard.as_ref() {
+            if is_token_valid(cache) {
+                // Refresh race
+                return Ok(cache.token.token.clone());
+            }
         }
 
         let cached = f().await?;

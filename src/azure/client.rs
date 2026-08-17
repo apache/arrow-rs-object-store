@@ -764,7 +764,16 @@ impl AzureClient {
             }
         };
 
-        let response = builder.header(&BLOB_TYPE, "BlockBlob").send().await?;
+        // based on https://learn.microsoft.com/en-us/azure/storage/blobs/concurrency-manage, azure
+        // responds with `Precondition` when any put with a precondition fails, but we promise to
+        // return `AlreadyExists` when that put mode is `Create`.
+        let response = match (builder.header(&BLOB_TYPE, "BlockBlob").send().await, mode) {
+            (Err(crate::Error::Precondition { path, source }), PutMode::Create) => {
+                return Err(crate::Error::AlreadyExists { path, source });
+            }
+            (r, _) => r?,
+        };
+
         Ok(
             get_put_result(response, VERSION_HEADER)
                 .map_err(|source| Error::Metadata { source })?,
@@ -2241,6 +2250,41 @@ Authorization: Bearer static-token\r
         let msg = err.to_string();
         assert!(msg.contains("REDACTED"), "{msg}");
         assert!(!msg.contains(&endpoint), "{msg}");
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_put_mode_create_translates_precondition_to_already_exists() {
+        let server = crate::client::mock_server::MockServer::new().await;
+        let client = test_client(server.url());
+        let update = PutMode::Update(crate::UpdateVersion {
+            e_tag: Some("\"etag\"".to_string()),
+            version: None,
+        });
+
+        // Real Azure reports a failed put precondition as `412 Precondition Failed`,
+        // Azurite as `409 Conflict`; both must surface as `AlreadyExists` for
+        // `PutMode::Create`, while `PutMode::Update` failures remain `Precondition`
+        for (status, mode, want_already_exists) in [
+            (412, PutMode::Create, true),
+            (409, PutMode::Create, true),
+            (412, update, false),
+        ] {
+            server.push(
+                http::Response::builder()
+                    .status(status)
+                    .body(String::new())
+                    .unwrap(),
+            );
+            let err = client
+                .put_blob(&Path::from("file.txt"), "data".into(), mode.into())
+                .await
+                .unwrap_err();
+            match want_already_exists {
+                true => assert!(matches!(err, crate::Error::AlreadyExists { .. }), "{err}"),
+                false => assert!(matches!(err, crate::Error::Precondition { .. }), "{err}"),
+            }
+        }
     }
 
     #[tokio::test]
