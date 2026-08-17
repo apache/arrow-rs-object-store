@@ -628,6 +628,7 @@ impl AmazonS3Builder {
     /// - `https://s3.dualstack.<region>.amazonaws.com/<bucket>`
     /// - `https://<bucket>.s3.dualstack.<region>.amazonaws.com`
     /// - `https://ACCOUNT_ID.r2.cloudflarestorage.com/bucket`
+    /// - `https://ACCOUNT_ID.JURISDICTION.r2.cloudflarestorage.com/bucket`
     ///
     /// Note: Settings derived from the URL will override any others set on this builder
     ///
@@ -845,6 +846,17 @@ impl AmazonS3Builder {
                 Some((account, "r2", "cloudflarestorage", "com")) => {
                     self.region = Some("auto".to_string());
                     let endpoint = format!("https://{account}.r2.cloudflarestorage.com");
+                    self.endpoint = Some(endpoint);
+
+                    let bucket = parsed.path_segments().into_iter().flatten().next();
+                    if let Some(bucket) = bucket {
+                        self.bucket_name = Some(bucket.into());
+                    }
+                }
+                Some((account, jurisdiction, "r2", "cloudflarestorage.com")) => {
+                    self.region = Some("auto".to_string());
+                    let endpoint =
+                        format!("https://{account}.{jurisdiction}.r2.cloudflarestorage.com");
                     self.endpoint = Some(endpoint);
 
                     let bucket = parsed.path_segments().into_iter().flatten().next();
@@ -1846,6 +1858,18 @@ mod tests {
             Some("https://account123.r2.cloudflarestorage.com".to_string())
         );
 
+        let mut builder = AmazonS3Builder::new();
+        builder
+            .parse_url("https://account123.eu.r2.cloudflarestorage.com/bucket-123")
+            .unwrap();
+
+        assert_eq!(builder.bucket_name, Some("bucket-123".to_string()));
+        assert_eq!(builder.region, Some("auto".to_string()));
+        assert_eq!(
+            builder.endpoint,
+            Some("https://account123.eu.r2.cloudflarestorage.com".to_string())
+        );
+
         let err_cases = [
             "mailto://bucket/path",
             "https://s3.bucket.mydomain.com",
@@ -1853,6 +1877,7 @@ mod tests {
             "https://bucket.mydomain.region.amazonaws.com",
             "https://bucket.s3.region.bar.amazonaws.com",
             "https://bucket.foo.s3.amazonaws.com",
+            "https://account.r2.eu.cloudflarestorage.com/bucket",
         ];
         let mut builder = AmazonS3Builder::new();
         for case in err_cases {
