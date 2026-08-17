@@ -110,6 +110,6 @@ Planned Release Schedule
 
 | Approximate Date | Version  | Notes                          | Ticket                                                             |
 |------------------|----------|--------------------------------|:-------------------------------------------------------------------|
-| May 2026         | `0.14.0` | Major, breaking API changes    | [#673](https://github.com/apache/arrow-rs-object-store/issues/673) |
-| Aug 2026         | `0.14.1` | Minor, NO breaking API changes | [#761](https://github.com/apache/arrow-rs-object-store/issues/761) |
-| Sep 2026         | `0.15.0` | Major, breaking API changes    | [#762](https://github.com/apache/arrow-rs-object-store/issues/762) |
+| Sep 2026         | `0.14.2` | Minor, NO breaking API changes | [#832](https://github.com/apache/arrow-rs-object-store/issues/832) |
+| Oct 2026         | `0.14.3` | Minor, NO breaking API changes | [#833](https://github.com/apache/arrow-rs-object-store/issues/833) |
+| TBD              | `0.15.0` | Major, breaking API changes    | [#762](https://github.com/apache/arrow-rs-object-store/issues/762) |
