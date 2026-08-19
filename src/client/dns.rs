@@ -20,6 +20,7 @@
 use std::fmt::Debug;
 use std::future::Future;
 use std::net::IpAddr;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 use std::pin::Pin;
 
 /// Error returned by a [`DnsResolver`]
@@ -45,7 +46,9 @@ pub type DnsFuture = Pin<Box<dyn Future<Output = Result<Vec<IpAddr>, DnsError>> 
 /// [`ClientOptions::with_dns_resolver`]: crate::ClientOptions::with_dns_resolver
 /// [`ClientOptions::dns_resolver`]: crate::ClientOptions::dns_resolver
 /// [`HttpConnector`]: crate::client::HttpConnector
-pub trait DnsResolver: Debug + Send + Sync {
+// The `UnwindSafe` bounds preserve the auto traits of `ClientOptions`, which
+// stores an `Arc<dyn DnsResolver>`
+pub trait DnsResolver: Debug + Send + Sync + UnwindSafe + RefUnwindSafe {
     /// Resolve `host` to one or more IP addresses
     ///
     /// The returned addresses are tried in order until a connection succeeds,
