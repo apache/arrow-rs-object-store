@@ -19,9 +19,12 @@
 
 use crate::{Result, path::Path};
 use async_trait::async_trait;
-use http::{HeaderMap, HeaderName, HeaderValue};
-pub use http::Method;
 use std::{fmt, time::Duration};
+
+// publicly re-export types from http/url used in API so downstream consumers do
+// not have to explicitly add those crates as dependencies
+pub use http::Method;
+pub use http::{HeaderMap, HeaderName, HeaderValue};
 pub use url::Url;
 
 /// Additional parameters to fold into a presigned URL's signature, used with
