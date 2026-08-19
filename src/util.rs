@@ -347,6 +347,10 @@ const RESERVED_SIGNED_HEADERS: [&str; 4] =
 /// duplicate `X-Amz-Signature`, `X-Amz-Expires`, etc. Header names in [`RESERVED_SIGNED_HEADERS`]
 /// are likewise rejected.
 ///
+/// Header values must be valid UTF-8. While [`http::HeaderValue`] permits
+/// opaque bytes (0x80–0xFF) that UTF-8 does not, the canonical request is built
+/// as a string, so such values cannot be signed.
+///
 /// [`SignedUrlOptions`]: crate::signer::SignedUrlOptions
 #[cfg(any(feature = "aws-base", feature = "gcp-base"))]
 pub(crate) fn validate_signed_url_extras(
@@ -371,10 +375,15 @@ pub(crate) fn validate_signed_url_extras(
         }
     }
 
-    for name in signed_headers.keys() {
+    for (name, value) in signed_headers {
         if RESERVED_SIGNED_HEADERS.contains(&name.as_str()) {
             return Err(err(format!(
                 "header {name:?} is controlled by the signer and cannot be signed via SignedUrlOptions"
+            )));
+        }
+        if std::str::from_utf8(value.as_bytes()).is_err() {
+            return Err(err(format!(
+                "value of header {name:?} is not valid UTF-8 and cannot be signed via SignedUrlOptions"
             )));
         }
     }
@@ -659,5 +668,18 @@ mod tests {
                 "{name} should be rejected"
             );
         }
+
+        // Header values that are not valid UTF-8 (which `HeaderValue` permits) are rejected
+        // with an error rather than panicking during canonicalization.
+        let mut non_utf8 = HeaderMap::new();
+        non_utf8.insert(
+            HeaderName::from_static("x-custom"),
+            HeaderValue::from_bytes(&[0xFF]).unwrap(),
+        );
+        let err = validate_signed_url_extras("S3", &[], &non_utf8, "x-amz-").unwrap_err();
+        assert!(
+            matches!(err, Error::Generic { .. }),
+            "non-UTF-8 header value should be rejected"
+        );
     }
 }
