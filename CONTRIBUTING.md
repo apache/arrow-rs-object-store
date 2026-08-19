@@ -67,6 +67,7 @@ Or directly with:
 ```shell
 aws s3 mb s3://test-bucket --endpoint-url=http://localhost:4566
 aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-for-spawn
+aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-for-signing
 aws --endpoint-url=http://localhost:4566 dynamodb create-table --table-name test-table --key-schema AttributeName=path,KeyType=HASH AttributeName=etag,KeyType=RANGE --attribute-definitions AttributeName=path,AttributeType=S AttributeName=etag,AttributeType=S --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
 ```
 
@@ -147,6 +148,75 @@ Run the tests. The real test is `test_s3_ssec_encryption_with_minio()`
 export TEST_S3_SSEC_ENCRYPTION=1
 cargo test --features aws --package object_store --lib aws::tests::test_s3_ssec_encryption_with_minio -- --exact --nocapture
 ```
+
+#### Presigned URL signature-enforcement tests
+
+A handful of presigned-URL tests assert that the *storage backend* rejects an invalid request:
+a tampered signature, an expired URL, or a signed header whose value the client changed. These
+require a backend that actually validates SigV4. LocalStack does not (it accepts presigned
+requests regardless of signature or expiry), so these tests are gated behind a separate
+`TEST_S3_SIGNATURE_ENFORCEMENT` variable rather than running in the main LocalStack integration
+pass. CI runs them against MinIO instead, which does validate SigV4 (the "Run presigned-URL
+signature-enforcement tests (MinIO)" step in `ci.yml`), so they stay exercised. The steps below
+reproduce that locally or point at real S3.
+
+These tests use a dedicated `test-bucket-for-signing` bucket so their writes cannot contaminate the
+shared `test-bucket` whose exact contents `s3_test` asserts. To point at a bucket in your own
+account instead, set `OBJECT_STORE_SIGNING_BUCKET` (no source edit required).
+
+MinIO is the recommended local backend: unlike LocalStack it validates SigV4 signatures and expiry,
+so the enforcement assertions actually exercise. Plain HTTP is enough (these tests don't use SSE-C,
+so the self-signed-cert setup from the SSE-C section is not needed, and the test client would
+reject that cert anyway):
+
+```shell
+docker run -d -p 9000:9000 \
+  -e MINIO_ROOT_USER=minio -e MINIO_ROOT_PASSWORD=minio123 \
+  minio/minio server /data
+
+export AWS_ENDPOINT=http://localhost:9000
+export AWS_ALLOW_HTTP=true
+export AWS_ACCESS_KEY_ID=minio
+export AWS_SECRET_ACCESS_KEY=minio123
+export AWS_REGION=us-east-1
+aws --endpoint-url=http://localhost:9000 s3 mb s3://test-bucket-for-signing
+```
+
+Then run the tests. Running against real S3 also works (unset `AWS_ENDPOINT`/`AWS_ALLOW_HTTP` and
+use real credentials + the bucket's region); note that a `403 AccessDenied` there means your IAM
+principal lacks permission on the bucket, not a signing bug (an incorrect signature returns
+`SignatureDoesNotMatch`).
+
+```shell
+export TEST_INTEGRATION=1
+export TEST_S3_SIGNATURE_ENFORCEMENT=1
+# Optional: point at your own bucket instead of the default `test-bucket-for-signing`.
+# export OBJECT_STORE_SIGNING_BUCKET=my-bucket
+cargo test --features aws --package object_store --lib aws::tests::signed_url -- --nocapture
+```
+
+Required S3 permissions (real S3 only). The tests exercise four object-level actions on the signing
+bucket: `s3:PutObject` (also covers CreateMultipartUpload, UploadPart, and CompleteMultipartUpload),
+`s3:GetObject`, `s3:DeleteObject`, and `s3:AbortMultipartUpload`. A minimal policy:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": [
+      "s3:PutObject",
+      "s3:GetObject",
+      "s3:DeleteObject",
+      "s3:AbortMultipartUpload"
+    ],
+    "Resource": "arn:aws:s3:::YOUR_BUCKET/*"
+  }]
+}
+```
+
+A `403 AccessDenied` (as opposed to `SignatureDoesNotMatch`) means the credentials are missing one
+of these or are blocked by a bucket policy or SCP, not that the signing is wrong.
 
 ### Azure
 

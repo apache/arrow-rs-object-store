@@ -2366,6 +2366,27 @@ mod tests {
     }
     pub(crate) use maybe_skip_integration;
 
+    /// Skip a test that asserts the *storage backend* rejects an invalid presigned request
+    /// (tampered signature, expired URL, unmet signed header) unless
+    /// `TEST_S3_SIGNATURE_ENFORCEMENT` is set.
+    ///
+    /// These tests require a backend that actually validates SigV4 — real S3 or MinIO. The
+    /// LocalStack emulator used by the default integration suite does not validate presigned
+    /// signatures or expiry and would return success, so they are gated separately. See
+    /// CONTRIBUTING.md for the MinIO/S3 setup.
+    macro_rules! maybe_skip_signature_enforcement {
+        () => {
+            if std::env::var("TEST_S3_SIGNATURE_ENFORCEMENT").is_err() {
+                eprintln!(
+                    "Skipping signature-enforcement test - set TEST_S3_SIGNATURE_ENFORCEMENT \
+                     and point at a backend that validates SigV4 (real S3 or MinIO)"
+                );
+                return;
+            }
+        };
+    }
+    pub(crate) use maybe_skip_signature_enforcement;
+
     /// Test that the returned stream does not borrow the lifetime of Path
     fn list_store<'a>(
         store: &'a dyn ObjectStore,

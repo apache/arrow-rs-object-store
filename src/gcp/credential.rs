@@ -23,7 +23,7 @@ use crate::client::{
     CryptoProvider, HttpClient, HttpError, Signer, SigningAlgorithm, TokenProvider,
 };
 use crate::gcp::{GcpSigningCredentialProvider, STORE};
-use crate::util::{STRICT_ENCODE_SET, hex_digest, hex_encode};
+use crate::util::{STRICT_ENCODE_SET, append_strict_query_pairs, hex_digest, hex_encode};
 use crate::{RetryConfig, StaticCredentialProvider};
 use async_trait::async_trait;
 use base64::Engine;
@@ -734,11 +734,13 @@ impl TokenProvider for AuthorizedUserCredentials {
     }
 }
 
-/// Trim whitespace from header values
+/// Normalize a header value for the canonical request: trim leading/trailing whitespace and
+/// collapse runs of internal whitespace to a single space, as required by the canonical request
+/// specification.
+///
+/// <https://cloud.google.com/storage/docs/authentication/canonical-requests#about-headers>
 fn trim_header_value(value: &str) -> String {
-    let mut ret = value.to_string();
-    ret.retain(|c| !c.is_whitespace());
-    ret
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// A Google Cloud Storage Authorizer for generating signed URL using [Google SigV4]
@@ -759,11 +761,23 @@ impl GCSAuthorizer {
         }
     }
 
-    pub(crate) async fn sign(
+    /// Generate a signed URL, additionally folding `extra_query` parameters and `signed_headers`
+    /// into the [GOOG4 signed URLs] signature.
+    ///
+    /// `extra_query` lets callers sign query parameters the recipient must send (e.g. an upload
+    /// `partNumber`/`uploadId`), and `signed_headers` binds request headers (e.g. `content-type`)
+    /// to the signature. For a signed URL these values are fixed at signing time. The mandatory
+    /// `host` header is always signed.
+    ///
+    /// [GOOG4 signed URLs]: https://cloud.google.com/storage/docs/access-control/signed-urls
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn sign_with(
         &self,
         crypto: &dyn CryptoProvider,
         method: Method,
         url: &mut Url,
+        extra_query: &[(String, String)],
+        signed_headers: &HeaderMap,
         expires_in: Duration,
         client: &GoogleCloudStorageClient,
     ) -> crate::Result<()> {
@@ -772,8 +786,17 @@ impl GCSAuthorizer {
         let scope = self.scope(date);
         let credential_with_scope = format!("{email}/{scope}");
 
-        let mut headers = HeaderMap::new();
+        // Append any caller-provided query parameters before signing so they are folded into
+        // the canonical query string and become part of the signature.
+        append_strict_query_pairs(url, extra_query);
+
+        // The `host` header is always signed; callers may bind additional headers whose values
+        // are committed to the signature at signing time.
+        let mut headers = HeaderMap::with_capacity(1 + signed_headers.len());
         headers.insert("host", DEFAULT_GCS_SIGN_BLOB_HOST.parse().unwrap());
+        for (name, value) in signed_headers {
+            headers.append(name.clone(), value.clone());
+        }
 
         let (_, signed_headers) = Self::canonicalize_headers(&headers);
 
@@ -829,17 +852,21 @@ impl GCSAuthorizer {
     /// Canonicalizes query parameters into the GCP canonical form
     /// form like `max-keys=2&prefix=object`
     ///
+    /// Parameters are sorted by encoded name, with ties broken by encoded value, as required by
+    /// the canonical request specification — sorting by the decoded name (or ignoring the value
+    /// for duplicate names) can order parameters differently from how the server verifies them.
+    ///
     /// <https://cloud.google.com/storage/docs/authentication/canonical-requests#about-query-strings>
     fn canonicalize_query(url: &Url) -> String {
         url.query_pairs()
-            .sorted_unstable_by(|a, b| a.0.cmp(&b.0))
             .map(|(k, v)| {
-                format!(
-                    "{}={}",
-                    utf8_percent_encode(k.as_ref(), &STRICT_ENCODE_SET),
-                    utf8_percent_encode(v.as_ref(), &STRICT_ENCODE_SET)
+                (
+                    utf8_percent_encode(k.as_ref(), &STRICT_ENCODE_SET).to_string(),
+                    utf8_percent_encode(v.as_ref(), &STRICT_ENCODE_SET).to_string(),
                 )
             })
+            .sorted_unstable()
+            .map(|(k, v)| format!("{k}={v}"))
             .join("&")
     }
 
@@ -931,6 +958,7 @@ mod tests {
         ClientOptions, DigestAlgorithm, DigestContext, HmacContext, StaticCredentialProvider,
     };
     use crate::gcp::client::{GoogleCloudStorageClient, GoogleCloudStorageConfig};
+    use http::{HeaderName, HeaderValue};
 
     const SIGNATURE_BYTES: &[u8] = &[0x00, 0x01, 0x02, 0xab, 0xcd];
 
@@ -1038,10 +1066,12 @@ mod tests {
             GoogleCloudStorageClient::new(config, HttpClient::new(UnusedHttpService)).unwrap();
         let mut url = Url::parse("https://storage.googleapis.com/bucket/object").unwrap();
 
-        futures_executor::block_on(authorizer.sign(
+        futures_executor::block_on(authorizer.sign_with(
             &FixedCryptoProvider,
             Method::GET,
             &mut url,
+            &[],
+            &HeaderMap::new(),
             Duration::from_secs(60),
             &client,
         ))
@@ -1053,6 +1083,64 @@ mod tests {
             .unwrap()
             .1;
         assert_eq!(signature, hex_encode(SIGNATURE_BYTES));
+    }
+
+    #[test]
+    fn signed_url_with_folds_query_and_headers() {
+        let signing_credential = Arc::new(GcpSigningCredential {
+            email: "service-account@example.com".into(),
+            private_key: Some(ServiceAccountKey::new(Box::new(FixedSigner))),
+        });
+        let authorizer = GCSAuthorizer::new(Arc::clone(&signing_credential));
+        let config = GoogleCloudStorageConfig {
+            base_url: DEFAULT_GCS_BASE_URL.into(),
+            credentials: Arc::new(StaticCredentialProvider::new(GcpCredential {
+                bearer: "bearer".into(),
+            })),
+            signing_credentials: Arc::new(StaticCredentialProvider::new(GcpSigningCredential {
+                email: "service-account@example.com".into(),
+                private_key: None,
+            })),
+            crypto: None,
+            bucket_name: "bucket".into(),
+            retry_config: RetryConfig::default(),
+            client_options: ClientOptions::default(),
+            skip_signature: false,
+        };
+        let client =
+            GoogleCloudStorageClient::new(config, HttpClient::new(UnusedHttpService)).unwrap();
+        let mut url = Url::parse("https://storage.googleapis.com/bucket/object").unwrap();
+
+        let mut signed_headers = HeaderMap::new();
+        signed_headers.insert(
+            HeaderName::from_static("content-type"),
+            HeaderValue::from_static("text/plain"),
+        );
+
+        futures_executor::block_on(authorizer.sign_with(
+            &FixedCryptoProvider,
+            Method::PUT,
+            &mut url,
+            &[
+                ("partNumber".to_string(), "1".to_string()),
+                ("uploadId".to_string(), "abc123".to_string()),
+            ],
+            &signed_headers,
+            Duration::from_secs(60),
+            &client,
+        ))
+        .unwrap();
+
+        let pairs: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+        // Caller-provided query parameters are present in the signed URL.
+        assert_eq!(pairs.get("partNumber").map(String::as_str), Some("1"));
+        assert_eq!(pairs.get("uploadId").map(String::as_str), Some("abc123"));
+        // The extra header is reflected in X-Goog-SignedHeaders, sorted alongside `host`.
+        assert_eq!(
+            pairs.get("X-Goog-SignedHeaders").map(String::as_str),
+            Some("content-type;host")
+        );
+        assert!(pairs.contains_key("X-Goog-Signature"));
     }
 
     #[test]
@@ -1084,5 +1172,18 @@ x-goog-meta-reviewer:jane,john"
             GCSAuthorizer::canonicalize_query(&url),
             "max-keys=2&prefix=object".to_string()
         );
+    }
+
+    #[test]
+    fn trim_header_value_collapses_internal_whitespace() {
+        // The canonical request collapses runs of whitespace to a single space and trims the
+        // ends, rather than stripping all whitespace, so a signed `content-type` with parameters
+        // matches the value the recipient sends.
+        assert_eq!(trim_header_value("  foo   bar  "), "foo bar");
+        assert_eq!(
+            trim_header_value("text/plain;  charset=utf-8"),
+            "text/plain; charset=utf-8"
+        );
+        assert_eq!(trim_header_value("single"), "single");
     }
 }

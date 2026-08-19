@@ -208,11 +208,22 @@ jobs:
           aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-for-spawn
           aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-for-checksum
           aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-for-copy-if-not-exists
+          aws --endpoint-url=http://localhost:4566 s3 mb s3://test-bucket-for-signing
           aws --endpoint-url=http://localhost:4566 s3api create-bucket --bucket test-object-lock --object-lock-enabled-for-bucket
 
           KMS_KEY=$(aws --endpoint-url=http://localhost:4566 kms create-key --description "test key")
           AWS_SSE_KMS_KEY_ID=$(jq -r .KeyMetadata.KeyId <<< "$KMS_KEY")
           echo "AWS_SSE_KMS_KEY_ID=$AWS_SSE_KMS_KEY_ID" >> $GITHUB_ENV
+
+      # MinIO validates SigV4 (LocalStack does not), so it backs the presigned-URL
+      # signature-enforcement tests below.
+      - name: Setup MinIO (SigV4-validating S3)
+        run: |
+          MINIO_CONTAINER=$(docker run -d -p 9000:9000 -e MINIO_ROOT_USER=minio -e MINIO_ROOT_PASSWORD=minio123 minio/minio server /data)
+          echo "MINIO_CONTAINER=$MINIO_CONTAINER" >> $GITHUB_ENV
+          for _ in $(seq 1 30); do curl -fsS http://localhost:9000/minio/health/ready && break; sleep 1; done
+          AWS_ACCESS_KEY_ID=minio AWS_SECRET_ACCESS_KEY=minio123 \
+            aws --endpoint-url=http://localhost:9000 s3 mb s3://test-bucket-for-signing
 
       - name: Configure Azurite (Azure emulation)
         # the magical connection string is from
@@ -239,6 +250,20 @@ jobs:
           AWS_CONDITIONAL_PUT: etag
           AWS_COPY_IF_NOT_EXISTS: multipart
 
+      # These tests assert the backend REJECTS a tampered signature, an expired URL, or an
+      # altered signed header, so they need a backend that validates SigV4 and are gated behind
+      # TEST_S3_SIGNATURE_ENFORCEMENT (skipped against LocalStack elsewhere). Run them against
+      # MinIO. `env -u` drops the job-wide SSE-KMS settings, whose LocalStack key MinIO does not
+      # have; the tests only need a plain authenticated round trip.
+      - name: Run presigned-URL signature-enforcement tests (MinIO)
+        run: env -u AWS_SERVER_SIDE_ENCRYPTION -u AWS_SSE_KMS_KEY_ID cargo test --lib --features=aws aws::tests::signed_url
+        env:
+          TEST_S3_SIGNATURE_ENFORCEMENT: 1
+          AWS_ENDPOINT: http://localhost:9000
+          AWS_ACCESS_KEY_ID: minio
+          AWS_SECRET_ACCESS_KEY: minio123
+          AWS_BUCKET: test-bucket-for-signing
+
       # Exercise the `ring` crypto provider at runtime (the other jobs only
       # compile it)
       #
@@ -257,6 +282,10 @@ jobs:
       - name: LocalStack Output
         if: ${{ !cancelled() }}
         run: docker logs $LOCALSTACK_CONTAINER
+
+      - name: MinIO Output
+        if: ${{ !cancelled() }}
+        run: docker logs $MINIO_CONTAINER
 
       - name: EC2 Metadata Output
         if: ${{ !cancelled() }}
