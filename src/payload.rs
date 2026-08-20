@@ -19,6 +19,14 @@ use bytes::Bytes;
 use std::sync::Arc;
 
 /// A cheaply cloneable, ordered collection of [`Bytes`]
+///
+/// A [`PutPayload`] is fully materialized in memory. To upload large objects
+/// without buffering them entirely in memory, use the multipart API instead:
+/// [`ObjectStore::put_multipart_opts`], [`WriteMultipart`], or [`BufWriter`]
+///
+/// [`ObjectStore::put_multipart_opts`]: crate::ObjectStore::put_multipart_opts
+/// [`WriteMultipart`]: crate::WriteMultipart
+/// [`BufWriter`]: crate::buffered::BufWriter
 #[derive(Debug, Clone)]
 pub struct PutPayload(Arc<[Bytes]>);
 

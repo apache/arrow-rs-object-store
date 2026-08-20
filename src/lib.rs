@@ -263,6 +263,9 @@
 //!
 //! Use the [`ObjectStoreExt::put`] method to atomically write data.
 //!
+//! To upload large objects without buffering them entirely in [`PutPayload`],
+//! see [Multipart Upload](#multipart-upload) below.
+//!
 //! ```ignore-wasm32
 //! # use object_store::local::LocalFileSystem;
 //! # use object_store::{ObjectStore, ObjectStoreExt, PutPayload};
@@ -283,7 +286,15 @@
 //! # Multipart Upload
 //!
 //! Use the [`ObjectStoreExt::put_multipart`] / [`ObjectStore::put_multipart_opts`] method to atomically write a large
-//! amount of data
+//! amount of data in multiple parts, without buffering the entire object in memory.
+//! [`WriteMultipart`] uploads fixed size parts in parallel as data is written.
+//!
+//! [`BufWriter`](buffered::BufWriter) provides an [`AsyncWrite`]
+//! interface that automatically picks between a single and multipart upload
+//! based on the amount of data written.
+//!
+//! [`AsyncWrite`]: tokio::io::AsyncWrite
+//! [`BufWriter`]: buffered::BufWriter
 //!
 //! ```ignore-wasm32
 //! # use object_store::local::LocalFileSystem;
@@ -911,6 +922,9 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// The operation is guaranteed to be atomic, it will either successfully
     /// write the entirety of `payload` to `location`, or fail. No clients
     /// should be able to observe a partially written object
+    ///
+    /// To upload large objects without buffering them entirely in memory, use
+    /// the multipart API: [`ObjectStore::put_multipart_opts`]
     async fn put_opts(
         &self,
         location: &Path,
@@ -923,7 +937,13 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// Client should prefer [`ObjectStore::put_opts`] for small payloads, as streaming uploads
     /// typically require multiple separate requests. See [`MultipartUpload`] for more information
     ///
+    /// See also [`BufWriter`](buffered::BufWriter) for an interface that
+    /// automatically picks between a single and multipart upload based on the
+    /// amount of data written.
+    ///
     /// For more advanced multipart uploads see [`MultipartStore`](multipart::MultipartStore)
+    ///
+    /// [`BufWriter`]: buffered::BufWriter
     async fn put_multipart_opts(
         &self,
         location: &Path,
@@ -1385,6 +1405,11 @@ pub trait ObjectStoreExt: ObjectStore {
     /// The operation is guaranteed to be atomic, it will either successfully
     /// write the entirety of `payload` to `location`, or fail. No clients
     /// should be able to observe a partially written object
+    ///
+    /// Note the entire `payload` is buffered in memory. To upload large objects
+    /// without buffering them entirely in memory, use the multipart API:
+    /// [`ObjectStoreExt::put_multipart`], [`WriteMultipart`], or
+    /// [`BufWriter`](buffered::BufWriter)
     fn put(&self, location: &Path, payload: PutPayload) -> impl Future<Output = Result<PutResult>>;
 
     /// Perform a multipart upload
