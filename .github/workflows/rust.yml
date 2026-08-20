@@ -51,7 +51,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install cargo-msrv
-        run: cargo install cargo-msrv --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-msrv
       - name: Check
         run: |
           # run `cargo msrv verify` to see problems
