@@ -25,6 +25,7 @@ use futures_util::future::BoxFuture;
 use http::StatusCode;
 use http::header::LOCATION;
 use http::{Method, Uri};
+use std::sync::Arc;
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use std::time::{Duration, Instant};
 use tracing::info;
@@ -81,6 +82,7 @@ pub(crate) struct RetryContext {
     retries: usize,
     max_retries: usize,
     retry_timeout: Duration,
+    retry_status_policy: Option<RetryStatusPolicy>,
     start: Instant,
 }
 
@@ -89,6 +91,7 @@ impl RetryContext {
         Self {
             max_retries: config.max_retries,
             retry_timeout: config.retry_timeout,
+            retry_status_policy: config.retry_status_policy.clone(),
             backoff: Backoff::new(&config.backoff),
             retries: 0,
             start: Instant::now(),
@@ -102,6 +105,16 @@ impl RetryContext {
     pub(crate) fn backoff(&mut self) -> Duration {
         self.retries += 1;
         self.backoff.next()
+    }
+
+    fn should_retry_status(&self, status: StatusCode, retry_on_conflict: bool) -> bool {
+        match &self.retry_status_policy {
+            Some(policy) => policy(status),
+            None => {
+                RetryConfig::default_should_retry_status(status)
+                    || (retry_on_conflict && status == StatusCode::CONFLICT)
+            }
+        }
     }
 }
 
@@ -212,6 +225,9 @@ impl From<RetryError> for std::io::Error {
 
 pub(crate) type Result<T, E = RetryError> = std::result::Result<T, E>;
 
+/// A function that determines whether a response status should be retried
+pub type RetryStatusPolicy = Arc<dyn Fn(StatusCode) -> bool + Send + Sync>;
+
 /// The configuration for how to respond to request errors
 ///
 /// The following categories of error will be retried:
@@ -225,7 +241,7 @@ pub(crate) type Result<T, E = RetryError> = std::result::Result<T, E>;
 /// backoff with jitter. See [`BackoffConfig`] for more information
 ///
 /// [safe]: https://datatracker.ietf.org/doc/html/rfc7231#section-4.2.1
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RetryConfig {
     /// The backoff configuration
     pub backoff: BackoffConfig,
@@ -247,6 +263,58 @@ pub struct RetryConfig {
     /// below 5 minutes to avoid errors due to expired credentials
     /// and/or request payloads
     pub retry_timeout: Duration,
+
+    /// An optional function that determines whether a response status should be retried
+    ///
+    /// When set, this replaces the default status policy, including any provider-specific
+    /// status handling. Successful responses, redirects, and `304 Not Modified` responses
+    /// are handled before this policy is invoked.
+    ///
+    /// Transport errors are classified separately and are not affected by this policy.
+    pub retry_status_policy: Option<RetryStatusPolicy>,
+}
+
+impl std::fmt::Debug for RetryConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RetryConfig")
+            .field("backoff", &self.backoff)
+            .field("max_retries", &self.max_retries)
+            .field("retry_timeout", &self.retry_timeout)
+            .field(
+                "retry_status_policy",
+                &self.retry_status_policy.as_ref().map(|_| "<custom>"),
+            )
+            .finish()
+    }
+}
+
+impl RetryConfig {
+    fn default_should_retry_status(status: StatusCode) -> bool {
+        status.is_server_error()
+            || status == StatusCode::TOO_MANY_REQUESTS
+            || status == StatusCode::REQUEST_TIMEOUT
+    }
+
+    /// Set a custom function that determines whether a response status should be retried
+    ///
+    /// This replaces the default policy of retrying server errors, `429 Too Many Requests`,
+    /// and `408 Request Timeout`.
+    ///
+    /// ```
+    /// # use http::StatusCode;
+    /// # use object_store::RetryConfig;
+    /// let config = RetryConfig::default().with_retry_status_policy(|status| {
+    ///     status == StatusCode::SERVICE_UNAVAILABLE
+    /// });
+    /// ```
+    #[must_use]
+    pub fn with_retry_status_policy<F>(mut self, policy: F) -> Self
+    where
+        F: Fn(StatusCode) -> bool + Send + Sync + 'static,
+    {
+        self.retry_status_policy = Some(Arc::new(policy));
+        self
+    }
 }
 
 impl Default for RetryConfig {
@@ -255,6 +323,7 @@ impl Default for RetryConfig {
             backoff: Default::default(),
             max_retries: 10,
             retry_timeout: Duration::from_secs(3 * 60),
+            retry_status_policy: None,
         }
     }
 }
@@ -405,10 +474,7 @@ impl RetryableRequest {
                     } else {
                         let status = r.status();
                         if ctx.exhausted()
-                            || !(status.is_server_error()
-                                || status == StatusCode::TOO_MANY_REQUESTS
-                                || status == StatusCode::REQUEST_TIMEOUT
-                                || (self.retry_on_conflict && status == StatusCode::CONFLICT))
+                            || !ctx.should_retry_status(status, self.retry_on_conflict)
                         {
                             let source = match r.into_body().text().await {
                                 Ok(body) => RequestError::Status {
@@ -550,6 +616,7 @@ mod tests {
             backoff: Default::default(),
             max_retries: 2,
             retry_timeout: Duration::from_secs(1000),
+            retry_status_policy: None,
         };
 
         let client = HttpClient::new(
@@ -629,6 +696,35 @@ mod tests {
 
         let r = do_request().await.unwrap();
         assert_eq!(r.status(), StatusCode::OK);
+
+        let custom_retry = retry
+            .clone()
+            .with_retry_status_policy(|status| status == StatusCode::IM_A_TEAPOT);
+        let do_custom_request = || {
+            client
+                .request(Method::GET, mock.url())
+                .send_retry(&custom_retry)
+        };
+
+        // A custom policy can retry an otherwise non-retryable status
+        mock.push(
+            Response::builder()
+                .status(StatusCode::IM_A_TEAPOT)
+                .body(String::new())
+                .unwrap(),
+        );
+        let r = do_custom_request().await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
+
+        // A custom policy replaces the default status policy
+        mock.push(
+            Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .body(String::new())
+                .unwrap(),
+        );
+        let e = do_custom_request().await.unwrap_err();
+        assert_eq!(e.status(), Some(StatusCode::BAD_GATEWAY));
 
         // Accepts 204 status code
         mock.push(
@@ -858,6 +954,7 @@ mod tests {
             backoff: Default::default(),
             max_retries: 0,
             retry_timeout: Duration::from_secs(1000),
+            retry_status_policy: None,
         };
 
         let client = HttpClient::new(Client::builder().build().unwrap());
@@ -895,6 +992,7 @@ mod tests {
             backoff: Default::default(),
             max_retries: 2,
             retry_timeout: Duration::from_secs(1),
+            retry_status_policy: None,
         };
         assert!(retry.max_retries > 0);
 
