@@ -111,9 +111,7 @@ impl RetryContext {
         match &self.retry_status_policy {
             Some(policy) => policy(status),
             None => {
-                status.is_server_error()
-                    || status == StatusCode::TOO_MANY_REQUESTS
-                    || status == StatusCode::REQUEST_TIMEOUT
+                RetryConfig::default_should_retry_status(status)
                     || (retry_on_conflict && status == StatusCode::CONFLICT)
             }
         }
@@ -291,6 +289,12 @@ impl std::fmt::Debug for RetryConfig {
 }
 
 impl RetryConfig {
+    fn default_should_retry_status(status: StatusCode) -> bool {
+        status.is_server_error()
+            || status == StatusCode::TOO_MANY_REQUESTS
+            || status == StatusCode::REQUEST_TIMEOUT
+    }
+
     /// Set a custom function that determines whether a response status should be retried
     ///
     /// This replaces the default policy of retrying server errors, `429 Too Many Requests`,
