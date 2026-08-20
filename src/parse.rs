@@ -474,7 +474,7 @@ mod tests {
 
         let res = store.get(&path).await.unwrap();
         let body = res.bytes().await.unwrap();
-        let body = str::from_utf8(&body).unwrap();
+        let body = std::str::from_utf8(&body).unwrap();
         assert_eq!(body, "result");
 
         server.shutdown().await;
