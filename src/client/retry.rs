@@ -541,6 +541,62 @@ mod tests {
         assert!(!body_contains_error(success_response));
     }
 
+    #[cfg(all(
+        feature = "reqwest",
+        feature = "fs",
+        any(feature = "aws-base", feature = "gcp-base", feature = "azure-base")
+    ))]
+    #[tokio::test]
+    async fn test_retry_replays_streaming_file_payload() {
+        use crate::{BackoffConfig, PutPayload};
+        use http_body_util::BodyExt;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let mock = MockServer::new().await;
+        let request_count = Arc::new(AtomicUsize::new(0));
+        for status in [StatusCode::BAD_GATEWAY, StatusCode::OK] {
+            let request_count = Arc::clone(&request_count);
+            mock.push_async_fn(move |request| async move {
+                request_count.fetch_add(1, Ordering::SeqCst);
+                let body = request.collect().await.unwrap().to_bytes();
+                assert_eq!(body, "streamed payload");
+                Response::builder()
+                    .status(status)
+                    .body(String::new())
+                    .unwrap()
+            });
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("payload");
+        tokio::fs::write(&path, b"streamed payload").await.unwrap();
+        let payload = PutPayload::from_file(path).await.unwrap();
+        let retry = RetryConfig {
+            backoff: BackoffConfig {
+                init_backoff: Duration::from_millis(1),
+                ..Default::default()
+            },
+            max_retries: 1,
+            retry_timeout: Duration::from_secs(10),
+        };
+        let client = HttpClient::new(Client::new());
+
+        let response = client
+            .request(Method::PUT, mock.url())
+            .body(payload.clone())
+            .retryable(&retry)
+            .idempotent(true)
+            .payload(Some(payload))
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(request_count.load(Ordering::SeqCst), 2);
+        mock.shutdown().await;
+    }
+
     #[cfg(feature = "reqwest")]
     #[tokio::test]
     async fn test_retry() {

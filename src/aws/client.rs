@@ -405,40 +405,65 @@ impl Request<'_> {
         Self { builder, ..self }
     }
 
-    pub(crate) fn with_payload(mut self, payload: PutPayload) -> Result<Self> {
-        let mut cached_digest: Option<[u8; 32]> = None;
-        let mut sha256_digest = || -> Result<[u8; 32]> {
-            if let Some(digest) = cached_digest {
-                return Ok(digest);
+    pub(crate) async fn with_payload(mut self, payload: PutPayload) -> Result<Self> {
+        use futures_util::TryStreamExt;
+
+        let needs_sha256 = (!self.config.skip_signature && self.config.sign_payload)
+            || self.config.checksum == Some(Checksum::SHA256);
+        let mut sha256 = needs_sha256
+            .then(|| self.config.crypto()?.digest(DigestAlgorithm::Sha256))
+            .transpose()?;
+        let mut crc64 = (self.config.checksum == Some(Checksum::CRC64NVME)).then(|| {
+            let algorithm = crc_fast::CrcAlgorithm::Crc64Nvme;
+            crc_fast::Digest::new(algorithm)
+        });
+
+        if sha256.is_some() || crc64.is_some() {
+            let mut update_hashes = |part: &[u8]| {
+                if let Some(digest) = &mut sha256 {
+                    digest.update(part);
+                }
+                if let Some(digest) = &mut crc64 {
+                    digest.update(part);
+                }
+            };
+
+            if payload.is_streaming() {
+                let mut stream = payload.stream().map_err(|source| crate::Error::Generic {
+                    store: "S3",
+                    source,
+                });
+                while let Some(part) = stream.try_next().await? {
+                    update_hashes(&part);
+                }
+            } else {
+                for part in &payload {
+                    update_hashes(part);
+                }
             }
-            let mut ctx = self.config.crypto()?.digest(DigestAlgorithm::Sha256)?;
-            for part in &payload {
-                ctx.update(part);
-            }
-            let digest = ctx.finish()?.try_into().unwrap();
-            cached_digest = Some(digest);
-            Ok(digest)
+        }
+
+        let sha256_digest = match sha256 {
+            Some(mut digest) => Some(digest.finish()?.try_into().unwrap()),
+            None => None,
         };
+        let crc64_checksum = crc64.map(|digest| digest.finalize());
 
         if !self.config.skip_signature && self.config.sign_payload {
-            self.payload_sha256 = Some(sha256_digest()?);
+            self.payload_sha256 = sha256_digest;
         }
 
         match self.config.checksum {
             Some(Checksum::SHA256) => {
-                self.builder = self
-                    .builder
-                    .header(SHA256_CHECKSUM, BASE64_STANDARD.encode(sha256_digest()?));
+                self.builder = self.builder.header(
+                    SHA256_CHECKSUM,
+                    BASE64_STANDARD.encode(sha256_digest.unwrap()),
+                );
             }
             Some(Checksum::CRC64NVME) => {
-                let crc_algo = crc_fast::CrcAlgorithm::Crc64Nvme;
-                let mut digest = crc_fast::Digest::new(crc_algo);
-                payload.iter().for_each(|x| digest.update(x));
-                let checksum = digest.finalize();
-
                 self.builder = self.builder.header(
                     CRC64NVME_CHECKSUM,
-                    BASE64_STANDARD.encode(checksum.to_be_bytes()),
+                    BASE64_STANDARD.encode(crc64_checksum.unwrap().to_be_bytes()),
                 )
             }
             None => {}
@@ -754,7 +779,7 @@ impl S3Client {
             .idempotent(true);
 
         request = match data {
-            PutPartPayload::Part(payload) => request.with_payload(payload)?,
+            PutPartPayload::Part(payload) => request.with_payload(payload).await?,
             PutPartPayload::Copy(path) => request.header(
                 "x-amz-copy-source",
                 &format!("{}/{}", self.config.bucket, encode_path(path)),
@@ -1164,6 +1189,42 @@ mod tests {
         }
     }
 
+    #[cfg(all(feature = "reqwest", any(feature = "aws-lc-rs", feature = "ring")))]
+    #[tokio::test]
+    async fn test_payload_hashes_share_stream_pass() {
+        use std::io;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let mock = MockServer::new().await;
+        let mut config = default_headers_config(&mock);
+        config.sign_payload = true;
+        config.checksum = Some(Checksum::CRC64NVME);
+        let client = S3Client::new(config, HttpClient::new(reqwest::Client::new()));
+
+        let stream_count = Arc::new(AtomicUsize::new(0));
+        let payload = PutPayload::from_stream(
+            {
+                let stream_count = Arc::clone(&stream_count);
+                move || {
+                    stream_count.fetch_add(1, Ordering::SeqCst);
+                    futures_util::stream::once(async {
+                        Ok::<_, io::Error>(Bytes::from_static(b"payload"))
+                    })
+                }
+            },
+            7,
+        );
+
+        client
+            .request(Method::PUT, &Path::from("test"))
+            .with_payload(payload)
+            .await
+            .unwrap();
+
+        assert_eq!(stream_count.load(Ordering::SeqCst), 1);
+        mock.shutdown().await;
+    }
+
     #[cfg(feature = "reqwest")]
     #[tokio::test]
     async fn test_default_headers_signed_request() {
@@ -1182,6 +1243,7 @@ mod tests {
         let result = client
             .request(Method::PUT, &Path::from("test"))
             .with_payload(PutPayload::default())
+            .await
             .unwrap()
             .do_put()
             .await;

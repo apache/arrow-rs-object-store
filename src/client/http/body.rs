@@ -18,8 +18,8 @@
 use crate::client::{HttpError, HttpErrorKind};
 use crate::{PutPayload, collect_bytes};
 use bytes::Bytes;
-use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
+use futures_util::{StreamExt, TryStreamExt};
 use http_body_util::combinators::BoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Body, Frame, SizeHint};
@@ -30,8 +30,16 @@ use std::task::{Context, Poll};
 pub type HttpRequest = http::Request<HttpRequestBody>;
 
 /// The [`Body`] of an [`HttpRequest`]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct HttpRequestBody(Inner);
+
+impl std::fmt::Debug for HttpRequestBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HttpRequestBody")
+            .field("content_length", &self.content_length())
+            .finish()
+    }
+}
 
 impl HttpRequestBody {
     /// An empty [`HttpRequestBody`]
@@ -46,6 +54,11 @@ impl HttpRequestBody {
             Inner::PutPayload(_, payload) => reqwest::Body::wrap_stream(
                 futures_util::stream::iter(payload.into_iter().map(Ok::<_, HttpError>)),
             ),
+            Inner::Streaming(body) => reqwest::Body::wrap_stream(
+                body.payload
+                    .stream()
+                    .map_err(|e| HttpError::new_boxed(HttpErrorKind::Unknown, e)),
+            ),
         }
     }
 
@@ -54,6 +67,7 @@ impl HttpRequestBody {
         match self.0 {
             Inner::Bytes(b) => b.into(),
             Inner::PutPayload(_, payload) => Bytes::from(payload).into(),
+            Inner::Streaming(body) => Bytes::from(body.payload).into(),
         }
     }
 
@@ -62,6 +76,7 @@ impl HttpRequestBody {
         match &self.0 {
             Inner::Bytes(x) => x.is_empty(),
             Inner::PutPayload(_, x) => x.iter().any(|x| !x.is_empty()),
+            Inner::Streaming(x) => x.payload.content_length() != 0,
         }
     }
 
@@ -70,6 +85,7 @@ impl HttpRequestBody {
         match &self.0 {
             Inner::Bytes(x) => x.len(),
             Inner::PutPayload(_, x) => x.content_length(),
+            Inner::Streaming(x) => x.payload.content_length(),
         }
     }
 
@@ -102,14 +118,41 @@ impl From<String> for HttpRequestBody {
 
 impl From<PutPayload> for HttpRequestBody {
     fn from(value: PutPayload) -> Self {
-        Self(Inner::PutPayload(0, value))
+        match value.is_streaming() {
+            false => Self(Inner::PutPayload(0, value)),
+            true => Self(Inner::Streaming(PutPayloadBody {
+                payload: value,
+                stream: None,
+                bytes_read: 0,
+                finished: false,
+            })),
+        }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 enum Inner {
     Bytes(Bytes),
     PutPayload(usize, PutPayload),
+    Streaming(PutPayloadBody),
+}
+
+struct PutPayloadBody {
+    payload: PutPayload,
+    stream: Option<BoxStream<'static, Result<Bytes, HttpError>>>,
+    bytes_read: usize,
+    finished: bool,
+}
+
+impl Clone for PutPayloadBody {
+    fn clone(&self) -> Self {
+        Self {
+            payload: self.payload.clone(),
+            stream: None,
+            bytes_read: 0,
+            finished: false,
+        }
+    }
 }
 
 impl Body for HttpRequestBody {
@@ -118,7 +161,7 @@ impl Body for HttpRequestBody {
 
     fn poll_frame(
         mut self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
+        cx: &mut Context<'_>,
     ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
         Poll::Ready(match &mut self.0 {
             Inner::Bytes(bytes) => {
@@ -139,6 +182,29 @@ impl Body for HttpRequestBody {
                     )))
                 }
             }
+            Inner::Streaming(body) => {
+                let stream = body.stream.get_or_insert_with(|| {
+                    body.payload
+                        .stream()
+                        .map_err(|e| HttpError::new_boxed(HttpErrorKind::Unknown, e))
+                        .boxed()
+                });
+                match futures_core::Stream::poll_next(Pin::new(stream), cx) {
+                    Poll::Ready(Some(Ok(bytes))) => {
+                        body.bytes_read += bytes.len();
+                        return Poll::Ready(Some(Ok(Frame::data(bytes))));
+                    }
+                    Poll::Ready(Some(Err(e))) => {
+                        body.finished = true;
+                        Some(Err(e))
+                    }
+                    Poll::Ready(None) => {
+                        body.finished = true;
+                        None
+                    }
+                    Poll::Pending => return Poll::Pending,
+                }
+            }
         })
     }
 
@@ -146,6 +212,7 @@ impl Body for HttpRequestBody {
         match self.0 {
             Inner::Bytes(ref bytes) => bytes.is_empty(),
             Inner::PutPayload(offset, ref body) => offset == body.as_ref().len(),
+            Inner::Streaming(ref body) => body.finished,
         }
     }
 
@@ -156,6 +223,11 @@ impl Body for HttpRequestBody {
                 let iter = payload.as_ref().iter().skip(offset);
                 SizeHint::with_exact(iter.map(|x| x.len() as u64).sum())
             }
+            Inner::Streaming(ref body) => SizeHint::with_exact(
+                body.payload
+                    .content_length()
+                    .saturating_sub(body.bytes_read) as u64,
+            ),
         }
     }
 }
@@ -238,5 +310,37 @@ impl From<Vec<u8>> for HttpResponseBody {
 impl From<String> for HttpResponseBody {
     fn from(value: String) -> Self {
         Bytes::from(value).into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+
+    #[test]
+    fn byte_backed_put_payload_uses_synchronous_body() {
+        let body = HttpRequestBody::from(PutPayload::from_static(b"payload"));
+        assert!(matches!(&body.0, Inner::PutPayload(0, _)));
+    }
+
+    #[tokio::test]
+    async fn streaming_request_body_clone_is_replayable() {
+        let payload = PutPayload::from_stream(
+            || {
+                futures_util::stream::iter([
+                    Ok::<_, io::Error>(Bytes::from_static(b"hello ")),
+                    Ok(Bytes::from_static(b"world")),
+                ])
+            },
+            11,
+        );
+
+        let body = HttpRequestBody::from(payload);
+        assert!(matches!(&body.0, Inner::Streaming(_)));
+        for body in [body.clone(), body] {
+            assert_eq!(body.content_length(), 11);
+            assert_eq!(body.collect().await.unwrap().to_bytes(), "hello world");
+        }
     }
 }
