@@ -410,6 +410,17 @@ impl ObjectStore for LocalFileSystem {
             });
         }
 
+        let payload = match payload.is_streaming() {
+            true => payload
+                .bytes()
+                .await
+                .map_err(|source| crate::Error::Generic {
+                    store: "LocalFileSystem",
+                    source,
+                })?
+                .into(),
+            false => payload,
+        };
         let path = self.path_to_filesystem(location)?;
         let fsync = self.fsync;
         maybe_spawn_blocking(move || {
@@ -1124,20 +1135,34 @@ impl MultipartUpload for LocalUpload {
         self.offset += data.content_length() as u64;
 
         let s = Arc::clone(&self.state);
-        maybe_spawn_blocking(move || {
-            let mut guard = s.file.lock();
-            let file = guard.as_mut().ok_or(Error::Aborted)?;
-            file.seek(SeekFrom::Start(offset)).map_err(|source| {
-                let path = s.dest.clone();
-                Error::Seek { source, path }
-            })?;
+        async move {
+            let data = match data.is_streaming() {
+                true => data
+                    .bytes()
+                    .await
+                    .map_err(|source| crate::Error::Generic {
+                        store: "LocalFileSystem",
+                        source,
+                    })?
+                    .into(),
+                false => data,
+            };
+            maybe_spawn_blocking(move || {
+                let mut guard = s.file.lock();
+                let file = guard.as_mut().ok_or(Error::Aborted)?;
+                file.seek(SeekFrom::Start(offset)).map_err(|source| {
+                    let path = s.dest.clone();
+                    Error::Seek { source, path }
+                })?;
 
-            data.iter()
-                .try_for_each(|x| file.write_all(x))
-                .map_err(|source| Error::UnableToCopyDataToFile { source })?;
+                data.iter()
+                    .try_for_each(|x| file.write_all(x))
+                    .map_err(|source| Error::UnableToCopyDataToFile { source })?;
 
-            Ok(())
-        })
+                Ok(())
+            })
+            .await
+        }
         .boxed()
     }
 

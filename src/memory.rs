@@ -205,9 +205,16 @@ impl ObjectStore for InMemory {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
+        let payload = payload
+            .bytes()
+            .await
+            .map_err(|source| crate::Error::Generic {
+                store: "InMemory",
+                source,
+            })?;
         let mut storage = self.storage.write();
         let etag = storage.next_etag;
-        let entry = Entry::new(payload.into(), Utc::now(), etag, opts.attributes);
+        let entry = Entry::new(payload, Utc::now(), etag, opts.attributes);
 
         match opts.mode {
             PutMode::Overwrite => storage.overwrite(location, entry),
@@ -450,12 +457,19 @@ impl MultipartStore for InMemory {
         part_idx: usize,
         payload: PutPayload,
     ) -> Result<PartId> {
+        let payload = payload
+            .bytes()
+            .await
+            .map_err(|source| crate::Error::Generic {
+                store: "InMemory",
+                source,
+            })?;
         let mut storage = self.storage.write();
         let upload = storage.upload_mut(id)?;
         if part_idx >= upload.parts.len() {
             upload.parts.resize(part_idx + 1, None);
         }
-        upload.parts[part_idx] = Some(payload.into());
+        upload.parts[part_idx] = Some(payload);
         Ok(PartId {
             content_id: Default::default(),
         })
@@ -538,8 +552,13 @@ impl MultipartUpload for InMemoryUpload {
     async fn complete(&mut self) -> Result<PutResult> {
         let cap = self.parts.iter().map(|x| x.content_length()).sum();
         let mut buf = Vec::with_capacity(cap);
-        let parts = self.parts.iter().flatten();
-        parts.for_each(|x| buf.extend_from_slice(x));
+        for part in &self.parts {
+            let bytes = part.bytes().await.map_err(|source| crate::Error::Generic {
+                store: "InMemory",
+                source,
+            })?;
+            buf.extend_from_slice(&bytes);
+        }
         let etag = self.storage.write().insert(
             &self.location,
             buf.into(),
