@@ -22,13 +22,15 @@ use crate::client::retry::{self, RetryConfig, RetryContext, RetryExt};
 use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpResponse};
 use crate::path::{DELIMITER, Path};
 use crate::util::deserialize_rfc1123;
-use crate::{Attribute, Attributes, ClientOptions, GetOptions, ObjectMeta, PutPayload, Result};
+use crate::{
+    Attribute, Attributes, ClientOptions, GetOptions, ObjectMeta, PutMode, PutPayload, Result,
+};
 use async_trait::async_trait;
 use bytes::Buf;
 use chrono::{DateTime, Utc};
 use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH,
-    CONTENT_TYPE,
+    CONTENT_TYPE, IF_MATCH, IF_NONE_MATCH,
 };
 use http::{Method, StatusCode};
 use percent_encoding::percent_decode_str;
@@ -177,6 +179,7 @@ impl Client {
         location: &Path,
         payload: PutPayload,
         attributes: Attributes,
+        mode: PutMode,
     ) -> Result<HttpResponse> {
         let mut retry = false;
         loop {
@@ -213,6 +216,23 @@ impl Client {
                 }
             }
 
+            // Set the appropriate If-Match header for the PutMode
+            // If the mode is Update, the header will be set to the e_tag if one is provided
+            // If the mode is Create, the header will be set to "*" to prevent overwriting existing objects
+            // If the mode is Overwrite, no header will be set
+
+            builder = match mode {
+                PutMode::Overwrite => builder,
+                PutMode::Create => builder.header(IF_NONE_MATCH, "*"),
+                PutMode::Update(ref v) => {
+                    let etag = v.e_tag.clone().ok_or_else(|| crate::Error::Generic {
+                        store: STORE,
+                        source: "PutMode::Update requires an e_tag to be set".into(),
+                    })?;
+                    builder.header(IF_MATCH, etag)
+                }
+            };
+
             let resp = builder
                 .header(CONTENT_LENGTH, payload.content_length())
                 .retryable(&self.retry_config)
@@ -223,9 +243,26 @@ impl Client {
 
             match resp {
                 Ok(response) => return Ok(response),
-                Err(source) => match source.status() {
+                Err(source) => match (&mode, source.status()) {
+                    // Return AlreadyExists if the mode is Create and the status is 412 (Precondition Failed)
+                    (PutMode::Create, Some(StatusCode::PRECONDITION_FAILED)) => {
+                        return Err(crate::Error::AlreadyExists {
+                            path: location.to_string(),
+                            source: Box::new(source),
+                        });
+                    }
+
+                    // Return Precondition if the mode is Update and the status is 412 (Precondition Failed)
+                    (PutMode::Update(_), Some(StatusCode::PRECONDITION_FAILED)) => {
+                        return Err(crate::Error::Precondition {
+                            path: location.to_string(),
+                            source: Box::new(source),
+                        });
+                    }
                     // Some implementations return 404 instead of 409
-                    Some(StatusCode::CONFLICT | StatusCode::NOT_FOUND) if !retry => {
+                    (PutMode::Overwrite, Some(StatusCode::CONFLICT | StatusCode::NOT_FOUND))
+                        if !retry =>
+                    {
                         retry = true;
                         self.create_parent_directories(location).await?
                     }

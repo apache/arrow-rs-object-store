@@ -49,7 +49,7 @@ use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
     ClientConfigKey, ClientOptions, CopyMode, CopyOptions, GetOptions, GetResult, ListResult,
-    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload,
     PutResult, Result, RetryConfig,
 };
 
@@ -105,15 +105,10 @@ impl ObjectStore for HttpStore {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
-        if opts.mode != PutMode::Overwrite {
-            // TODO: Add support for If header - https://datatracker.ietf.org/doc/html/rfc2518#section-9.4
-            return Err(crate::Error::NotImplemented {
-                operation: "`put_opts` with a mode other than `PutMode::Overwrite`".into(),
-                implementer: self.to_string(),
-            });
-        }
-
-        let response = self.client.put(location, payload, opts.attributes).await?;
+        let response = self
+            .client
+            .put(location, payload, opts.attributes, opts.mode)
+            .await?;
         let (parts, _) = response.into_parts();
         let e_tag = match get_etag(&parts.headers) {
             Ok(e_tag) => Some(e_tag),
