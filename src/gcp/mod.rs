@@ -43,6 +43,7 @@ use std::time::Duration;
 use crate::CopyOptions;
 use crate::client::{CredentialProvider, crypto_provider};
 use crate::gcp::credential::GCSAuthorizer;
+use crate::retry::{MultipartRetry, RetryPolicy};
 use crate::signer::{SignedUrlOptions, Signer};
 use crate::util::validate_signed_url_extras;
 use crate::{
@@ -117,6 +118,7 @@ struct UploadState {
     path: Path,
     multipart_id: MultipartId,
     parts: Parts,
+    retry_policy: Option<Arc<dyn RetryPolicy>>,
 }
 
 #[async_trait]
@@ -126,12 +128,21 @@ impl MultipartUpload for GCSMultipartUpload {
         self.part_idx += 1;
         let state = Arc::clone(&self.state);
         Box::pin(async move {
-            let part = state
-                .client
-                .put_part(&state.path, &state.multipart_id, idx, payload)
-                .await?;
-            state.parts.put(idx, part);
-            Ok(())
+            let mut retry = MultipartRetry::new(state.retry_policy.clone());
+            loop {
+                match state
+                    .client
+                    .put_part(&state.path, &state.multipart_id, idx, payload.clone())
+                    .await
+                {
+                    Ok(part) => {
+                        state.parts.put(idx, part);
+                        return Ok(());
+                    }
+                    Err(error) if retry.should_retry(&error).await => continue,
+                    Err(error) => return Err(error),
+                }
+            }
         })
     }
 
@@ -168,6 +179,7 @@ impl ObjectStore for GoogleCloudStorage {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
+        let retry_policy = opts.retry_policy();
         let upload_id = self.client.multipart_initiate(location, opts).await?;
 
         Ok(Box::new(GCSMultipartUpload {
@@ -177,6 +189,7 @@ impl ObjectStore for GoogleCloudStorage {
                 path: location.clone(),
                 multipart_id: upload_id.clone(),
                 parts: Default::default(),
+                retry_policy,
             }),
         }))
     }

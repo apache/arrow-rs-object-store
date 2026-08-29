@@ -780,16 +780,20 @@ impl AzureClient {
         )
     }
 
+    /// Generate the identity of a block in a multipart upload
+    pub(crate) fn new_block_id() -> String {
+        let block_id = u128::from_be_bytes(rand::rng().random());
+        format!("{block_id:032x}")
+    }
+
     /// PUT a block <https://learn.microsoft.com/en-us/rest/api/storageservices/put-block>
     pub(crate) async fn put_block(
         &self,
         path: &Path,
-        _part_idx: usize,
+        content_id: &str,
         payload: PutPayload,
     ) -> Result<PartId> {
-        let part_idx = u128::from_be_bytes(rand::rng().random());
-        let content_id = format!("{part_idx:032x}");
-        let block_id = BASE64_STANDARD.encode(&content_id);
+        let block_id = BASE64_STANDARD.encode(content_id);
 
         self.put_request(path, payload)
             .query(&[("comp", "block"), ("blockid", &block_id)])
@@ -797,7 +801,9 @@ impl AzureClient {
             .send()
             .await?;
 
-        Ok(PartId { content_id })
+        Ok(PartId {
+            content_id: content_id.into(),
+        })
     }
 
     /// PUT a block list <https://learn.microsoft.com/en-us/rest/api/storageservices/put-block-list>

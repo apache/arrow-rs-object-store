@@ -45,6 +45,7 @@ use url::Url;
 use crate::client::get::GetClientExt;
 use crate::client::list::{ListClient, ListClientExt};
 use crate::client::{CredentialProvider, crypto_provider};
+use crate::retry::{MultipartRetry, RetryPolicy};
 pub use credential::{AzureAccessKey, AzureAuthorizer, authority_hosts};
 
 mod builder;
@@ -106,6 +107,7 @@ impl ObjectStore for MicrosoftAzure {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
+        let retry_policy = opts.retry_policy();
         Ok(Box::new(AzureMultiPartUpload {
             part_idx: 0,
             opts,
@@ -113,6 +115,7 @@ impl ObjectStore for MicrosoftAzure {
                 client: Arc::clone(&self.client),
                 location: location.clone(),
                 parts: Default::default(),
+                retry_policy,
             }),
         }))
     }
@@ -279,6 +282,7 @@ struct UploadState {
     location: Path,
     parts: Parts,
     client: Arc<AzureClient>,
+    retry_policy: Option<Arc<dyn RetryPolicy>>,
 }
 
 #[async_trait]
@@ -287,10 +291,23 @@ impl MultipartUpload for AzureMultiPartUpload {
         let idx = self.part_idx;
         self.part_idx += 1;
         let state = Arc::clone(&self.state);
+        let content_id = AzureClient::new_block_id();
         Box::pin(async move {
-            let part = state.client.put_block(&state.location, idx, data).await?;
-            state.parts.put(idx, part);
-            Ok(())
+            let mut retry = MultipartRetry::new(state.retry_policy.clone());
+            loop {
+                match state
+                    .client
+                    .put_block(&state.location, &content_id, data.clone())
+                    .await
+                {
+                    Ok(part) => {
+                        state.parts.put(idx, part);
+                        return Ok(());
+                    }
+                    Err(error) if retry.should_retry(&error).await => continue,
+                    Err(error) => return Err(error),
+                }
+            }
         })
     }
 
@@ -392,10 +409,11 @@ impl MultipartStore for MicrosoftAzure {
         &self,
         path: &Path,
         _: &MultipartId,
-        part_idx: usize,
+        _: usize,
         data: PutPayload,
     ) -> Result<PartId> {
-        self.client.put_block(path, part_idx, data).await
+        let content_id = AzureClient::new_block_id();
+        self.client.put_block(path, &content_id, data).await
     }
 
     async fn complete_multipart(

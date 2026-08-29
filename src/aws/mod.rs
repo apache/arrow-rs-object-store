@@ -44,6 +44,7 @@ use crate::client::CredentialProvider;
 use crate::client::get::GetClientExt;
 use crate::client::list::{ListClient, ListClientExt};
 use crate::multipart::{MultipartStore, PartId};
+use crate::retry::{MultipartRetry, RetryPolicy};
 use crate::signer::{SignedUrlOptions, Signer};
 use crate::util::{STRICT_ENCODE_SET, validate_signed_url_extras};
 use crate::{
@@ -313,6 +314,7 @@ impl ObjectStore for AmazonS3 {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
+        let retry_policy = opts.retry_policy();
         let upload_id = self.client.create_multipart(location, opts).await?;
 
         Ok(Box::new(S3MultiPartUpload {
@@ -322,6 +324,7 @@ impl ObjectStore for AmazonS3 {
                 location: location.clone(),
                 upload_id: upload_id.clone(),
                 parts: Default::default(),
+                retry_policy,
             }),
         }))
     }
@@ -498,6 +501,7 @@ struct UploadState {
     location: Path,
     upload_id: String,
     client: Arc<S3Client>,
+    retry_policy: Option<Arc<dyn RetryPolicy>>,
 }
 
 #[async_trait]
@@ -507,17 +511,26 @@ impl MultipartUpload for S3MultiPartUpload {
         self.part_idx += 1;
         let state = Arc::clone(&self.state);
         Box::pin(async move {
-            let part = state
-                .client
-                .put_part(
-                    &state.location,
-                    &state.upload_id,
-                    idx,
-                    PutPartPayload::Part(data),
-                )
-                .await?;
-            state.parts.put(idx, part);
-            Ok(())
+            let mut retry = MultipartRetry::new(state.retry_policy.clone());
+            loop {
+                match state
+                    .client
+                    .put_part(
+                        &state.location,
+                        &state.upload_id,
+                        idx,
+                        PutPartPayload::Part(data.clone()),
+                    )
+                    .await
+                {
+                    Ok(part) => {
+                        state.parts.put(idx, part);
+                        return Ok(());
+                    }
+                    Err(error) if retry.should_retry(&error).await => continue,
+                    Err(error) => return Err(error),
+                }
+            }
         })
     }
 
@@ -727,6 +740,8 @@ mod tests {
     #[cfg(feature = "reqwest")]
     use crate::client::SpawnedReqwestConnector;
     use crate::client::get::GetClient;
+    #[cfg(feature = "reqwest")]
+    use crate::client::mock_server::MockServer;
     use crate::client::retry::RetryContext;
     use crate::integration::*;
     use crate::tests::*;
@@ -734,6 +749,12 @@ mod tests {
     use base64::prelude::BASE64_STANDARD;
     use http::HeaderMap;
     use http::HeaderValue;
+    #[cfg(feature = "reqwest")]
+    use http::Response;
+    #[cfg(feature = "reqwest")]
+    use http::header::ETAG;
+    #[cfg(feature = "reqwest")]
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
 
@@ -777,6 +798,70 @@ mod tests {
         let _ = store.delete(&probe).await;
 
         store
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[derive(Debug, Default)]
+    struct RetryOnce(AtomicUsize);
+
+    #[cfg(feature = "reqwest")]
+    #[async_trait]
+    impl RetryPolicy for RetryOnce {
+        async fn retry(&self, _: crate::retry::RetryContext) -> bool {
+            self.0.fetch_add(1, Ordering::SeqCst) == 0
+        }
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn retries_multipart_part_operation() {
+        let mock = MockServer::new().await;
+        mock.push(
+            Response::builder()
+                .status(StatusCode::OK)
+                .body(
+                    "<InitiateMultipartUploadResult><UploadId>upload-id</UploadId></InitiateMultipartUploadResult>"
+                        .to_string(),
+                )
+                .unwrap(),
+        );
+        mock.push(
+            Response::builder()
+                .status(StatusCode::SERVICE_UNAVAILABLE)
+                .body(String::new())
+                .unwrap(),
+        );
+        mock.push(
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(ETAG, "etag")
+                .body(String::new())
+                .unwrap(),
+        );
+
+        let store = AmazonS3Builder::new()
+            .with_endpoint(mock.url())
+            .with_bucket_name("test-bucket")
+            .with_region("us-east-1")
+            .with_allow_http(true)
+            .with_skip_signature(true)
+            .with_retry(crate::RetryConfig {
+                max_retries: 0,
+                ..Default::default()
+            })
+            .build()
+            .unwrap();
+        let policy = Arc::new(RetryOnce::default());
+        let opts = PutMultipartOptions::default().with_retry_policy(policy.clone());
+
+        let mut upload = store
+            .put_multipart_opts(&Path::from("multipart"), opts)
+            .await
+            .unwrap();
+        upload.put_part(PutPayload::from("data")).await.unwrap();
+
+        assert_eq!(policy.0.load(Ordering::SeqCst), 1);
+        mock.shutdown().await;
     }
 
     #[tokio::test]

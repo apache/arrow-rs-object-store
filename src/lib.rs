@@ -717,6 +717,8 @@ pub mod path;
 pub mod prefix;
 pub mod registry;
 #[cfg(feature = "cloud-base")]
+pub mod retry;
+#[cfg(feature = "cloud-base")]
 pub mod signer;
 #[cfg(feature = "tokio")]
 pub mod throttle;
@@ -1998,7 +2000,8 @@ pub struct PutMultipartOptions {
     /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
     /// that need to pass context-specific information (like tracing spans) via trait methods.
     ///
-    /// These extensions are ignored entirely by backends offered through this crate.
+    /// HTTP backends offered through this crate use extensions installed by methods such as
+    /// [`PutMultipartOptions::with_retry_policy`]. Other extensions are ignored.
     ///
     /// They are also excluded from [`PartialEq`] and [`Eq`].
     pub extensions: Extensions,
