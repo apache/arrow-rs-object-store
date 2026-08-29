@@ -212,7 +212,7 @@ mod tests {
     #[tokio::test]
     async fn retries_http_errors() {
         let policy = Arc::new(RecordingPolicy::default());
-        let mut retry = MultipartRetry::new(Some(policy.clone()));
+        let mut retry = MultipartRetry::new(Some(Arc::clone(&policy) as Arc<dyn RetryPolicy>));
         let error = Error::Generic {
             store: "test",
             source: Box::new(HttpError::new(HttpErrorKind::Timeout, TestError)),
@@ -232,7 +232,7 @@ mod tests {
     #[tokio::test]
     async fn does_not_retry_non_http_errors() {
         let policy = Arc::new(RecordingPolicy::default());
-        let mut retry = MultipartRetry::new(Some(policy.clone()));
+        let mut retry = MultipartRetry::new(Some(Arc::clone(&policy) as Arc<dyn RetryPolicy>));
         let error = Error::Generic {
             store: "test",
             source: Box::new(TestError),

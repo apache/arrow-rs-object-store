@@ -852,7 +852,8 @@ mod tests {
             .build()
             .unwrap();
         let policy = Arc::new(RetryOnce::default());
-        let opts = PutMultipartOptions::default().with_retry_policy(policy.clone());
+        let opts = PutMultipartOptions::default()
+            .with_retry_policy(Arc::clone(&policy) as Arc<dyn RetryPolicy>);
 
         let mut upload = store
             .put_multipart_opts(&Path::from("multipart"), opts)
