@@ -68,7 +68,11 @@ pub enum RetryFailure {
 /// For multipart uploads, an attempt is one complete call to upload a part,
 /// including its bounded request retries. Each part has an independent attempt
 /// count and elapsed time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+//
+// Note: deliberately does not implement `Copy` so that non-`Copy` details,
+// such as the underlying error, can be added in the future without a
+// breaking change.
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct RetryContext {
     /// The normalized HTTP failure
