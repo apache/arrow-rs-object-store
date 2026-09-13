@@ -245,6 +245,22 @@ enum BufWriterState {
     Write(Option<WriteMultipart>),
     /// [`ObjectStore::put_opts`]
     Flush(BoxFuture<'static, crate::Result<()>>),
+    /// A previous [`Prepare`](Self::Prepare) or [`Flush`](Self::Flush) future
+    /// returned an error. The writer must not be used further: the future
+    /// that failed has already completed, so polling it again would panic
+    /// (`` `async fn` resumed after completion ``) instead of erroring.
+    Errored,
+}
+
+/// The error returned by any operation on a [`BufWriter`] after a previous
+/// operation has already failed.
+fn already_errored() -> crate::Error {
+    crate::Error::Generic {
+        store: "BufWriter",
+        source: Box::new(std::io::Error::other(
+            "BufWriter cannot be used after a previous operation returned an error",
+        )),
+    }
 }
 
 impl BufWriter {
@@ -321,16 +337,23 @@ impl BufWriter {
                 BufWriterState::Write(None) | BufWriterState::Flush(_) => {
                     panic!("Already shut down")
                 }
+                BufWriterState::Errored => Err(already_errored()),
                 // NOTE
                 //
                 // This case should never happen in practice, but rust async API does
                 // make it possible for users to call `put` before `poll_write` returns `Ready`.
                 //
                 // We allow such usage by `await` the future and continue the loop.
-                BufWriterState::Prepare(f) => {
-                    self.state = BufWriterState::Write(f.await?.into());
-                    continue;
-                }
+                BufWriterState::Prepare(f) => match f.await {
+                    Ok(write) => {
+                        self.state = BufWriterState::Write(Some(write));
+                        continue;
+                    }
+                    Err(e) => {
+                        self.state = BufWriterState::Errored;
+                        Err(e)
+                    }
+                },
                 BufWriterState::Buffer(path, b) => {
                     if b.content_length().saturating_add(bytes.len()) < self.capacity {
                         b.push(bytes);
@@ -365,7 +388,13 @@ impl BufWriter {
     /// Panics if this writer has already been shutdown or aborted
     pub async fn abort(&mut self) -> crate::Result<()> {
         match &mut self.state {
-            BufWriterState::Buffer(_, _) | BufWriterState::Prepare(_) => Ok(()),
+            // A failed Prepare/Flush future never durably created anything
+            // remotely (no multipart upload to abort, no partial object left
+            // by a failed single-shot put), so there is nothing to clean up,
+            // the same as a writer that never got past Buffer/Prepare.
+            BufWriterState::Buffer(_, _) | BufWriterState::Prepare(_) | BufWriterState::Errored => {
+                Ok(())
+            }
             BufWriterState::Flush(_) => panic!("Already shut down"),
             BufWriterState::Write(x) => x.take().unwrap().abort().await,
         }
@@ -390,10 +419,17 @@ impl AsyncWrite for BufWriter {
                 BufWriterState::Write(None) | BufWriterState::Flush(_) => {
                     panic!("Already shut down")
                 }
-                BufWriterState::Prepare(f) => {
-                    self.state = BufWriterState::Write(ready!(f.poll_unpin(cx)?).into());
-                    continue;
-                }
+                BufWriterState::Errored => Poll::Ready(Err(already_errored().into())),
+                BufWriterState::Prepare(f) => match ready!(f.poll_unpin(cx)) {
+                    Ok(write) => {
+                        self.state = BufWriterState::Write(Some(write));
+                        continue;
+                    }
+                    Err(e) => {
+                        self.state = BufWriterState::Errored;
+                        Poll::Ready(Err(e.into()))
+                    }
+                },
                 BufWriterState::Buffer(path, b) => {
                     if b.content_length().saturating_add(buf.len()) >= cap {
                         let buffer = std::mem::take(b);
@@ -426,10 +462,17 @@ impl AsyncWrite for BufWriter {
             return match &mut self.state {
                 BufWriterState::Write(_) | BufWriterState::Buffer(_, _) => Poll::Ready(Ok(())),
                 BufWriterState::Flush(_) => panic!("Already shut down"),
-                BufWriterState::Prepare(f) => {
-                    self.state = BufWriterState::Write(ready!(f.poll_unpin(cx)?).into());
-                    continue;
-                }
+                BufWriterState::Errored => Poll::Ready(Err(already_errored().into())),
+                BufWriterState::Prepare(f) => match ready!(f.poll_unpin(cx)) {
+                    Ok(write) => {
+                        self.state = BufWriterState::Write(Some(write));
+                        continue;
+                    }
+                    Err(e) => {
+                        self.state = BufWriterState::Errored;
+                        Poll::Ready(Err(e.into()))
+                    }
+                },
             };
         }
     }
@@ -437,9 +480,14 @@ impl AsyncWrite for BufWriter {
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), Error>> {
         loop {
             match &mut self.state {
-                BufWriterState::Prepare(f) => {
-                    self.state = BufWriterState::Write(ready!(f.poll_unpin(cx)?).into());
-                }
+                BufWriterState::Errored => return Poll::Ready(Err(already_errored().into())),
+                BufWriterState::Prepare(f) => match ready!(f.poll_unpin(cx)) {
+                    Ok(write) => self.state = BufWriterState::Write(Some(write)),
+                    Err(e) => {
+                        self.state = BufWriterState::Errored;
+                        return Poll::Ready(Err(e.into()));
+                    }
+                },
                 BufWriterState::Buffer(p, b) => {
                     let buf = std::mem::take(b);
                     let path = std::mem::take(p);
@@ -455,7 +503,15 @@ impl AsyncWrite for BufWriter {
                         Ok(())
                     }));
                 }
-                BufWriterState::Flush(f) => return f.poll_unpin(cx).map_err(std::io::Error::from),
+                BufWriterState::Flush(f) => {
+                    return match ready!(f.poll_unpin(cx)) {
+                        Ok(()) => Poll::Ready(Ok(())),
+                        Err(e) => {
+                            self.state = BufWriterState::Errored;
+                            Poll::Ready(Err(e.into()))
+                        }
+                    };
+                }
                 BufWriterState::Write(x) => {
                     let upload = x.take().ok_or_else(|| {
                         std::io::Error::new(
@@ -653,5 +709,143 @@ mod tests {
             .unwrap();
         assert_eq!(response.meta.size, 40);
         assert_eq!(response.bytes().await.unwrap(), (0..40).collect_vec());
+    }
+
+    /// An [`ObjectStore`] that always fails [`ObjectStore::put_multipart_opts`],
+    /// delegating everything else to an inner store. Mirrors the reproduction in
+    /// <https://github.com/apache/arrow-rs-object-store/issues/810>.
+    #[derive(Debug)]
+    struct FailMultipartInitStore {
+        inner: Arc<dyn ObjectStore>,
+    }
+
+    impl std::fmt::Display for FailMultipartInitStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "FailMultipartInitStore")
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ObjectStore for FailMultipartInitStore {
+        async fn put_opts(
+            &self,
+            location: &Path,
+            payload: crate::PutPayload,
+            opts: PutOptions,
+        ) -> crate::Result<crate::PutResult> {
+            self.inner.put_opts(location, payload, opts).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            _location: &Path,
+            _opts: PutMultipartOptions,
+        ) -> crate::Result<Box<dyn crate::MultipartUpload>> {
+            Err(crate::Error::Generic {
+                store: "FailMultipartInitStore",
+                source: Box::new(std::io::Error::other("StorageFull")),
+            })
+        }
+
+        async fn get_opts(
+            &self,
+            location: &Path,
+            options: GetOptions,
+        ) -> crate::Result<crate::GetResult> {
+            self.inner.get_opts(location, options).await
+        }
+
+        fn delete_stream(
+            &self,
+            locations: futures_util::stream::BoxStream<'static, crate::Result<Path>>,
+        ) -> futures_util::stream::BoxStream<'static, crate::Result<Path>> {
+            self.inner.delete_stream(locations)
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&Path>,
+        ) -> futures_util::stream::BoxStream<'static, crate::Result<ObjectMeta>> {
+            self.inner.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&Path>,
+        ) -> crate::Result<crate::ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+
+        async fn copy_opts(
+            &self,
+            from: &Path,
+            to: &Path,
+            options: crate::CopyOptions,
+        ) -> crate::Result<()> {
+            self.inner.copy_opts(from, to, options).await
+        }
+    }
+
+    /// Regression test for <https://github.com/apache/arrow-rs-object-store/issues/810>:
+    /// after `poll_write` fails because the underlying `Prepare` future errored,
+    /// a later `shutdown`, `write`, or `abort` call must not re-poll that same,
+    /// already-completed future -- doing so panics with
+    /// `` `async fn` resumed after completion `` since polling a future again
+    /// after it has already returned `Poll::Ready` is a violation of the
+    /// `Future` contract.
+    #[tokio::test]
+    async fn test_buf_writer_shutdown_after_write_error_does_not_panic() {
+        let inner = Arc::new(InMemory::new());
+        let store = Arc::new(FailMultipartInitStore { inner }) as Arc<dyn ObjectStore>;
+        let path = Path::from("panic-repro");
+        // capacity=1 forces the first byte written past the buffer to
+        // trigger `put_multipart_opts`, which this store fails.
+        let mut writer = BufWriter::with_capacity(store, path, 1);
+
+        let write_err = writer.write_all(b"trigger-prepare-error").await;
+        assert!(write_err.is_err(), "expected the write to fail");
+
+        // Before the fix, this second call re-polled the already-completed
+        // `Prepare` future and panicked instead of returning an error.
+        let shutdown_err = writer.shutdown().await;
+        assert!(
+            shutdown_err.is_err(),
+            "expected shutdown after a write error to return an error, not succeed or panic"
+        );
+
+        // A further write attempt must also error cleanly, not panic.
+        let second_write_err = writer.write_all(b"more data").await;
+        assert!(second_write_err.is_err());
+    }
+
+    /// Same defect, reached via `poll_flush` instead of `poll_shutdown`.
+    #[tokio::test]
+    async fn test_buf_writer_flush_after_write_error_does_not_panic() {
+        let inner = Arc::new(InMemory::new());
+        let store = Arc::new(FailMultipartInitStore { inner }) as Arc<dyn ObjectStore>;
+        let path = Path::from("panic-repro-flush");
+        let mut writer = BufWriter::with_capacity(store, path, 1);
+
+        let write_err = writer.write_all(b"trigger-prepare-error").await;
+        assert!(write_err.is_err());
+
+        let flush_err = writer.flush().await;
+        assert!(flush_err.is_err());
+    }
+
+    /// `abort()` after a write error should clean up gracefully (there is
+    /// nothing to abort remotely, since `put_multipart_opts` itself never
+    /// succeeded), not panic.
+    #[tokio::test]
+    async fn test_buf_writer_abort_after_write_error_does_not_panic() {
+        let inner = Arc::new(InMemory::new());
+        let store = Arc::new(FailMultipartInitStore { inner }) as Arc<dyn ObjectStore>;
+        let path = Path::from("panic-repro-abort");
+        let mut writer = BufWriter::with_capacity(store, path, 1);
+
+        let write_err = writer.write_all(b"trigger-prepare-error").await;
+        assert!(write_err.is_err());
+
+        writer.abort().await.unwrap();
     }
 }
