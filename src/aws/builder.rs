@@ -632,12 +632,15 @@ impl AmazonS3Builder {
     ///
     /// Note: Settings derived from the URL will override any others set on this builder
     ///
+    /// A path in the URL is not retained as a prefix. Use [`crate::parse_url`] to create
+    /// an object store and return the path separately.
+    ///
     /// # Example
     /// ```
     /// use object_store::aws::AmazonS3Builder;
     ///
     /// let s3 = AmazonS3Builder::from_env()
-    ///     .with_url("s3://bucket/path")
+    ///     .with_url("s3://bucket")
     ///     .build();
     /// ```
     pub fn with_url(mut self, url: impl Into<String>) -> Self {
