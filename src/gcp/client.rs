@@ -60,6 +60,7 @@ enum Error {
     #[error("Error performing list request: {}", source)]
     ListRequest {
         source: crate::client::retry::RetryError,
+        path: String,
     },
 
     #[error("Error getting list response body: {}", source)]
@@ -126,6 +127,7 @@ impl From<Error> for crate::Error {
             Error::GetRequest { source, path } | Error::Request { source, path } => {
                 source.error(STORE, path)
             }
+            Error::ListRequest { source, path } => source.error(STORE, path),
             _ => Self::Generic {
                 store: STORE,
                 source: Box::new(err),
@@ -711,7 +713,10 @@ impl ListClient for Arc<GoogleCloudStorageClient> {
             .with_bearer_auth(credential.as_deref())
             .send_retry(&self.config.retry_config)
             .await
-            .map_err(|source| Error::ListRequest { source })?;
+            .map_err(|source| Error::ListRequest {
+                source,
+                path: prefix.unwrap_or_default().to_owned(),
+            })?;
 
         let (parts, body) = response.into_parts();
 

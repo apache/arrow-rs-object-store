@@ -410,7 +410,15 @@ impl PaginatedListStore for GoogleCloudStorage {
 
 #[cfg(test)]
 mod test {
+    #[cfg(feature = "reqwest")]
+    use crate::ObjectStore;
+    #[cfg(feature = "reqwest")]
+    use crate::client::mock_server::MockServer;
     use credential::DEFAULT_GCS_BASE_URL;
+    #[cfg(feature = "reqwest")]
+    use futures_util::TryStreamExt;
+    #[cfg(feature = "reqwest")]
+    use http::Response;
 
     use crate::ObjectStoreExt;
     use crate::integration::*;
@@ -458,6 +466,165 @@ mod test {
         // Fake GCS server does not yet implement XML Multipart uploads
         let test_multipart = integration.client.config().base_url == DEFAULT_GCS_BASE_URL;
         response_extensions(&integration, test_multipart).await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    async fn assert_gcp_list_error(status: http::StatusCode, expected: &str, delimiter: bool) {
+        let mock = MockServer::new().await;
+        let store = GoogleCloudStorageBuilder::new()
+            .with_base_url(mock.url())
+            .with_bucket_name("test-bucket")
+            .with_skip_signature(true)
+            .with_retry(crate::RetryConfig {
+                max_retries: 0,
+                ..Default::default()
+            })
+            .build()
+            .unwrap();
+        mock.push(
+            Response::builder()
+                .status(status)
+                .body(String::new())
+                .unwrap(),
+        );
+        let error = if delimiter {
+            store
+                .list_with_delimiter(Some(&Path::from("prefix")))
+                .await
+                .unwrap_err()
+        } else {
+            store
+                .list(Some(&Path::from("prefix")))
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap_err()
+        };
+        assert!(
+            (expected == "permission denied"
+                && matches!(&error, crate::Error::PermissionDenied { path, .. } if path == "prefix/"))
+                || (expected == "not found"
+                    && matches!(&error, crate::Error::NotFound { path, .. } if path == "prefix/")),
+            "unexpected GCS {status} error: {error:?}"
+        );
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn list_403_gcp_stream_returns_permission_denied() {
+        assert_gcp_list_error(http::StatusCode::FORBIDDEN, "permission denied", false).await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn list_404_gcp_stream_returns_not_found() {
+        assert_gcp_list_error(http::StatusCode::NOT_FOUND, "not found", false).await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn list_403_gcp_delimiter_returns_permission_denied() {
+        assert_gcp_list_error(http::StatusCode::FORBIDDEN, "permission denied", true).await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn list_404_gcp_delimiter_returns_not_found() {
+        assert_gcp_list_error(http::StatusCode::NOT_FOUND, "not found", true).await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn list_root_error_has_empty_path_gcp() {
+        let mock = MockServer::new().await;
+        let store = GoogleCloudStorageBuilder::new()
+            .with_base_url(mock.url())
+            .with_bucket_name("test-bucket")
+            .with_skip_signature(true)
+            .with_retry(crate::RetryConfig {
+                max_retries: 0,
+                ..Default::default()
+            })
+            .build()
+            .unwrap();
+        for delimiter in [false, true] {
+            mock.push(
+                Response::builder()
+                    .status(http::StatusCode::FORBIDDEN)
+                    .body(String::new())
+                    .unwrap(),
+            );
+            let error = if delimiter {
+                store.list_with_delimiter(None).await.unwrap_err()
+            } else {
+                store.list(None).try_collect::<Vec<_>>().await.unwrap_err()
+            };
+            assert!(
+                matches!(error, crate::Error::PermissionDenied { ref path, .. } if path.is_empty())
+            );
+        }
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn list_success_and_unmapped_status_controls() {
+        let mock = MockServer::new().await;
+        let store = GoogleCloudStorageBuilder::new()
+            .with_base_url(mock.url())
+            .with_bucket_name("test-bucket")
+            .with_skip_signature(true)
+            .with_retry(crate::RetryConfig {
+                max_retries: 0,
+                ..Default::default()
+            })
+            .build()
+            .unwrap();
+
+        mock.push(
+            Response::builder()
+                .status(200)
+                .body("<ListBucketResult></ListBucketResult>".to_string())
+                .unwrap(),
+        );
+        assert!(store.list_with_delimiter(None).await.is_ok());
+
+        for status in [http::StatusCode::INTERNAL_SERVER_ERROR] {
+            mock.push(
+                Response::builder()
+                    .status(status)
+                    .body(String::new())
+                    .unwrap(),
+            );
+            let error = store.list_with_delimiter(None).await.unwrap_err();
+            assert!(matches!(error, crate::Error::Generic { .. }));
+        }
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn list_unauthorized_uses_existing_mapper() {
+        let mock = MockServer::new().await;
+        let store = GoogleCloudStorageBuilder::new()
+            .with_base_url(mock.url())
+            .with_bucket_name("test-bucket")
+            .with_skip_signature(true)
+            .with_retry(crate::RetryConfig {
+                max_retries: 0,
+                ..Default::default()
+            })
+            .build()
+            .unwrap();
+        mock.push(
+            Response::builder()
+                .status(http::StatusCode::UNAUTHORIZED)
+                .body(String::new())
+                .unwrap(),
+        );
+        let error = store.list_with_delimiter(None).await.unwrap_err();
+        assert!(matches!(error, crate::Error::Unauthenticated { .. }));
+        mock.shutdown().await;
     }
 
     #[cfg(feature = "reqwest")]
