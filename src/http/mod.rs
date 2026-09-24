@@ -325,3 +325,298 @@ mod tests {
         response_extensions(&integration, false).await;
     }
 }
+
+#[cfg(all(
+    test,
+    feature = "http-base",
+    feature = "reqwest",
+    not(target_arch = "wasm32")
+))]
+mod range_tests {
+    use super::HttpBuilder;
+    use crate::client::mock_server::MockServer;
+    use crate::{GetOptions, ObjectStore, Path};
+    use http::header::{CONTENT_LENGTH, CONTENT_RANGE, RANGE};
+    use http::{Response, StatusCode};
+
+    const BODY: &str = "hello world!";
+
+    async fn store_with_response(
+        response: Response<String>,
+        expected_range: Option<&str>,
+    ) -> (MockServer, super::HttpStore) {
+        let mock = MockServer::new().await;
+        let expected_range = expected_range.map(str::to_string);
+        mock.push_fn(move |request| {
+            assert_eq!(request.uri().path(), "/test");
+            match expected_range {
+                Some(expected) => assert_eq!(
+                    request
+                        .headers()
+                        .get(RANGE)
+                        .and_then(|value| value.to_str().ok()),
+                    Some(expected.as_str())
+                ),
+                None => assert!(request.headers().get(RANGE).is_none()),
+            }
+            response
+        });
+        let store = HttpBuilder::new()
+            .with_url(mock.url())
+            .with_client_options(crate::ClientOptions::new().with_allow_http(true))
+            .build()
+            .unwrap();
+        (mock, store)
+    }
+
+    #[tokio::test]
+    async fn full_range_200_without_content_range_succeeds() {
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_LENGTH, BODY.len())
+            .body(BODY.to_string())
+            .unwrap();
+        let (mock, store) = store_with_response(response, Some("bytes=0-11")).await;
+
+        let result = store
+            .get_opts(
+                &Path::from("test"),
+                GetOptions::new().with_range(Some(0..BODY.len() as u64)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.range, 0..BODY.len() as u64);
+        assert_eq!(result.meta.size, BODY.len() as u64);
+        assert_eq!(result.bytes().await.unwrap().as_ref(), BODY.as_bytes());
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn full_range_200_with_content_range_succeeds() {
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_LENGTH, BODY.len())
+            .header(CONTENT_RANGE, "bytes 0-11/12")
+            .body(BODY.to_string())
+            .unwrap();
+        let (mock, store) = store_with_response(response, Some("bytes=0-11")).await;
+
+        let result = store
+            .get_opts(
+                &Path::from("test"),
+                GetOptions::new().with_range(Some(0..BODY.len() as u64)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.range, 0..BODY.len() as u64);
+        assert_eq!(result.meta.size, BODY.len() as u64);
+        assert_eq!(result.bytes().await.unwrap().as_ref(), BODY.as_bytes());
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn full_offset_200_succeeds() {
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_LENGTH, BODY.len())
+            .body(BODY.to_string())
+            .unwrap();
+        let (mock, store) = store_with_response(response, Some("bytes=0-")).await;
+
+        let result = store
+            .get_opts(
+                &Path::from("test"),
+                GetOptions::new().with_range(Some(crate::GetRange::Offset(0))),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.range, 0..BODY.len() as u64);
+        assert_eq!(result.meta.size, BODY.len() as u64);
+        assert_eq!(result.bytes().await.unwrap().as_ref(), BODY.as_bytes());
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn full_suffix_200_succeeds() {
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_LENGTH, BODY.len())
+            .body(BODY.to_string())
+            .unwrap();
+        let (mock, store) = store_with_response(response, Some("bytes=-12")).await;
+
+        let result = store
+            .get_opts(
+                &Path::from("test"),
+                GetOptions::new().with_range(Some(crate::GetRange::Suffix(12))),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.range, 0..BODY.len() as u64);
+        assert_eq!(result.meta.size, BODY.len() as u64);
+        assert_eq!(result.bytes().await.unwrap().as_ref(), BODY.as_bytes());
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn positive_suffix_empty_200_succeeds() {
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_LENGTH, 0)
+            .body(String::new())
+            .unwrap();
+        let (mock, store) = store_with_response(response, Some("bytes=-1")).await;
+
+        let result = store
+            .get_opts(
+                &Path::from("test"),
+                GetOptions::new().with_range(Some(crate::GetRange::Suffix(1))),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.range, 0..0);
+        assert_eq!(result.meta.size, 0);
+        assert!(result.bytes().await.unwrap().is_empty());
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn misleading_content_range_200_is_ignored() {
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_LENGTH, BODY.len())
+            .header(CONTENT_RANGE, "bytes 9-9/999")
+            .body(BODY.to_string())
+            .unwrap();
+        let (mock, store) = store_with_response(response, Some("bytes=0-11")).await;
+
+        let result = store
+            .get_opts(
+                &Path::from("test"),
+                GetOptions::new().with_range(Some(0..BODY.len() as u64)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.range, 0..BODY.len() as u64);
+        assert_eq!(result.meta.size, BODY.len() as u64);
+        assert_eq!(result.bytes().await.unwrap().as_ref(), BODY.as_bytes());
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn suffix_zero_200_is_rejected() {
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_LENGTH, BODY.len())
+            .body(BODY.to_string())
+            .unwrap();
+        let (mock, store) = store_with_response(response, Some("bytes=-0")).await;
+
+        let error = store
+            .get_opts(
+                &Path::from("test"),
+                GetOptions::new().with_range(Some(crate::GetRange::Suffix(0))),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, crate::Error::NotSupported { .. }));
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn zero_length_bounded_200_is_rejected() {
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_LENGTH, BODY.len())
+            .body(BODY.to_string())
+            .unwrap();
+        let (mock, store) = store_with_response(response, None).await;
+
+        let error = store
+            .get_opts(
+                &Path::from("test"),
+                GetOptions::new().with_range(Some(0..0)),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Range started at 0 and ended at 0")
+        );
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn proper_subset_200_remains_an_error() {
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_LENGTH, BODY.len())
+            .body(BODY.to_string())
+            .unwrap();
+        let (mock, store) = store_with_response(response, Some("bytes=2-6")).await;
+
+        let error = store
+            .get_opts(
+                &Path::from("test"),
+                GetOptions::new().with_range(Some(2..7)),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, crate::Error::NotSupported { .. }));
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn partial_range_206_succeeds() {
+        let response = Response::builder()
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header(CONTENT_LENGTH, 5)
+            .header(CONTENT_RANGE, "bytes 2-6/12")
+            .body("llo w".to_string())
+            .unwrap();
+        let (mock, store) = store_with_response(response, Some("bytes=2-6")).await;
+
+        let result = store
+            .get_opts(
+                &Path::from("test"),
+                GetOptions::new().with_range(Some(2..7)),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.range, 2..7);
+        assert_eq!(result.meta.size, BODY.len() as u64);
+        assert_eq!(result.bytes().await.unwrap().as_ref(), b"llo w");
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn unrequested_200_succeeds() {
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_LENGTH, BODY.len())
+            .body(BODY.to_string())
+            .unwrap();
+        let (mock, store) = store_with_response(response, None).await;
+
+        let result = store
+            .get_opts(&Path::from("test"), GetOptions::new())
+            .await
+            .unwrap();
+        assert_eq!(result.range, 0..BODY.len() as u64);
+        assert_eq!(result.meta.size, BODY.len() as u64);
+        assert_eq!(result.bytes().await.unwrap().as_ref(), BODY.as_bytes());
+
+        mock.shutdown().await;
+    }
+}

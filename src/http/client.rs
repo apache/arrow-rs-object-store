@@ -16,7 +16,7 @@
 // under the License.
 
 use super::STORE;
-use crate::client::get::GetClient;
+use crate::client::get::{GetClient, is_full_representation};
 use crate::client::header::HeaderConfig;
 use crate::client::retry::{self, RetryConfig, RetryContext, RetryExt};
 use crate::client::{GetOptionsExt, HttpClient, HttpError, HttpResponse};
@@ -378,7 +378,7 @@ impl GetClient for Client {
             true => Method::HEAD,
             false => Method::GET,
         };
-        let has_range = options.range.is_some();
+        let requested_range = options.range.clone();
         let builder = self.client.request(method, url);
 
         let res = builder
@@ -401,14 +401,21 @@ impl GetClient for Client {
                 .into(),
             })?;
 
-        // We expect a 206 Partial Content response if a range was requested
-        // a 200 OK response would indicate the server did not fulfill the request
-        if has_range && res.status() != StatusCode::PARTIAL_CONTENT {
-            return Err(crate::Error::NotSupported {
-                source: Box::new(Error::RangeNotSupported {
-                    href: path.to_string(),
-                }),
-            });
+        if let Some(range) = requested_range {
+            let is_full = if res.status() == StatusCode::OK {
+                crate::client::header::header_meta(path, res.headers(), Self::HEADER_CONFIG)
+                    .map(|meta| is_full_representation(&range, meta.size))
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+            if res.status() != StatusCode::PARTIAL_CONTENT && !is_full {
+                return Err(crate::Error::NotSupported {
+                    source: Box::new(Error::RangeNotSupported {
+                        href: path.to_string(),
+                    }),
+                });
+            }
         }
 
         Ok(res)

@@ -245,6 +245,20 @@ impl<T: GetClient> GetContext<T> {
                                 return Err(Self::err(e));
                             }
 
+                            if parts.status == StatusCode::OK {
+                                let meta = header_meta(
+                                    &ctx.location,
+                                    &parts.headers,
+                                    T::HEADER_CONFIG,
+                                )
+                                .map_err(Self::err)?;
+                                if range.start >= range.end || range != (0..meta.size) {
+                                    return Err(Self::err(GetResultError::NotPartial));
+                                }
+                                body = retry_body;
+                                continue;
+                            }
+
                             // Validate the Content-Range of the retry response
                             let content_range =
                                 parse_range(&parts.headers).map_err(Self::err)?;
@@ -313,27 +327,39 @@ fn get_range_meta(
 ) -> Result<(Range<u64>, ObjectMeta), GetResultError> {
     let mut meta = header_meta(location, &response.headers, cfg)?;
     let range = if let Some(expected) = range {
-        if response.status != StatusCode::PARTIAL_CONTENT {
-            return Err(GetResultError::NotPartial);
+        if response.status == StatusCode::OK {
+            if !is_full_representation(expected, meta.size) {
+                return Err(GetResultError::NotPartial);
+            }
+            0..meta.size
+        } else {
+            if response.status != StatusCode::PARTIAL_CONTENT {
+                return Err(GetResultError::NotPartial);
+            }
+
+            let value = parse_range(&response.headers)?;
+            let actual = value.range;
+
+            // Update size to reflect the full size of the object (#5272)
+            meta.size = value.size;
+
+            let expected = expected.as_range(meta.size)?;
+            if actual != expected {
+                return Err(GetResultError::UnexpectedRange { expected, actual });
+            }
+
+            actual
         }
-
-        let value = parse_range(&response.headers)?;
-        let actual = value.range;
-
-        // Update size to reflect the full size of the object (#5272)
-        meta.size = value.size;
-
-        let expected = expected.as_range(meta.size)?;
-        if actual != expected {
-            return Err(GetResultError::UnexpectedRange { expected, actual });
-        }
-
-        actual
     } else {
         0..meta.size
     };
 
     Ok((range, meta))
+}
+
+pub(crate) fn is_full_representation(range: &GetRange, size: u64) -> bool {
+    !matches!(range, GetRange::Suffix(0))
+        && range.as_range(size).is_ok_and(|range| range == (0..size))
 }
 
 /// Extracts the [CONTENT_RANGE] header
@@ -525,17 +551,25 @@ mod tests {
 }
 #[cfg(all(test, feature = "http-base", not(target_arch = "wasm32")))]
 mod http_tests {
+    const BODY: &str = "hello world!";
+
+    use super::{GetClient, GetClientExt};
+    use crate::client::header::HeaderConfig;
     use crate::client::mock_server::MockServer;
-    use crate::client::{HttpError, HttpErrorKind, HttpResponseBody};
+    use crate::client::retry::RetryContext;
+    use crate::client::{HttpError, HttpErrorKind, HttpResponse, HttpResponseBody};
     use crate::http::HttpBuilder;
     use crate::path::Path;
-    use crate::{ClientOptions, ObjectStoreExt, RetryConfig};
+    use crate::{ClientOptions, GetOptions, GetRange, ObjectStoreExt, RetryConfig};
+    use async_trait::async_trait;
     use bytes::Bytes;
     use futures_util::FutureExt;
     use http::header::{CONNECTION, CONTENT_LENGTH, CONTENT_RANGE, ETAG, RANGE};
     use http::{Response, StatusCode};
     use hyper::body::Frame;
+    use std::collections::VecDeque;
     use std::pin::Pin;
+    use std::sync::{Arc, Mutex};
     use std::task::{Context, Poll, ready};
     use std::time::Duration;
 
@@ -588,6 +622,235 @@ mod http_tests {
         fn from(value: Chunked) -> Self {
             Self::new(value)
         }
+    }
+
+    #[cfg(feature = "reqwest")]
+    struct SequenceClient {
+        responses: Mutex<VecDeque<HttpResponse>>,
+        ranges: Arc<Mutex<Vec<Option<GetRange>>>>,
+        retry_config: RetryConfig,
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[async_trait]
+    impl GetClient for SequenceClient {
+        const STORE: &'static str = "TEST";
+        const HEADER_CONFIG: HeaderConfig = HeaderConfig {
+            etag_required: false,
+            last_modified_required: false,
+            version_header: None,
+            user_defined_metadata_prefix: None,
+        };
+
+        fn retry_config(&self) -> &RetryConfig {
+            &self.retry_config
+        }
+
+        async fn get_request(
+            &self,
+            _ctx: &mut RetryContext,
+            _path: &Path,
+            options: GetOptions,
+        ) -> crate::Result<HttpResponse> {
+            self.ranges.lock().unwrap().push(options.range);
+            Ok(self.responses.lock().unwrap().pop_front().unwrap())
+        }
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_retry_rejects_full_200_after_partial_body() {
+        let first = Response::builder()
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header(CONTENT_LENGTH, 5)
+            .header(CONTENT_RANGE, "bytes 2-6/12")
+            .header(ETAG, "123")
+            .body(Chunked::new(vec![Ok(Bytes::from_static(b"llo")), Err(())]))
+            .unwrap()
+            .map(Into::into);
+        let second = Response::builder()
+            .header(CONTENT_LENGTH, 12)
+            .header(ETAG, "123")
+            .body(BODY.to_string())
+            .unwrap()
+            .map(Into::into);
+        let ranges = Arc::new(Mutex::new(Vec::new()));
+        let client = Arc::new(SequenceClient {
+            responses: Mutex::new(VecDeque::from([first, second])),
+            ranges: Arc::clone(&ranges),
+            retry_config: RetryConfig {
+                backoff: Default::default(),
+                max_retries: 1,
+                retry_timeout: Duration::from_secs(1000),
+            },
+        });
+
+        let result = client
+            .get_opts(
+                &Path::from("test"),
+                GetOptions::new().with_range(Some(2..7)),
+            )
+            .await
+            .unwrap();
+        let error = result.bytes().await.unwrap_err();
+        assert!(error.to_string().contains("Received non-partial response"));
+        assert_eq!(
+            ranges.lock().unwrap().as_slice(),
+            [Some(GetRange::Bounded(2..7)), Some(GetRange::Bounded(5..7)),]
+        );
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_retry_rejects_shorter_complete_200() {
+        let first = Response::builder()
+            .header(CONTENT_LENGTH, 12)
+            .header(ETAG, "123")
+            .body(Chunked::new(vec![Err(())]))
+            .unwrap()
+            .map(Into::into);
+        let second = Response::builder()
+            .header(CONTENT_LENGTH, 8)
+            .header(ETAG, "123")
+            .body("shorter!".to_string())
+            .unwrap()
+            .map(Into::into);
+        let client = Arc::new(SequenceClient {
+            responses: Mutex::new(VecDeque::from([first, second])),
+            ranges: Arc::new(Mutex::new(Vec::new())),
+            retry_config: RetryConfig {
+                backoff: Default::default(),
+                max_retries: 1,
+                retry_timeout: Duration::from_secs(1000),
+            },
+        });
+
+        let result = client
+            .get_opts(&Path::from("test"), GetOptions::new())
+            .await
+            .unwrap();
+        let error = result.bytes().await.unwrap_err();
+        assert!(error.to_string().contains("Received non-partial response"));
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_retry_accepts_complete_200_after_empty_body() {
+        let first = Response::builder()
+            .header(CONTENT_LENGTH, 12)
+            .header(ETAG, "123")
+            .body(Chunked::new(vec![Err(())]))
+            .unwrap()
+            .map(Into::into);
+        let second = Response::builder()
+            .header(CONTENT_LENGTH, 12)
+            .header(CONTENT_RANGE, "bytes 8-9/10")
+            .header(ETAG, "123")
+            .body(BODY.to_string())
+            .unwrap()
+            .map(Into::into);
+        let ranges = Arc::new(Mutex::new(Vec::new()));
+        let client = Arc::new(SequenceClient {
+            responses: Mutex::new(VecDeque::from([first, second])),
+            ranges: Arc::clone(&ranges),
+            retry_config: RetryConfig {
+                backoff: Default::default(),
+                max_retries: 1,
+                retry_timeout: Duration::from_secs(1000),
+            },
+        });
+
+        let result = client
+            .get_opts(&Path::from("test"), GetOptions::new())
+            .await
+            .unwrap();
+        assert_eq!(result.range, 0..12);
+        assert_eq!(result.meta.size, 12);
+        assert_eq!(result.bytes().await.unwrap().as_ref(), BODY.as_bytes());
+        assert_eq!(
+            ranges.lock().unwrap().as_slice(),
+            [None, Some(GetRange::Bounded(0..12))]
+        );
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_retry_with_complete_200_after_empty_body() {
+        let mock = MockServer::new().await;
+        let retry = RetryConfig {
+            backoff: Default::default(),
+            max_retries: 1,
+            retry_timeout: Duration::from_secs(1000),
+        };
+        let options = ClientOptions::new().with_allow_http(true);
+        let store = HttpBuilder::new()
+            .with_client_options(options)
+            .with_retry(retry)
+            .with_url(mock.url())
+            .build()
+            .unwrap();
+        let path = Path::from("test");
+
+        mock.push(
+            Response::builder()
+                .header(CONTENT_LENGTH, 12)
+                .header(ETAG, "123")
+                .body(Chunked::new(vec![Err(())]))
+                .unwrap(),
+        );
+        mock.push(
+            Response::builder()
+                .header(CONTENT_LENGTH, 12)
+                .header(ETAG, "123")
+                .body(BODY.to_string())
+                .unwrap(),
+        );
+
+        let bytes = store.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(bytes.as_ref(), BODY.as_bytes());
+
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_retry_rejects_proper_subset_200() {
+        let mock = MockServer::new().await;
+        let retry = RetryConfig {
+            backoff: Default::default(),
+            max_retries: 1,
+            retry_timeout: Duration::from_secs(1000),
+        };
+        let options = ClientOptions::new().with_allow_http(true);
+        let store = HttpBuilder::new()
+            .with_client_options(options)
+            .with_retry(retry)
+            .with_url(mock.url())
+            .build()
+            .unwrap();
+        let path = Path::from("test");
+
+        mock.push(
+            Response::builder()
+                .status(StatusCode::PARTIAL_CONTENT)
+                .header(CONTENT_LENGTH, 5)
+                .header(CONTENT_RANGE, "bytes 2-6/12")
+                .header(ETAG, "123")
+                .body(Chunked::new(vec![Err(())]))
+                .unwrap(),
+        );
+        mock.push(
+            Response::builder()
+                .header(CONTENT_LENGTH, 12)
+                .header(ETAG, "123")
+                .body(BODY.to_string())
+                .unwrap(),
+        );
+
+        let error = store.get_range(&path, 2..7).await.unwrap_err();
+        assert!(matches!(error, crate::Error::NotSupported { .. }));
+
+        mock.shutdown().await;
     }
 
     #[cfg(feature = "reqwest")]
