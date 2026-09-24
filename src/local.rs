@@ -1856,6 +1856,116 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn put_directory_error_cleans_up_staged_file() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        let location = Path::from("target");
+        let target = integration.path_to_filesystem(&location).unwrap();
+        fs::create_dir(&target).unwrap();
+        let sentinel = target.join("sentinel");
+        let sentinel_data = b"sentinel data";
+        fs::write(&sentinel, sentinel_data).unwrap();
+
+        let payload = Bytes::from("object data");
+        let err = integration
+            .put(&location, payload.clone().into())
+            .await
+            .unwrap_err();
+        match err {
+            crate::Error::Generic { store, source } => {
+                assert_eq!(store, "LocalFileSystem");
+                match source.downcast_ref::<super::Error>() {
+                    Some(super::Error::UnableToRenameFile { source }) => {
+                        assert!(source.raw_os_error().is_some(), "got: {source:?}");
+                    }
+                    other => panic!("unexpected local error: {other:?}"),
+                }
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        assert!(target.is_dir());
+        assert_eq!(fs::read(&sentinel).unwrap(), sentinel_data);
+        let entries: Vec<_> = fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(entries, vec![std::ffi::OsString::from("target")]);
+
+        fs::remove_file(sentinel).unwrap();
+        fs::remove_dir(&target).unwrap();
+        integration
+            .put(&location, payload.clone().into())
+            .await
+            .unwrap();
+        assert_eq!(
+            integration
+                .get(&location)
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap(),
+            payload
+        );
+        let entries: Vec<_> = fs::read_dir(root.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(entries, vec![std::ffi::OsString::from("target")]);
+    }
+
+    #[tokio::test]
+    async fn delete_directory_error_preserves_contents() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        let location = Path::from("target");
+        let target = integration.path_to_filesystem(&location).unwrap();
+        fs::create_dir(&target).unwrap();
+        let sentinel = target.join("sentinel");
+        let sentinel_data = b"sentinel data";
+        fs::write(&sentinel, sentinel_data).unwrap();
+
+        let err = integration.delete(&location).await.unwrap_err();
+        match err {
+            crate::Error::Generic { store, source } => {
+                assert_eq!(store, "LocalFileSystem");
+                match source.downcast_ref::<super::Error>() {
+                    Some(super::Error::UnableToDeleteFile { source, path }) => {
+                        assert_eq!(path, &target);
+                        assert!(source.raw_os_error().is_some(), "got: {source:?}");
+                    }
+                    other => panic!("unexpected local error: {other:?}"),
+                }
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+
+        assert!(target.is_dir());
+        assert_eq!(fs::read(&sentinel).unwrap(), sentinel_data);
+        fs::remove_file(sentinel).unwrap();
+        fs::remove_dir(&target).unwrap();
+
+        let payload = Bytes::from("object data");
+        integration
+            .put(&location, payload.clone().into())
+            .await
+            .unwrap();
+        assert_eq!(
+            integration
+                .get(&location)
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap(),
+            payload
+        );
+        integration.delete(&location).await.unwrap();
+        assert!(fs::read_dir(root.path()).unwrap().next().is_none());
+    }
+
+    #[tokio::test]
     async fn root() {
         let integration = LocalFileSystem::new();
 
