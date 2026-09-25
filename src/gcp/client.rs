@@ -52,6 +52,7 @@ const VERSION_HEADER: &str = "x-goog-generation";
 const DEFAULT_CONTENT_TYPE: &str = "application/octet-stream";
 const USER_DEFINED_METADATA_HEADER_PREFIX: &str = "x-goog-meta-";
 const STORAGE_CLASS: &str = "x-goog-storage-class";
+const STORED_CONTENT_LENGTH_HEADER: &str = "x-goog-stored-content-length";
 
 static VERSION_MATCH: HeaderName = HeaderName::from_static("x-goog-if-generation-match");
 
@@ -617,9 +618,12 @@ impl GoogleCloudStorageClient {
 #[async_trait]
 impl GetClient for GoogleCloudStorageClient {
     const STORE: &'static str = STORE;
+    // GCS omits Content-Length on chunked gzip responses (large bodies, or decompressive
+    // transcoding); the size is recovered from x-goog-stored-content-length instead.
     const HEADER_CONFIG: HeaderConfig = HeaderConfig {
         etag_required: true,
         last_modified_required: true,
+        stored_size_header: Some(STORED_CONTENT_LENGTH_HEADER),
         version_header: Some(VERSION_HEADER),
         user_defined_metadata_prefix: Some(USER_DEFINED_METADATA_HEADER_PREFIX),
     };
