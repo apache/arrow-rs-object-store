@@ -411,14 +411,97 @@ impl PaginatedListStore for GoogleCloudStorage {
 #[cfg(test)]
 mod test {
     use credential::DEFAULT_GCS_BASE_URL;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+    use crate::ClientOptions;
+    use crate::CredentialProvider;
     use crate::ObjectStoreExt;
+    use crate::client::mock_server::MockServer;
     use crate::integration::*;
     use crate::tests::*;
+    use http::Response;
 
     use super::*;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
+
+    #[derive(Debug)]
+    struct CountingCredentialProvider(AtomicUsize);
+
+    #[async_trait]
+    impl CredentialProvider for CountingCredentialProvider {
+        type Credential = GcpCredential;
+
+        async fn get_credential(&self) -> crate::Result<Arc<Self::Credential>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(Arc::new(GcpCredential {
+                bearer: "test-token".to_string(),
+            }))
+        }
+    }
+
+    #[tokio::test]
+    async fn gcs_skip_signature_skips_credentials_and_authorization() {
+        let mock = MockServer::new().await;
+        let credentials = Arc::new(CountingCredentialProvider(AtomicUsize::new(0)));
+        let signed_authorized = Arc::new(AtomicBool::new(false));
+        let skipped_authorized = Arc::new(AtomicBool::new(false));
+
+        let signed_authorized_request = Arc::clone(&signed_authorized);
+        mock.push_fn(move |request| {
+            signed_authorized_request.store(
+                request
+                    .headers()
+                    .get(http::header::AUTHORIZATION)
+                    .is_some_and(|value| value == "Bearer test-token"),
+                Ordering::SeqCst,
+            );
+            Response::builder()
+                .status(200)
+                .header(http::header::ETAG, "test-etag")
+                .body(String::new())
+                .unwrap()
+        });
+        let skipped_authorized_request = Arc::clone(&skipped_authorized);
+        mock.push_fn(move |request| {
+            skipped_authorized_request.store(
+                request.headers().get(http::header::AUTHORIZATION).is_some(),
+                Ordering::SeqCst,
+            );
+            Response::builder()
+                .status(200)
+                .header(http::header::ETAG, "test-etag")
+                .body(String::new())
+                .unwrap()
+        });
+
+        let build_store = |skip_signature| {
+            GoogleCloudStorageBuilder::new()
+                .with_bucket_name("test-bucket")
+                .with_base_url(mock.url())
+                .with_client_options(ClientOptions::new().with_allow_http(true))
+                .with_credentials(credentials.clone())
+                .with_skip_signature(skip_signature)
+                .build()
+                .unwrap()
+        };
+
+        build_store(false)
+            .put(&Path::from("signed"), b"data".to_vec().into())
+            .await
+            .unwrap();
+        assert_eq!(credentials.0.load(Ordering::SeqCst), 1);
+        assert!(signed_authorized.load(Ordering::SeqCst));
+
+        build_store(true)
+            .put(&Path::from("unsigned"), b"data".to_vec().into())
+            .await
+            .unwrap();
+        assert_eq!(credentials.0.load(Ordering::SeqCst), 1);
+        assert!(!skipped_authorized.load(Ordering::SeqCst));
+
+        mock.shutdown().await;
+    }
 
     #[tokio::test]
     async fn gcs_test() {
