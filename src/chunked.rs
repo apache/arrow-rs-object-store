@@ -28,8 +28,9 @@ use futures_util::stream::BoxStream;
 
 use crate::path::Path;
 use crate::{
-    CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOptions, PutOptions, PutResult, RenameOptions,
+    CopyOptions, DeleteOptions, GetOptions, GetResult, GetResultPayload, ListResult,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutResult,
+    RenameOptions,
 };
 use crate::{PutPayload, Result};
 
@@ -144,6 +145,10 @@ impl ObjectStore for ChunkedStore {
         locations: BoxStream<'static, Result<Path>>,
     ) -> BoxStream<'static, Result<Path>> {
         self.inner.delete_stream(locations)
+    }
+
+    async fn delete_opts(&self, location: &Path, options: DeleteOptions) -> Result<()> {
+        self.inner.delete_opts(location, options).await
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
