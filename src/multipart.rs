@@ -24,7 +24,7 @@
 use async_trait::async_trait;
 
 use crate::path::Path;
-use crate::{Error, MultipartId, PutMultipartOptions, PutPayload, PutResult, Result};
+use crate::{Error, MultipartId, PutMode, PutMultipartOptions, PutPayload, PutResult, Result};
 
 /// Represents a part of a file that has been successfully uploaded in a multipart upload process.
 #[derive(Debug, Clone)]
@@ -67,12 +67,13 @@ pub trait MultipartStore: Send + Sync + 'static {
         opts: PutMultipartOptions,
     ) -> Result<MultipartId> {
         let PutMultipartOptions {
+            mode,
             tags,
             attributes,
             extensions: _,
         } = opts;
 
-        if !tags.is_empty() || !attributes.is_empty() {
+        if mode != PutMode::Overwrite || !tags.is_empty() || !attributes.is_empty() {
             return Err(Error::NotSupported {
                 source: "create_multipart_opts with non-default options".into(),
             });

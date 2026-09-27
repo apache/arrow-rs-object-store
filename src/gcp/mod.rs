@@ -48,8 +48,8 @@ use crate::signer::{SignedUrlOptions, Signer};
 use crate::util::validate_signed_url_extras;
 use crate::{
     GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart, multipart::PartId,
-    path::Path,
+    PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart,
+    multipart::PartId, path::Path,
 };
 use async_trait::async_trait;
 use client::GoogleCloudStorageClient;
@@ -179,6 +179,13 @@ impl ObjectStore for GoogleCloudStorage {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
+        if opts.mode != PutMode::Overwrite {
+            return Err(crate::Error::NotImplemented {
+                operation: "`put_multipart_opts` with a `mode` other than `PutMode::Overwrite`"
+                    .into(),
+                implementer: self.to_string(),
+            });
+        }
         let retry_policy = opts.retry_policy();
         let upload_id = self.client.multipart_initiate(location, opts).await?;
 
@@ -307,6 +314,11 @@ impl MultipartStore for GoogleCloudStorage {
         path: &Path,
         opts: PutMultipartOptions,
     ) -> Result<MultipartId> {
+        if opts.mode != PutMode::Overwrite {
+            return Err(crate::Error::NotSupported {
+                source: "`create_multipart_opts` with a `mode` other than `PutMode::Overwrite` is not supported by GoogleCloudStorage".into(),
+            });
+        }
         self.client.multipart_initiate(path, opts).await
     }
 
@@ -451,6 +463,7 @@ mod test {
             // Fake GCS server doesn't currently honor preconditions
             get_opts(&integration).await;
             put_opts(&integration, true).await;
+            put_multipart_opts_create(&integration, false).await;
             // Fake GCS server doesn't currently support attributes
             put_get_attributes(&integration).await;
         }
