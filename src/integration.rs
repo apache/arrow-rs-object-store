@@ -1054,6 +1054,37 @@ pub async fn multipart(storage: &dyn ObjectStore, multipart: &dyn MultipartStore
     assert_eq!(meta.size, 0);
 }
 
+/// Tests [`ObjectStore::put_multipart_opts`] with [`PutMode::Create`]
+pub async fn put_multipart_opts_create(storage: &dyn ObjectStore, supported: bool) {
+    let path = Path::from("put_multipart_opts_create");
+    let _ = storage.delete(&path).await;
+    let opts = || PutMultipartOptions {
+        mode: PutMode::Create,
+        ..Default::default()
+    };
+
+    if !supported {
+        let err = storage.put_multipart_opts(&path, opts()).await.unwrap_err();
+        assert!(matches!(err, Error::NotImplemented { .. }), "{err}");
+        return;
+    }
+
+    let mut upload = storage.put_multipart_opts(&path, opts()).await.unwrap();
+    upload.put_part("a".into()).await.unwrap();
+    upload.complete().await.unwrap();
+
+    let mut upload = storage.put_multipart_opts(&path, opts()).await.unwrap();
+    upload.put_part("b".into()).await.unwrap();
+    let err = upload.complete().await.unwrap_err();
+    assert!(matches!(err, Error::AlreadyExists { .. }), "{err}");
+    upload.abort().await.unwrap();
+
+    let b = storage.get(&path).await.unwrap().bytes().await.unwrap();
+    assert_eq!(b.as_ref(), b"a");
+
+    storage.delete(&path).await.unwrap();
+}
+
 /// Tests [`MultipartStore::create_multipart_opts`]
 pub async fn multipart_with_opts(storage: &dyn ObjectStore, multipart: &dyn MultipartStore) {
     let path = Path::from("test_multipart_with_opts");

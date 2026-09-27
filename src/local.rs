@@ -459,6 +459,13 @@ impl ObjectStore for LocalFileSystem {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
+        if opts.mode != PutMode::Overwrite {
+            return Err(crate::Error::NotImplemented {
+                operation: "`put_multipart_opts` with a `mode` other than `PutMode::Overwrite`"
+                    .into(),
+                implementer: self.to_string(),
+            });
+        }
         if !opts.attributes.is_empty() {
             return Err(crate::Error::NotImplemented {
                 operation: "`put_multipart_opts` with `opts.attributes` specified".into(),
@@ -1552,6 +1559,7 @@ mod tests {
         copy_rename_nonexistent_object(&integration).await;
         stream_get(&integration).await;
         put_opts(&integration, false).await;
+        put_multipart_opts_create(&integration, false).await;
     }
 
     #[tokio::test]
@@ -1575,6 +1583,7 @@ mod tests {
         copy_rename_nonexistent_object(&integration).await;
         stream_get(&integration).await;
         put_opts(&integration, false).await;
+        put_multipart_opts_create(&integration, false).await;
     }
 
     #[tokio::test]

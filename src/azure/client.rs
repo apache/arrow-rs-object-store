@@ -814,6 +814,7 @@ impl AzureClient {
         opts: PutMultipartOptions,
     ) -> Result<PutResult> {
         let PutMultipartOptions {
+            mode: _,
             tags,
             attributes,
             extensions,

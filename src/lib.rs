@@ -2014,6 +2014,19 @@ pub type PutMultipartOpts = PutMultipartOptions;
 /// Options for [`ObjectStore::put_multipart_opts`]
 #[derive(Debug, Clone, Default)]
 pub struct PutMultipartOptions {
+    /// Configure the [`PutMode`] applied when the upload completes
+    ///
+    /// [`PutMode::Create`] makes completion fail with [`Error::AlreadyExists`]
+    /// if an object already exists at the path. Implementations that don't
+    /// support conditional completion return [`Error::NotImplemented`] from
+    /// [`ObjectStore::put_multipart_opts`].
+    ///
+    /// [`MultipartStore::create_multipart_opts`] doesn't support this, and
+    /// returns [`Error::NotSupported`] for any mode other than
+    /// [`PutMode::Overwrite`].
+    ///
+    /// [`MultipartStore::create_multipart_opts`]: crate::multipart::MultipartStore::create_multipart_opts
+    pub mode: PutMode,
     /// Provide a [`TagSet`] for this object
     ///
     /// Implementations that don't support object tagging should ignore this
@@ -2035,16 +2048,18 @@ pub struct PutMultipartOptions {
 impl PartialEq<Self> for PutMultipartOptions {
     fn eq(&self, other: &Self) -> bool {
         let Self {
+            mode,
             tags,
             attributes,
             extensions: _,
         } = self;
         let Self {
+            mode: other_mode,
             tags: other_tags,
             attributes: other_attributes,
             extensions: _,
         } = other;
-        (tags == other_tags) && (attributes == other_attributes)
+        (mode == other_mode) && (tags == other_tags) && (attributes == other_attributes)
     }
 }
 
