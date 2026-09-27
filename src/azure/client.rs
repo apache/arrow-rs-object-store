@@ -34,6 +34,7 @@ use crate::util::{GetRange, deserialize_rfc1123};
 use crate::{
     Attribute, Attributes, ClientOptions, GetOptions, ListResult, ObjectMeta, Path, PutMode,
     PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, RetryConfig, TagSet,
+    UpdateVersion,
 };
 use async_trait::async_trait;
 use base64::Engine;
@@ -93,6 +94,12 @@ pub(crate) enum Error {
 
     #[error("Error performing put request {}: {}", path, source)]
     PutRequest {
+        source: crate::client::retry::RetryError,
+        path: String,
+    },
+
+    #[error("Error performing delete request {}: {}", path, source)]
+    DeleteRequest {
         source: crate::client::retry::RetryError,
         path: String,
     },
@@ -167,9 +174,9 @@ pub(crate) enum Error {
 impl From<Error> for crate::Error {
     fn from(err: Error) -> Self {
         match err {
-            Error::GetRequest { source, path } | Error::PutRequest { source, path } => {
-                source.error(STORE, path)
-            }
+            Error::GetRequest { source, path }
+            | Error::PutRequest { source, path }
+            | Error::DeleteRequest { source, path } => source.error(STORE, path),
             _ => Self::Generic {
                 store: STORE,
                 source: Box::new(err),
@@ -929,6 +936,42 @@ impl AzureClient {
         let results = parse_blob_batch_delete_body(batch_body, boundary, &paths).await?;
 
         Ok(results)
+    }
+
+    /// Make a single-object Azure Delete Blob request
+    /// <https://learn.microsoft.com/en-us/rest/api/storageservices/delete-blob>
+    ///
+    /// The request includes an `If-Match` header, so the blob is deleted only if
+    /// its current ETag matches the supplied version. Azure evaluates the
+    /// precondition as part of the delete request itself, returning
+    /// `412 Precondition Failed` if the blob has been modified, so the check is
+    /// atomic with the deletion and no additional round trip is required.
+    pub(crate) async fn delete_request(
+        &self,
+        path: &Path,
+        precondition: UpdateVersion,
+        extensions: ::http::Extensions,
+    ) -> Result<()> {
+        let credential = self.get_credential().await?;
+        let e_tag = precondition.e_tag.ok_or(Error::MissingETag)?;
+        let url = self.config.path_url(path);
+        let sensitive = self.config.is_sensitive(&credential);
+
+        self.client
+            .request(Method::DELETE, url.as_str())
+            .header(&IF_MATCH, e_tag.as_str())
+            .extensions(extensions)
+            .with_azure_authorization(self.crypto(), &credential, &self.config.account)?
+            .retryable(&self.config.retry_config)
+            .sensitive(sensitive)
+            .send()
+            .await
+            .map_err(|source| Error::DeleteRequest {
+                path: path.to_string(),
+                source,
+            })?;
+
+        Ok(())
     }
 
     /// Make an Azure copy request <https://docs.microsoft.com/en-us/rest/api/storageservices/copy-blob>.

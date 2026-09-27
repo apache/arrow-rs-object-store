@@ -27,9 +27,9 @@
 //! Unused blocks will automatically be dropped after 7 days.
 //!
 use crate::{
-    CopyMode, CopyOptions, Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
-    UploadPart,
+    CopyMode, CopyOptions, DeleteOptions, Error, GetOptions, GetResult, ListResult, MultipartId,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload,
+    PutResult, Result, UploadPart,
     multipart::{MultipartStore, PartId},
     path::Path,
     signer::Signer,
@@ -169,6 +169,19 @@ impl ObjectStore for MicrosoftAzure {
             .buffered(20)
             .try_flatten()
             .boxed()
+    }
+
+    async fn delete_opts(&self, location: &Path, options: DeleteOptions) -> Result<()> {
+        let DeleteOptions {
+            precondition,
+            extensions,
+        } = options;
+
+        match precondition {
+            // Preserve the existing single-object delete behavior (bulk delete)
+            None => crate::delete_stream_single(self, location.clone()).await,
+            Some(v) => self.client.delete_request(location, v, extensions).await,
+        }
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> Result<ListResult> {
@@ -497,6 +510,7 @@ mod tests {
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;
         put_opts(&integration, true).await;
+        conditional_delete(&integration).await;
         multipart(&integration, &integration).await;
         multipart_put_part_out_of_order(&integration, &integration).await;
         multipart_race_condition(&integration, false).await;
@@ -522,6 +536,106 @@ mod tests {
         if !integration.client.config().is_emulator {
             put_get_attributes(&integration).await;
         }
+    }
+
+    #[cfg(feature = "reqwest")]
+    fn delete_test_store(server: &crate::client::mock_server::MockServer) -> MicrosoftAzure {
+        MicrosoftAzureBuilder::new()
+            .with_account("testaccount")
+            .with_container_name("testcontainer")
+            .with_access_key("Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==")
+            .with_allow_http(true)
+            .with_endpoint(server.url().to_string())
+            .build()
+            .unwrap()
+    }
+
+    /// A conditional delete must be exactly one `DELETE` request carrying
+    /// `If-Match`, with no preceding metadata read
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_delete_opts_conditional_is_single_request() {
+        use crate::client::mock_server::MockServer;
+
+        let server = MockServer::new().await;
+        let store = delete_test_store(&server);
+
+        server.push_fn(|req| {
+            assert_eq!(req.method(), http::Method::DELETE);
+            assert_eq!(req.headers().get("if-match").unwrap(), "\"etag\"");
+            http::Response::builder()
+                .status(202)
+                .body(String::new())
+                .unwrap()
+        });
+        // A second request would consume this handler and fail the test
+        server.push_fn(|_| -> http::Response<String> {
+            panic!("conditional delete must be a single request")
+        });
+
+        let options = DeleteOptions::new().with_precondition(Some(crate::UpdateVersion {
+            e_tag: Some("\"etag\"".to_string()),
+            version: None,
+        }));
+        store
+            .delete_opts(&Path::from("test"), options)
+            .await
+            .unwrap();
+
+        server.shutdown().await;
+    }
+
+    /// A failed `If-Match` precondition surfaces as [`crate::Error::Precondition`]
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_delete_opts_conditional_precondition_failed() {
+        use crate::client::mock_server::MockServer;
+
+        let server = MockServer::new().await;
+        let store = delete_test_store(&server);
+
+        server.push_fn(|req| {
+            assert_eq!(req.method(), http::Method::DELETE);
+            assert!(req.headers().get("if-match").is_some());
+            http::Response::builder()
+                .status(412)
+                .body(String::new())
+                .unwrap()
+        });
+
+        let options = DeleteOptions::new().with_precondition(Some(crate::UpdateVersion {
+            e_tag: Some("\"etag\"".to_string()),
+            version: None,
+        }));
+        let err = store
+            .delete_opts(&Path::from("test"), options)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, crate::Error::Precondition { .. }), "{err}");
+        server.shutdown().await;
+    }
+
+    /// Conditional deletes on Azure require an ETag
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_delete_opts_conditional_requires_etag() {
+        use crate::client::mock_server::MockServer;
+
+        let server = MockServer::new().await;
+        let store = delete_test_store(&server);
+
+        let options = DeleteOptions::new().with_precondition(Some(crate::UpdateVersion {
+            e_tag: None,
+            version: Some("version".to_string()),
+        }));
+        let err = store
+            .delete_opts(&Path::from("test"), options)
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("ETag required"), "{err}");
+        server.shutdown().await;
     }
 
     #[ignore = "Used for manual testing against a real Workspace Private Link Endpoint."]

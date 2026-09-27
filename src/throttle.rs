@@ -21,7 +21,7 @@ use std::ops::Range;
 use std::{convert::TryInto, sync::Arc};
 
 use crate::multipart::{MultipartStore, PartId};
-use crate::{CopyOptions, GetOptions, RenameOptions, UploadPart};
+use crate::{CopyOptions, DeleteOptions, GetOptions, RenameOptions, UploadPart};
 use crate::{
     GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
     PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, path::Path,
@@ -207,6 +207,11 @@ impl<T: ObjectStore> ObjectStore for ThrottledStore<T> {
         let wait_delete_per_call = self.config().wait_delete_per_call;
         let locations = throttle_stream(locations, move |_| wait_delete_per_call);
         self.inner.delete_stream(locations)
+    }
+
+    async fn delete_opts(&self, location: &Path, options: DeleteOptions) -> Result<()> {
+        sleep(self.config().wait_delete_per_call).await;
+        self.inner.delete_opts(location, options).await
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {

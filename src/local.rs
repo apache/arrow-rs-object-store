@@ -1552,6 +1552,10 @@ mod tests {
         copy_rename_nonexistent_object(&integration).await;
         stream_get(&integration).await;
         put_opts(&integration, false).await;
+        // Local filesystems cannot perform a conditional delete atomically, so
+        // this asserts that conditional deletes are rejected as unsupported
+        // while unconditional deletes keep working
+        conditional_delete(&integration).await;
     }
 
     #[tokio::test]

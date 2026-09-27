@@ -29,9 +29,9 @@ use parking_lot::RwLock;
 use crate::multipart::{MultipartStore, PartId};
 use crate::util::InvalidGetRange;
 use crate::{
-    Attributes, GetRange, GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutResult, Result,
-    UpdateVersion, UploadPart, path::Path,
+    Attributes, DeleteOptions, GetRange, GetResult, GetResultPayload, ListResult, MultipartId,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutResult,
+    Result, UpdateVersion, UploadPart, path::Path,
 };
 use crate::{CopyMode, CopyOptions, GetOptions, PutPayload};
 
@@ -311,6 +311,45 @@ impl ObjectStore for InMemory {
             .boxed()
     }
 
+    async fn delete_opts(&self, location: &Path, options: DeleteOptions) -> Result<()> {
+        let DeleteOptions {
+            precondition,
+            extensions: _,
+        } = options;
+
+        let mut storage = self.storage.write();
+
+        let Some(v) = precondition else {
+            storage.map.remove(location);
+            return Ok(());
+        };
+
+        // The check and the removal happen under the same write lock, so the
+        // delete is atomic with respect to any concurrent operation
+        let existing = storage
+            .map
+            .get(location)
+            .map(|e| format!("\"{}\"", e.e_tag));
+
+        // As in `Storage::update`, a missing object reports `Precondition`
+        // rather than `NotFound`, for consistency with the cloud stores
+        let existing = existing.ok_or_else(|| crate::Error::Precondition {
+            path: location.to_string(),
+            source: format!("Object at location {location} not found").into(),
+        })?;
+
+        let expected = v.e_tag.ok_or(Error::MissingETag)?;
+        if existing == expected {
+            storage.map.remove(location);
+            Ok(())
+        } else {
+            Err(crate::Error::Precondition {
+                path: location.to_string(),
+                source: format!("{existing} does not match {expected}").into(),
+            })
+        }
+    }
+
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
         let root = Path::default();
         let prefix = prefix.unwrap_or(&root);
@@ -581,6 +620,7 @@ mod tests {
         multipart_with_opts(&integration, &integration).await;
         put_get_attributes(&integration).await;
         multipart_put_part_out_of_order(&integration, &integration).await;
+        conditional_delete(&integration).await;
     }
 
     #[tokio::test]
@@ -595,6 +635,7 @@ mod tests {
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;
+        conditional_delete(&integration).await;
     }
 
     #[tokio::test]
@@ -609,6 +650,24 @@ mod tests {
         rename_and_copy(&integration).await;
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;
+        conditional_delete(&integration).await;
+    }
+
+    #[tokio::test]
+    async fn conditional_delete_missing_object() {
+        let store = InMemory::new();
+        let path = Path::from("missing");
+        let options = DeleteOptions::new().with_precondition(Some(UpdateVersion {
+            e_tag: Some("\"1\"".to_string()),
+            version: None,
+        }));
+
+        // As for conditional puts, a missing object reports `Precondition`
+        let err = store.delete_opts(&path, options).await.unwrap_err();
+        assert!(matches!(err, crate::Error::Precondition { .. }), "{err}");
+
+        // Unconditional deletes of a missing object remain a no-op
+        store.delete(&path).await.unwrap();
     }
 
     #[tokio::test]
