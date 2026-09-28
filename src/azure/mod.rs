@@ -652,6 +652,95 @@ mod tests {
         assert!(err.to_string().contains("customer-provided keys"));
     }
 
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn azure_bearer_signed_url_uses_granted_key_interval() {
+        use http_body_util::BodyExt;
+        use std::sync::Mutex;
+
+        let server = crate::client::mock_server::MockServer::new().await;
+        let requested = Arc::new(Mutex::new(None));
+        let recorded = Arc::clone(&requested);
+        server.push_async_fn(move |request| async move {
+            let body = request.into_body().collect().await.unwrap().to_bytes();
+            let body = std::str::from_utf8(&body).unwrap();
+            let start = body.split("<Start>").nth(1).unwrap().split("</Start>").next().unwrap();
+            let expiry = body.split("<Expiry>").nth(1).unwrap().split("</Expiry>").next().unwrap();
+            *recorded.lock().unwrap() = Some((start.to_string(), expiry.to_string()));
+            http::Response::new(format!(
+                "<UserDelegationKey><SignedOid>oid</SignedOid><SignedTid>tid</SignedTid><SignedStart>{start}</SignedStart><SignedExpiry>{expiry}</SignedExpiry><SignedService>b</SignedService><SignedVersion>2025-11-05</SignedVersion><Value>c2VjcmV0</Value></UserDelegationKey>"
+            ))
+        });
+
+        let store = MicrosoftAzureBuilder::new()
+            .with_account("account")
+            .with_container_name("container")
+            .with_bearer_token_authorization("token")
+            .with_endpoint(server.url().to_string())
+            .with_allow_http(true)
+            .with_delegation_key_validity(Duration::from_secs(30 * 60))
+            .build()
+            .unwrap();
+        let url = store
+            .signed_url(
+                Method::GET,
+                &Path::from("file"),
+                Duration::from_secs(3 * 60 * 60),
+            )
+            .await
+            .unwrap();
+        let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+        let (request_start, request_expiry) = requested.lock().unwrap().clone().unwrap();
+        assert_eq!(query["st"], request_start);
+        assert_eq!(query["se"], request_expiry);
+        assert_eq!(query["skt"], request_start);
+        assert_eq!(query["ske"], request_expiry);
+        assert!(query.contains_key("sig"));
+
+        store
+            .signed_url(Method::GET, &Path::from("next"), Duration::from_secs(60))
+            .await
+            .unwrap();
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn azure_bearer_signed_url_rejects_short_granted_key() {
+        use http_body_util::BodyExt;
+
+        let server = crate::client::mock_server::MockServer::new().await;
+        server.push_async_fn(move |request| async move {
+            let body = request.into_body().collect().await.unwrap().to_bytes();
+            let body = std::str::from_utf8(&body).unwrap();
+            let start = body.split("<Start>").nth(1).unwrap().split("</Start>").next().unwrap();
+            let expiry = (chrono::DateTime::parse_from_rfc3339(start).unwrap()
+                + Duration::from_secs(30 * 60))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            http::Response::new(format!(
+                "<UserDelegationKey><SignedOid>oid</SignedOid><SignedTid>tid</SignedTid><SignedStart>{start}</SignedStart><SignedExpiry>{expiry}</SignedExpiry><SignedService>b</SignedService><SignedVersion>2025-11-05</SignedVersion><Value>c2VjcmV0</Value></UserDelegationKey>"
+            ))
+        });
+
+        let store = MicrosoftAzureBuilder::new()
+            .with_account("account")
+            .with_container_name("container")
+            .with_bearer_token_authorization("token")
+            .with_endpoint(server.url().to_string())
+            .with_allow_http(true)
+            .build()
+            .unwrap();
+        let err = store
+            .signed_url(
+                Method::GET,
+                &Path::from("file"),
+                Duration::from_secs(60 * 60),
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("do not cover"));
+        assert!(!err.to_string().contains("c2VjcmV0"));
+    }
+
     #[ignore = "Used for manual testing against a real storage account."]
     #[tokio::test]
     async fn test_user_delegation_key() {

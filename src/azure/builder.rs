@@ -15,19 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::azure::client::{AzureClient, AzureConfig, AzureEncryptionHeaders};
+use crate::azure::client::{
+    AzureClient, AzureConfig, AzureEncryptionHeaders, DEFAULT_DELEGATION_KEY_VALIDITY,
+    MAX_DELEGATION_KEY_VALIDITY,
+};
 use crate::azure::credential::{
     AzureAccessKey, AzureCliCredential, ClientSecretOAuthProvider, FabricTokenOAuthProvider,
     ImdsManagedIdentityProvider, WorkloadIdentityOAuthProvider,
 };
 use crate::azure::{AzureCredential, AzureCredentialProvider, MicrosoftAzure, STORE};
 use crate::client::{CryptoProvider, HttpConnector, TokenCredentialProvider, http_connector};
-use crate::config::ConfigValue;
+use crate::config::{ConfigValue, fmt_duration};
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use percent_encoding::percent_decode_str;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use url::Url;
 
 /// The well-known account used by Azurite and the legacy Azure Storage Emulator.
@@ -104,6 +108,9 @@ enum Error {
         credential_type
     )]
     MissingCredentialConfig { credential_type: String },
+
+    #[error("Delegation key validity must not exceed seven days")]
+    InvalidDelegationKeyValidity,
 }
 
 impl From<Error> for crate::Error {
@@ -175,6 +182,8 @@ pub struct MicrosoftAzureBuilder {
     use_azure_cli: ConfigValue<bool>,
     /// Retry config
     retry_config: RetryConfig,
+    /// Requested validity of a reusable user delegation key
+    delegation_key_validity: Option<ConfigValue<Duration>>,
     /// Client options
     client_options: ClientOptions,
     /// Credentials
@@ -359,6 +368,13 @@ pub enum AzureConfigKey {
     /// - `skip_signature`
     SkipSignature,
 
+    /// Requested validity of a reusable user delegation key
+    ///
+    /// Supported keys:
+    /// - `azure_delegation_key_validity`
+    /// - `delegation_key_validity`
+    DelegationKeyValidity,
+
     /// Container name
     ///
     /// Supported keys:
@@ -455,6 +471,7 @@ impl AsRef<str> for AzureConfigKey {
             Self::FederatedTokenFile => "azure_federated_token_file",
             Self::UseAzureCli => "azure_use_azure_cli",
             Self::SkipSignature => "azure_skip_signature",
+            Self::DelegationKeyValidity => "azure_delegation_key_validity",
             Self::ContainerName => "azure_container_name",
             Self::DisableTagging => "azure_disable_tagging",
             Self::FabricTokenServiceUrl => "azure_fabric_token_service_url",
@@ -509,6 +526,9 @@ impl FromStr for AzureConfigKey {
             "azure_use_fabric_endpoint" | "use_fabric_endpoint" => Ok(Self::UseFabricEndpoint),
             "azure_use_azure_cli" | "use_azure_cli" => Ok(Self::UseAzureCli),
             "azure_skip_signature" | "skip_signature" => Ok(Self::SkipSignature),
+            "azure_delegation_key_validity" | "delegation_key_validity" => {
+                Ok(Self::DelegationKeyValidity)
+            }
             "azure_container_name" | "container_name" => Ok(Self::ContainerName),
             "azure_disable_tagging" | "disable_tagging" => Ok(Self::DisableTagging),
             "azure_fabric_token_service_url" | "fabric_token_service_url" => {
@@ -633,6 +653,9 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::FederatedTokenFile => self.federated_token_file = Some(value.into()),
             AzureConfigKey::UseAzureCli => self.use_azure_cli.parse(value),
             AzureConfigKey::SkipSignature => self.skip_signature.parse(value),
+            AzureConfigKey::DelegationKeyValidity => {
+                self.delegation_key_validity = Some(ConfigValue::Deferred(value.into()))
+            }
             AzureConfigKey::UseEmulator => self.use_emulator.parse(value),
             AzureConfigKey::Endpoint => self.endpoint = Some(value.into()),
             AzureConfigKey::UseFabricEndpoint => self.use_fabric_endpoint.parse(value),
@@ -685,6 +708,9 @@ impl MicrosoftAzureBuilder {
             AzureConfigKey::FederatedTokenFile => self.federated_token_file.clone(),
             AzureConfigKey::UseAzureCli => Some(self.use_azure_cli.to_string()),
             AzureConfigKey::SkipSignature => Some(self.skip_signature.to_string()),
+            AzureConfigKey::DelegationKeyValidity => {
+                self.delegation_key_validity.as_ref().map(fmt_duration)
+            }
             AzureConfigKey::Client(key) => self.client_options.get_config_value(key),
             AzureConfigKey::ContainerName => self.container_name.clone(),
             AzureConfigKey::DisableTagging => Some(self.disable_tagging.to_string()),
@@ -938,6 +964,16 @@ impl MicrosoftAzureBuilder {
     /// Set the retry configuration
     pub fn with_retry(mut self, retry_config: RetryConfig) -> Self {
         self.retry_config = retry_config;
+        self
+    }
+
+    /// Set the requested validity of a reusable Azure user delegation key.
+    /// The default is 12 hours, and the maximum is seven days.
+    /// A zero value requests only the validity needed for the signed URL.
+    /// A longer signed URL extends the key request to cover its expiry.
+    /// This setting applies to bearer-token signing, not account-key signing.
+    pub fn with_delegation_key_validity(mut self, validity: Duration) -> Self {
+        self.delegation_key_validity = Some(validity.into());
         self
     }
 
@@ -1312,6 +1348,16 @@ impl MicrosoftAzureBuilder {
                 },
             )?;
 
+        let delegation_key_validity = self
+            .delegation_key_validity
+            .as_ref()
+            .map(ConfigValue::get)
+            .transpose()?
+            .unwrap_or(DEFAULT_DELEGATION_KEY_VALIDITY);
+        if delegation_key_validity > MAX_DELEGATION_KEY_VALIDITY {
+            return Err(Error::InvalidDelegationKeyValidity.into());
+        }
+
         let config = AzureConfig {
             account,
             is_emulator,
@@ -1324,6 +1370,7 @@ impl MicrosoftAzureBuilder {
             credentials: auth,
             crypto: self.crypto,
             encryption_headers,
+            delegation_key_validity,
         };
 
         let http_client = http.connect(&config.client_options)?;
@@ -1683,6 +1730,95 @@ mod tests {
         let builder =
             MicrosoftAzureBuilder::new().with_config("credential_type".parse().unwrap(), "auto");
         assert_eq!(builder.credential_type, Some("auto".to_string()));
+    }
+
+    #[test]
+    fn azure_delegation_key_validity_config() {
+        let key: AzureConfigKey = "delegation_key_validity".parse().unwrap();
+        assert_eq!(key, AzureConfigKey::DelegationKeyValidity);
+        assert_eq!(key.as_ref(), "azure_delegation_key_validity");
+
+        let builder = MicrosoftAzureBuilder::new()
+            .with_account("account")
+            .with_container_name("container")
+            .with_access_key(EMULATOR_ACCOUNT_KEY)
+            .with_config(key, "3h");
+        assert_eq!(builder.get_config_value(&key).as_deref(), Some("3h"));
+        assert_eq!(
+            builder
+                .build()
+                .unwrap()
+                .client
+                .config()
+                .delegation_key_validity,
+            Duration::from_secs(3 * 60 * 60)
+        );
+
+        let builder = MicrosoftAzureBuilder::new()
+            .with_account("account")
+            .with_container_name("container")
+            .with_access_key(EMULATOR_ACCOUNT_KEY);
+        assert_eq!(
+            builder
+                .build()
+                .unwrap()
+                .client
+                .config()
+                .delegation_key_validity,
+            DEFAULT_DELEGATION_KEY_VALIDITY
+        );
+    }
+
+    #[test]
+    fn azure_delegation_key_validity_limits() {
+        let builder = || {
+            MicrosoftAzureBuilder::new()
+                .with_account("account")
+                .with_container_name("container")
+                .with_access_key(EMULATOR_ACCOUNT_KEY)
+        };
+        assert_eq!(
+            builder()
+                .with_delegation_key_validity(Duration::ZERO)
+                .build()
+                .unwrap()
+                .client
+                .config()
+                .delegation_key_validity,
+            Duration::ZERO
+        );
+        assert!(
+            builder()
+                .with_delegation_key_validity(Duration::from_secs(8 * 24 * 60 * 60))
+                .build()
+                .unwrap_err()
+                .to_string()
+                .contains("seven days")
+        );
+        assert!(
+            builder()
+                .with_config(AzureConfigKey::DelegationKeyValidity, "invalid")
+                .build()
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn azure_account_key_signing_keeps_its_duration_limit() {
+        let store = MicrosoftAzureBuilder::new()
+            .with_account("account")
+            .with_container_name("container")
+            .with_access_key(EMULATOR_ACCOUNT_KEY)
+            .build()
+            .unwrap();
+        assert!(Arc::ptr_eq(&store.client, &store.clone().client));
+        assert!(
+            store
+                .client
+                .signer(Duration::from_secs(8 * 24 * 60 * 60))
+                .await
+                .is_ok()
+        );
     }
 
     #[test]
