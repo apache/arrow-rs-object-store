@@ -23,7 +23,6 @@ use crate::client::get::GetClient;
 use crate::client::header::{HeaderConfig, get_put_result};
 use crate::client::list::ListClient;
 use crate::client::retry::{RetryContext, RetryExt};
-use crate::client::token::{TemporaryToken, TokenCache};
 use crate::client::{
     CryptoProvider, DigestAlgorithm, GetOptionsExt, HttpClient, HttpError, HttpRequest,
     HttpResponse, crypto_provider,
@@ -48,7 +47,8 @@ use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::sync::RwLock;
 use url::Url;
 
 const VERSION_HEADER: &str = "x-ms-version-id";
@@ -157,6 +157,12 @@ pub(crate) enum Error {
     #[error("Got invalid user delegation key response: {}", source)]
     DelegationKeyResponse { source: quick_xml::de::DeError },
 
+    #[error("Invalid user delegation key: {reason}")]
+    InvalidDelegationKey { reason: &'static str },
+
+    #[error("User delegation SAS lifetime must not exceed seven days")]
+    DelegationSasTooLong,
+
     #[error("Generating SAS keys with SAS tokens auth is not supported")]
     SASforSASNotSupported,
 
@@ -192,6 +198,7 @@ pub(crate) struct AzureConfig {
     pub disable_tagging: bool,
     pub client_options: ClientOptions,
     pub encryption_headers: AzureEncryptionHeaders,
+    pub delegation_key_validity: Duration,
 }
 
 impl AzureConfig {
@@ -663,28 +670,40 @@ async fn parse_blob_batch_delete_body(
     Ok(results)
 }
 
-/// How long a freshly fetched user delegation key is requested to remain valid.
-///
-/// The shared access signature (SAS) tokens we sign with it stay short-lived;
-/// this only bounds how often we call `GetUserDelegationKey`. Azure caps the key
-/// lifetime at 7 days (the `Start` and `Expiry` of the key must be within seven
-/// days of each other):
-/// <https://learn.microsoft.com/en-us/rest/api/storageservices/get-user-delegation-key#request-body>
-const DELEGATION_KEY_VALIDITY: Duration = Duration::from_secs(12 * 60 * 60);
+pub(crate) const DEFAULT_DELEGATION_KEY_VALIDITY: Duration = Duration::from_secs(12 * 60 * 60);
+pub(crate) const MAX_DELEGATION_KEY_VALIDITY: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
-/// Minimum remaining validity for a cached key to be reused.
-///
-/// The cache only hands back a key with at least this much life left, so it is
-/// also the longest SAS lifetime the cache can safely serve (a SAS must not
-/// outlive the key it is signed with). Longer-lived SAS fetch a dedicated key.
-const DELEGATION_KEY_MIN_TTL: Duration = Duration::from_secs(2 * 60 * 60);
+#[derive(Debug)]
+struct CachedDelegationKey {
+    key: UserDelegationKey,
+    start: DateTime<Utc>,
+    expiry: DateTime<Utc>,
+}
 
-/// Parse the validity Azure actually granted a user delegation key, falling back
-/// to the window we requested if the response can't be parsed.
-fn delegation_key_expiry(key: &UserDelegationKey, requested: DateTime<Utc>) -> DateTime<Utc> {
-    DateTime::parse_from_rfc3339(&key.signed_expiry)
-        .map(|t| t.with_timezone(&Utc))
-        .unwrap_or(requested)
+impl CachedDelegationKey {
+    fn new(key: UserDelegationKey) -> Result<Self> {
+        let start = DateTime::parse_from_rfc3339(&key.signed_start)
+            .map_err(|_| Error::InvalidDelegationKey {
+                reason: "SignedStart is not a valid timestamp",
+            })?
+            .with_timezone(&Utc);
+        let expiry = DateTime::parse_from_rfc3339(&key.signed_expiry)
+            .map_err(|_| Error::InvalidDelegationKey {
+                reason: "SignedExpiry is not a valid timestamp",
+            })?
+            .with_timezone(&Utc);
+        if start >= expiry {
+            return Err(Error::InvalidDelegationKey {
+                reason: "SignedStart must precede SignedExpiry",
+            }
+            .into());
+        }
+        Ok(Self { key, start, expiry })
+    }
+
+    fn covers(&self, start: DateTime<Utc>, expiry: DateTime<Utc>) -> bool {
+        self.start <= start && self.expiry >= expiry
+    }
 }
 
 #[derive(Debug)]
@@ -696,7 +715,7 @@ pub(crate) struct AzureClient {
     /// Fetching a key is a network round-trip (`GetUserDelegationKey`) that Azure
     /// throttles under load, so we fetch a long-lived key once and reuse it to
     /// mint many short-lived SAS tokens.
-    delegation_key_cache: TokenCache<UserDelegationKey>,
+    delegation_key_cache: RwLock<Option<CachedDelegationKey>>,
 }
 
 impl AzureClient {
@@ -705,7 +724,7 @@ impl AzureClient {
         Self {
             config,
             client,
-            delegation_key_cache: TokenCache::default().with_min_ttl(DELEGATION_KEY_MIN_TTL),
+            delegation_key_cache: RwLock::new(None),
         }
     }
 
@@ -1093,48 +1112,49 @@ impl AzureClient {
         }
     }
 
-    /// Return a user delegation key valid for a SAS over `[sas_start, sas_expiry]`.
-    ///
-    /// `GetUserDelegationKey` is a network round-trip that Azure throttles (HTTP
-    /// 503) under load, so a long-lived key is cached and reused to sign many
-    /// short-lived SAS URLs.
-    ///
-    /// The cache only returns a key with more than [`DELEGATION_KEY_MIN_TTL`]
-    /// remaining, so any SAS no longer than that is guaranteed to expire before
-    /// its key. The (rare) longer-lived SAS get a dedicated key instead.
+    /// Return a key whose Azure-granted interval covers the serialized SAS interval.
     async fn user_delegation_key(
         &self,
         sas_start: DateTime<Utc>,
         sas_expiry: DateTime<Utc>,
         expires_in: Duration,
     ) -> Result<UserDelegationKey> {
-        if expires_in <= DELEGATION_KEY_MIN_TTL {
-            self.delegation_key_cache
-                .get_or_insert_with(|| self.get_delegation_key(DELEGATION_KEY_VALIDITY))
-                .await
-        } else {
-            self.get_delegation_key_inner(&sas_start, &sas_expiry).await
+        if expires_in > MAX_DELEGATION_KEY_VALIDITY {
+            return Err(Error::DelegationSasTooLong.into());
         }
-    }
+        let sas_start = DateTime::from_timestamp(sas_start.timestamp(), 0).unwrap();
+        let sas_expiry = DateTime::from_timestamp(sas_expiry.timestamp(), 0).unwrap();
 
-    /// Fetch a user delegation key valid for `validity` and wrap it as a
-    /// [`TemporaryToken`] so [`TokenCache`] can expire it.
-    async fn get_delegation_key(
-        &self,
-        validity: Duration,
-    ) -> Result<TemporaryToken<UserDelegationKey>> {
-        let start = chrono::Utc::now();
-        let requested_expiry = start + validity;
+        if let Some(cached) = self.delegation_key_cache.read().await.as_ref() {
+            if cached.covers(sas_start, sas_expiry) {
+                return Ok(cached.key.clone());
+            }
+        }
+
+        let mut cache = self.delegation_key_cache.write().await;
+        if let Some(cached) = cache.as_ref() {
+            if cached.covers(sas_start, sas_expiry) {
+                return Ok(cached.key.clone());
+            }
+        }
+
+        let validity = self.config.delegation_key_validity;
+        let whole_seconds = validity.as_secs() + u64::from(validity.subsec_nanos() != 0);
+        let requested_expiry =
+            std::cmp::max(sas_start + Duration::from_secs(whole_seconds), sas_expiry);
         let key = self
-            .get_delegation_key_inner(&start, &requested_expiry)
+            .get_delegation_key_inner(&sas_start, &requested_expiry)
             .await?;
-        // Expire the cache entry when the key Azure granted does (it may clamp it).
-        let expiry = delegation_key_expiry(&key, requested_expiry);
-        let ttl = (expiry - chrono::Utc::now()).to_std().unwrap_or(validity);
-        Ok(TemporaryToken {
-            token: key,
-            expiry: Some(Instant::now() + ttl),
-        })
+        let fetched = CachedDelegationKey::new(key)?;
+        if !fetched.covers(sas_start, sas_expiry) {
+            return Err(Error::InvalidDelegationKey {
+                reason: "SignedStart and SignedExpiry do not cover the requested SAS interval",
+            }
+            .into());
+        }
+        let key = fetched.key.clone();
+        *cache = Some(fetched);
+        Ok(key)
     }
 
     #[cfg(test)]
@@ -1713,26 +1733,35 @@ mod tests {
     }
 
     #[test]
-    fn test_delegation_key_expiry() {
+    fn test_delegation_key_interval() {
         let at = |s: &str| DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc);
-        let requested = at("2026-06-25T06:00:00Z");
-
-        // A well-formed granted expiry is honored (e.g. Azure clamped it shorter).
         let key = UserDelegationKey {
+            signed_start: "2026-06-25T00:00:00Z".to_string(),
             signed_expiry: "2026-06-25T05:00:00Z".to_string(),
             ..Default::default()
         };
-        assert_eq!(
-            delegation_key_expiry(&key, requested),
-            at("2026-06-25T05:00:00Z")
-        );
+        let cached = CachedDelegationKey::new(key).unwrap();
+        assert!(cached.covers(at("2026-06-25T00:00:00Z"), at("2026-06-25T05:00:00Z")));
+        assert!(!cached.covers(at("2026-06-24T23:59:59Z"), at("2026-06-25T01:00:00Z")));
+        assert!(!cached.covers(at("2026-06-25T01:00:00Z"), at("2026-06-25T05:00:01Z")));
 
-        // An unparsable expiry falls back to the requested window.
         let key = UserDelegationKey {
             signed_expiry: "not a timestamp".to_string(),
-            ..Default::default()
+            ..cached.key.clone()
         };
-        assert_eq!(delegation_key_expiry(&key, requested), requested);
+        assert!(CachedDelegationKey::new(key).is_err());
+
+        let key = UserDelegationKey {
+            signed_start: "not a timestamp".to_string(),
+            ..cached.key.clone()
+        };
+        assert!(CachedDelegationKey::new(key).is_err());
+
+        let key = UserDelegationKey {
+            signed_start: "2026-06-25T06:00:00Z".to_string(),
+            ..cached.key.clone()
+        };
+        assert!(CachedDelegationKey::new(key).is_err());
     }
 
     #[cfg(feature = "reqwest")]
@@ -1753,19 +1782,21 @@ mod tests {
             disable_tagging: false,
             client_options: Default::default(),
             encryption_headers: Default::default(),
+            delegation_key_validity: DEFAULT_DELEGATION_KEY_VALIDITY,
         };
 
         AzureClient::new(config, HttpClient::new(Client::new()))
     }
 
-    fn delegation_key_response(expiry: DateTime<Utc>) -> String {
+    fn delegation_key_response(start: DateTime<Utc>, expiry: DateTime<Utc>) -> String {
+        let start = start.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let expiry = expiry.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         format!(
             r#"<?xml version="1.0" encoding="utf-8"?>
 <UserDelegationKey>
     <SignedOid>oid</SignedOid>
     <SignedTid>tid</SignedTid>
-    <SignedStart>2026-06-25T00:00:00Z</SignedStart>
+    <SignedStart>{start}</SignedStart>
     <SignedExpiry>{expiry}</SignedExpiry>
     <SignedService>b</SignedService>
     <SignedVersion>2025-11-05</SignedVersion>
@@ -1781,9 +1812,6 @@ mod tests {
         let one_min = Duration::from_secs(60);
         let three_hours = Duration::from_secs(3 * 60 * 60);
 
-        // A key with more than DELEGATION_KEY_MIN_TTL remaining should be reused
-        // for short-lived SAS tokens instead of triggering another
-        // GetUserDelegationKey request.
         let server = crate::client::mock_server::MockServer::new().await;
         let fetches = Arc::new(AtomicUsize::new(0));
         let client = test_client(server.url());
@@ -1791,7 +1819,10 @@ mod tests {
         let fetches_clone = Arc::clone(&fetches);
         server.push_fn(move |_| {
             fetches_clone.fetch_add(1, Ordering::SeqCst);
-            http::Response::new(delegation_key_response(now + three_hours))
+            http::Response::new(delegation_key_response(
+                now,
+                now + Duration::from_secs(2 * 60 * 60),
+            ))
         });
 
         client
@@ -1804,12 +1835,13 @@ mod tests {
             .unwrap();
         assert_eq!(fetches.load(Ordering::SeqCst), 1);
 
-        // SAS tokens longer than DELEGATION_KEY_MIN_TTL are not safe to mint
-        // with the cached key, so they fetch a dedicated delegation key.
         let fetches_clone = Arc::clone(&fetches);
         server.push_fn(move |_| {
             fetches_clone.fetch_add(1, Ordering::SeqCst);
-            http::Response::new(delegation_key_response(now + three_hours))
+            http::Response::new(delegation_key_response(
+                now,
+                now + Duration::from_secs(4 * 60 * 60),
+            ))
         });
 
         client
@@ -1817,19 +1849,29 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(fetches.load(Ordering::SeqCst), 2);
+        client
+            .user_delegation_key(now, now + three_hours, three_hours)
+            .await
+            .unwrap();
+        assert_eq!(fetches.load(Ordering::SeqCst), 2);
+    }
 
-        // A newly fetched key whose Azure-granted expiry is already below
-        // DELEGATION_KEY_MIN_TTL is cached, but should be refreshed after the
-        // TokenCache fetch backoff instead of being reused indefinitely.
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_user_delegation_key_reuses_covered_long_sas() {
+        let now = Utc::now();
+        let one_min = Duration::from_secs(60);
+        let three_hours = Duration::from_secs(3 * 60 * 60);
+        let six_hours = Duration::from_secs(6 * 60 * 60);
         let server = crate::client::mock_server::MockServer::new().await;
         let fetches = Arc::new(AtomicUsize::new(0));
         let client = test_client(server.url());
 
         for _ in 0..2 {
-            let fetches_clone = Arc::clone(&fetches);
+            let fetches = Arc::clone(&fetches);
             server.push_fn(move |_| {
-                fetches_clone.fetch_add(1, Ordering::SeqCst);
-                http::Response::new(delegation_key_response(now + one_min))
+                fetches.fetch_add(1, Ordering::SeqCst);
+                http::Response::new(delegation_key_response(now, now + six_hours))
             });
         }
 
@@ -1837,12 +1879,199 @@ mod tests {
             .user_delegation_key(now, now + one_min, one_min)
             .await
             .unwrap();
-        tokio::time::sleep(Duration::from_millis(150)).await;
         client
-            .user_delegation_key(now, now + one_min, one_min)
+            .user_delegation_key(now, now + three_hours, three_hours)
+            .await
+            .unwrap();
+        assert_eq!(fetches.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_user_delegation_key_rejects_short_granted_window() {
+        let now = Utc::now();
+        let one_hour = Duration::from_secs(60 * 60);
+        for (start, expiry) in [
+            (now, now + Duration::from_secs(30 * 60)),
+            (now + Duration::from_secs(60), now + one_hour),
+        ] {
+            let server = crate::client::mock_server::MockServer::new().await;
+            server.push(http::Response::new(delegation_key_response(start, expiry)));
+            let client = test_client(server.url());
+
+            assert!(
+                client
+                    .user_delegation_key(now, now + one_hour, one_hour)
+                    .await
+                    .is_err()
+            );
+        }
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_user_delegation_key_concurrent_reuse() {
+        let now = Utc::now();
+        let one_hour = Duration::from_secs(60 * 60);
+        let server = crate::client::mock_server::MockServer::new().await;
+        let fetches = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&fetches);
+        server.push_fn(move |_| {
+            counted.fetch_add(1, Ordering::SeqCst);
+            http::Response::new(delegation_key_response(now, now + one_hour))
+        });
+        let client = Arc::new(test_client(server.url()));
+        let clone = Arc::clone(&client);
+
+        let (first, second) = tokio::join!(
+            client.user_delegation_key(now, now + one_hour, one_hour),
+            clone.user_delegation_key(now, now + one_hour, one_hour),
+        );
+        assert!(first.is_ok());
+        assert!(second.is_ok());
+        assert_eq!(fetches.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_user_delegation_key_cancelled_refresh_releases_cache() {
+        let now = Utc::now();
+        let one_hour = Duration::from_secs(60 * 60);
+        let server = crate::client::mock_server::MockServer::new().await;
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        server.push_async_fn(move |_| async move {
+            started_tx.send(()).unwrap();
+            std::future::pending::<()>().await;
+            unreachable!()
+        });
+        server.push(http::Response::new(delegation_key_response(
+            now,
+            now + one_hour,
+        )));
+        let client = Arc::new(test_client(server.url()));
+        let task_client = Arc::clone(&client);
+        let task = tokio::spawn(async move {
+            task_client
+                .user_delegation_key(now, now + one_hour, one_hour)
+                .await
+        });
+        started_rx.await.unwrap();
+        task.abort();
+        task.await.unwrap_err();
+
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            client.user_delegation_key(now, now + one_hour, one_hour),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_user_delegation_key_failed_refresh_keeps_covered_key() {
+        let now = Utc::now();
+        let one_hour = Duration::from_secs(60 * 60);
+        let three_hours = Duration::from_secs(3 * 60 * 60);
+        let server = crate::client::mock_server::MockServer::new().await;
+        let fetches = Arc::new(AtomicUsize::new(0));
+
+        for expiry in [now + one_hour, now + Duration::from_secs(2 * 60 * 60)] {
+            let counted = Arc::clone(&fetches);
+            server.push_fn(move |_| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                http::Response::new(delegation_key_response(now, expiry))
+            });
+        }
+
+        let client = test_client(server.url());
+        client
+            .user_delegation_key(now, now + one_hour, one_hour)
+            .await
+            .unwrap();
+        let err = client
+            .user_delegation_key(now, now + three_hours, three_hours)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("do not cover"));
+        assert!(!err.to_string().contains("secret"));
+        client
+            .user_delegation_key(now, now + one_hour, one_hour)
             .await
             .unwrap();
         assert_eq!(fetches.load(Ordering::SeqCst), 2);
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_user_delegation_key_zero_config_covers_sas() {
+        let now = Utc::now();
+        let three_hours = Duration::from_secs(3 * 60 * 60);
+        let server = crate::client::mock_server::MockServer::new().await;
+        server.push_async_fn(move |request| async move {
+            use http_body_util::BodyExt;
+            let body = request.into_body().collect().await.unwrap().to_bytes();
+            let body = std::str::from_utf8(&body).unwrap();
+            let expiry = (now + three_hours).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+            assert!(body.contains(&format!("<Expiry>{expiry}</Expiry>")));
+            http::Response::new(delegation_key_response(now, now + three_hours))
+        });
+
+        let mut client = test_client(server.url());
+        client.config.delegation_key_validity = Duration::ZERO;
+        client
+            .user_delegation_key(now, now + three_hours, three_hours)
+            .await
+            .unwrap();
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_user_delegation_key_rejects_malformed_dates() {
+        let now = Utc::now();
+        let one_hour = Duration::from_secs(60 * 60);
+        for (field, replacement) in [
+            ("SignedStart", "<SignedStart>not-a-date</SignedStart>"),
+            ("SignedExpiry", "<SignedExpiry>not-a-date</SignedExpiry>"),
+        ] {
+            let server = crate::client::mock_server::MockServer::new().await;
+            let response = delegation_key_response(now, now + one_hour);
+            let original = if field == "SignedStart" {
+                format!(
+                    "<SignedStart>{}</SignedStart>",
+                    now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                )
+            } else {
+                format!(
+                    "<SignedExpiry>{}</SignedExpiry>",
+                    (now + one_hour).to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+                )
+            };
+            server.push(http::Response::new(
+                response.replace(&original, replacement),
+            ));
+            let client = test_client(server.url());
+            let err = client
+                .user_delegation_key(now, now + one_hour, one_hour)
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains(field));
+            assert!(!err.to_string().contains("secret"));
+        }
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_user_delegation_key_rejects_long_sas() {
+        let client = test_client("http://127.0.0.1:1");
+        let now = Utc::now();
+        let eight_days = Duration::from_secs(8 * 24 * 60 * 60);
+        let err = client
+            .user_delegation_key(now, now + eight_days, eight_days)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("seven days"));
     }
 
     #[cfg(feature = "reqwest")]
@@ -1868,6 +2097,7 @@ mod tests {
                 Some(BASE64_STANDARD.encode([7_u8; 32])),
             )
             .unwrap(),
+            delegation_key_validity: DEFAULT_DELEGATION_KEY_VALIDITY,
         };
 
         let client = AzureClient::new(config, HttpClient::new(Client::new()));
