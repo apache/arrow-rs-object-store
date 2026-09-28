@@ -242,7 +242,7 @@ pub struct LocalFileSystem {
     config: Arc<Config>,
     // if you want to delete empty directories when deleting files
     automatic_cleanup: bool,
-    // if true, fsync written files and their parent directories after writes
+    // if true, fsync file and directory changes after writes and deletes
     fsync: bool,
 }
 
@@ -305,15 +305,15 @@ impl LocalFileSystem {
         self
     }
 
-    /// Enable `fsync` after writes for durability
+    /// Enable `fsync` after writes and deletes for durability
     ///
     /// When enabled, [`LocalFileSystem`] calls [`File::sync_all`] on written files and fsyncs
-    /// the affected parent directories before a write operation
-    /// ([`put_opts`](ObjectStore::put_opts), [`copy_opts`](ObjectStore::copy_opts),
-    /// [`rename_opts`](ObjectStore::rename_opts), and multipart upload completion) returns
-    /// success. This guarantees that both the file contents and the directory entries pointing
-    /// to them are durable on stable storage, matching the implicit durability contract of
-    /// remote object stores such as S3 or GCS.
+    /// the affected parent directories before [`put_opts`](ObjectStore::put_opts),
+    /// [`copy_opts`](ObjectStore::copy_opts), [`rename_opts`](ObjectStore::rename_opts), delete,
+    /// and multipart upload completion return success. For deletes, the file's parent directory
+    /// is synced after unlink. Directory removals from automatic cleanup are not synced.
+    /// This provides durability for file contents and directory entries that are synced, matching
+    /// the implicit durability contract of remote object stores such as S3 or GCS.
     ///
     /// This trades write throughput for durability and is **disabled by default**.
     ///
@@ -545,14 +545,13 @@ impl ObjectStore for LocalFileSystem {
     ) -> BoxStream<'static, Result<Path>> {
         let config = Arc::clone(&self.config);
         let automatic_cleanup = self.automatic_cleanup;
+        let fsync = self.fsync;
         locations
             .map(move |location| {
                 let config = Arc::clone(&config);
                 maybe_spawn_blocking(move || {
                     let location = location?;
-                    // `with_fsync` does not apply to standalone deletes; only create-mode rename
-                    // fsyncs its internal source removal as part of the durable copy-and-delete.
-                    Self::delete_location(config, automatic_cleanup, &location, false)?;
+                    Self::delete_location(config, automatic_cleanup, &location, fsync)?;
                     Ok(location)
                 })
             })
@@ -777,17 +776,31 @@ impl LocalFileSystem {
         fsync: bool,
     ) -> Result<()> {
         let path = config.path_to_filesystem(location)?;
+        let parent_dir: Option<io::Result<File>> = if fsync {
+            #[cfg(target_family = "unix")]
+            {
+                path.parent().map(File::open)
+            }
+            #[cfg(not(target_family = "unix"))]
+            {
+                None
+            }
+        } else {
+            None
+        };
         if let Err(e) = std::fs::remove_file(&path) {
             Err(match e.kind() {
                 ErrorKind::NotFound => Error::NotFound { path, source: e }.into(),
                 _ => Error::UnableToDeleteFile { path, source: e }.into(),
             })
         } else {
-            if fsync {
-                fsync_parent_dir(&path).map_err(|source| Error::UnableToSyncFile {
-                    source,
-                    path: path.clone(),
-                })?;
+            if let Some(parent_dir) = parent_dir {
+                parent_dir
+                    .and_then(|dir| dir.sync_all())
+                    .map_err(|source| Error::UnableToSyncFile {
+                        source,
+                        path: path.clone(),
+                    })?;
             }
 
             if !automatic_cleanup {
@@ -1653,6 +1666,152 @@ mod tests {
             integration.get(&source).await.unwrap_err(),
             crate::Error::NotFound { .. }
         ));
+    }
+
+    #[tokio::test]
+    #[cfg(target_family = "unix")]
+    async fn fsync_delete_propagates_parent_sync_error_after_unlink() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path())
+            .unwrap()
+            .with_fsync(true);
+        let location = Path::from("delete_dir/file");
+        integration.put(&location, "data".into()).await.unwrap();
+
+        let parent = root.path().join("delete_dir");
+        let original_permissions = fs::metadata(&parent).unwrap().permissions();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o300)).unwrap();
+        let cannot_open = File::open(&parent).is_err();
+        fs::set_permissions(&parent, original_permissions).unwrap();
+        if !cannot_open {
+            return;
+        }
+
+        let original_permissions = fs::metadata(&parent).unwrap().permissions();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o300)).unwrap();
+        let result = integration.delete(&location).await;
+        fs::set_permissions(&parent, original_permissions).unwrap();
+
+        assert!(
+            matches!(result, Err(crate::Error::Generic { source, .. }) if source.to_string().contains("Unable to sync data to disk"))
+        );
+        assert!(!root.path().join("delete_dir/file").exists());
+    }
+
+    #[tokio::test]
+    #[cfg(target_family = "unix")]
+    async fn fsync_delete_stream_propagates_parent_sync_error_after_unlink() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path())
+            .unwrap()
+            .with_fsync(true);
+        let location = Path::from("stream_dir/file");
+        integration.put(&location, "data".into()).await.unwrap();
+
+        let parent = root.path().join("stream_dir");
+        let original_permissions = fs::metadata(&parent).unwrap().permissions();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o300)).unwrap();
+        let cannot_open = File::open(&parent).is_err();
+        fs::set_permissions(&parent, original_permissions).unwrap();
+        if !cannot_open {
+            return;
+        }
+
+        let original_permissions = fs::metadata(&parent).unwrap().permissions();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o300)).unwrap();
+        let result = integration
+            .delete_stream(futures_util::stream::iter([Ok(location.clone())]).boxed())
+            .try_collect::<Vec<_>>()
+            .await;
+        fs::set_permissions(&parent, original_permissions).unwrap();
+
+        assert!(
+            matches!(result, Err(crate::Error::Generic { source, .. }) if source.to_string().contains("Unable to sync data to disk"))
+        );
+        assert!(!root.path().join("stream_dir/file").exists());
+    }
+
+    #[tokio::test]
+    #[cfg(target_family = "unix")]
+    async fn delete_without_fsync_succeeds_when_parent_cannot_be_opened() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        let direct = Path::from("delete_dir/direct");
+        let streamed = Path::from("delete_dir/streamed");
+        integration.put(&direct, "data".into()).await.unwrap();
+        integration.put(&streamed, "data".into()).await.unwrap();
+
+        let parent = root.path().join("delete_dir");
+        let original_permissions = fs::metadata(&parent).unwrap().permissions();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o300)).unwrap();
+        let cannot_open = File::open(&parent).is_err();
+        if !cannot_open {
+            fs::set_permissions(&parent, original_permissions).unwrap();
+            return;
+        }
+
+        let direct_result = integration.delete(&direct).await;
+        let stream_result = integration
+            .delete_stream(futures_util::stream::iter([Ok(streamed.clone())]).boxed())
+            .try_collect::<Vec<_>>()
+            .await;
+        fs::set_permissions(&parent, original_permissions).unwrap();
+
+        direct_result.unwrap();
+        assert_eq!(stream_result.unwrap(), vec![streamed]);
+        assert!(!root.path().join("delete_dir/direct").exists());
+        assert!(!root.path().join("delete_dir/streamed").exists());
+    }
+
+    #[tokio::test]
+    #[cfg(target_family = "unix")]
+    async fn fsync_delete_preserves_symlink_target_and_cleans_nested_parents() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path())
+            .unwrap()
+            .with_fsync(true)
+            .with_automatic_cleanup(true);
+        let location = Path::from("nested/child/file");
+        integration.put(&location, "data".into()).await.unwrap();
+        integration.delete(&location).await.unwrap();
+        assert!(!root.path().join("nested").exists());
+
+        let target = NamedTempFile::new().unwrap();
+        let link = root.path().join("link");
+        std::os::unix::fs::symlink(target.path(), &link).unwrap();
+        integration.delete(&Path::from("link")).await.unwrap();
+        assert!(target.path().exists());
+        assert!(!link.exists());
+    }
+
+    #[tokio::test]
+    #[cfg(target_family = "unix")]
+    async fn fsync_delete_stream_cleans_shared_parent_concurrently() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path())
+            .unwrap()
+            .with_fsync(true)
+            .with_automatic_cleanup(true);
+
+        for batch in 0..32 {
+            let parent = root.path().join(format!("batch-{batch}"));
+            fs::create_dir(&parent).unwrap();
+            let locations: Vec<_> = (0..10)
+                .map(|index| {
+                    let file_name = format!("file-{index}");
+                    fs::write(parent.join(&file_name), "data").unwrap();
+                    Path::from(format!("batch-{batch}/{file_name}"))
+                })
+                .collect();
+
+            let deleted = integration
+                .delete_stream(futures_util::stream::iter(locations.into_iter().map(Ok)).boxed())
+                .try_collect::<Vec<_>>()
+                .await
+                .unwrap();
+            assert_eq!(deleted.len(), 10);
+            assert!(!parent.exists());
+        }
     }
 
     #[test]
