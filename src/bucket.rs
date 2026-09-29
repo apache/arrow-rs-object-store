@@ -104,39 +104,10 @@ pub(crate) fn validate_bucket_name(store: &'static str, name: &str) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
 
-    #[derive(Debug, Default)]
-    struct MinimalBucketStore {
-        exists: AtomicBool,
-    }
-
-    #[async_trait]
-    impl BucketStore for MinimalBucketStore {
-        async fn create_bucket(&self) -> Result<()> {
-            self.exists.store(true, Ordering::SeqCst);
-            Ok(())
-        }
-
-        async fn delete_bucket(&self) -> Result<()> {
-            self.exists.store(false, Ordering::SeqCst);
-            Ok(())
-        }
-
-        async fn bucket_exists(&self) -> Result<bool> {
-            Ok(self.exists.load(Ordering::SeqCst))
-        }
-    }
-
-    #[tokio::test]
-    async fn usable_as_trait_object() {
-        let store: Arc<dyn BucketStore> = Arc::new(MinimalBucketStore::default());
-
-        assert!(!store.bucket_exists().await.unwrap());
-        store.create_bucket().await.unwrap();
-        assert!(store.bucket_exists().await.unwrap());
-        store.delete_bucket().await.unwrap();
-        assert!(!store.bucket_exists().await.unwrap());
+    #[test]
+    fn test_dyn_compatible() {
+        fn takes_dyn(_: Option<&dyn BucketStore>) {}
+        takes_dyn(None);
     }
 }

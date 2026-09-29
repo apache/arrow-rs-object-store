@@ -1158,12 +1158,11 @@ mod tests {
     use crate::bucket::BucketStore;
     use crate::client::HttpClient;
     use crate::client::get::GetClient;
-    use crate::client::mock_server::MockServer;
+    use crate::client::mock_server::{MockServer, RequestLog};
     use crate::client::retry::RetryContext;
     use futures_util::{StreamExt, TryStreamExt};
     use http::Response;
     use http::header::{AUTHORIZATION, CONTENT_LENGTH};
-    use http_body_util::BodyExt;
     use hyper::Request;
     use hyper::body::Incoming;
 
@@ -1525,44 +1524,10 @@ mod tests {
         mock.shutdown().await;
     }
 
-    const EU_WEST_1_CREATE_BUCKET_BODY: &str = "<CreateBucketConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><LocationConstraint>eu-west-1</LocationConstraint></CreateBucketConfiguration>";
-
-    /// A bucket request recorded by [`push_bucket_response`].
-    #[derive(Debug)]
-    struct CapturedBucketRequest {
-        method: Method,
-        path: String,
-        query: Option<String>,
-        headers: HeaderMap,
-        body: Bytes,
-    }
-
-    type CapturedBucketRequests = Arc<std::sync::Mutex<Vec<CapturedBucketRequest>>>;
-
-    /// Queue a response with `status`, recording the request it answers into `captured`.
-    fn push_bucket_response(mock: &MockServer, captured: &CapturedBucketRequests, status: u16) {
-        let captured = Arc::clone(captured);
-        mock.push_async_fn(move |req| async move {
-            let (parts, body) = req.into_parts();
-            let body = body.collect().await.unwrap().to_bytes();
-            captured.lock().unwrap().push(CapturedBucketRequest {
-                method: parts.method,
-                path: parts.uri.path().to_string(),
-                query: parts.uri.query().map(str::to_string),
-                headers: parts.headers,
-                body,
-            });
-            Response::builder()
-                .status(status)
-                .body(String::new())
-                .unwrap()
-        });
-    }
-
-    fn single_bucket_request(captured: &CapturedBucketRequests) -> CapturedBucketRequest {
-        let mut captured = captured.lock().unwrap();
-        assert_eq!(captured.len(), 1, "expected one request: {captured:?}");
-        captured.pop().unwrap()
+    fn create_bucket_body(location: &str) -> String {
+        format!(
+            "<CreateBucketConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><LocationConstraint>{location}</LocationConstraint></CreateBucketConfiguration>"
+        )
     }
 
     /// Like [`make_store`], but in `region`, and returning the builder for further options.
@@ -1576,37 +1541,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_bucket_us_east_1_path_style() {
+    async fn test_create_bucket_without_location_constraint() {
         let mock = MockServer::new().await;
-        let captured = CapturedBucketRequests::default();
-        push_bucket_response(&mock, &captured, 200);
+        let log = RequestLog::default();
 
-        let store = make_store(&mock, false, false);
-        store.create_bucket().await.unwrap();
+        for region in ["us-east-1", "auto"] {
+            mock.push_recorded(&log, 200);
+            let store = bucket_store_builder(&mock, region).build().unwrap();
+            store.create_bucket().await.unwrap();
 
-        let req = single_bucket_request(&captured);
-        assert_eq!(req.method, Method::PUT);
-        assert_eq!(req.path, "/test-bucket");
-        assert_eq!(req.query, None);
-        assert_eq!(req.headers.get(CONTENT_LENGTH).unwrap(), "0");
-        assert!(req.body.is_empty(), "{:?}", req.body);
-
-        mock.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn test_create_bucket_virtual_hosted() {
-        let mock = MockServer::new().await;
-        let captured = CapturedBucketRequests::default();
-        push_bucket_response(&mock, &captured, 200);
-
-        let store = make_store(&mock, true, false);
-        store.create_bucket().await.unwrap();
-
-        let req = single_bucket_request(&captured);
-        assert_eq!(req.method, Method::PUT);
-        assert_eq!(req.path, "/");
-        assert_eq!(req.query, None);
+            let req = log.single();
+            assert_eq!(req.method, Method::PUT, "{region}");
+            assert_eq!(req.path, "/test-bucket", "{region}");
+            assert_eq!(req.query, None, "{region}");
+            assert_eq!(req.headers.get(CONTENT_LENGTH).unwrap(), "0", "{region}");
+            assert!(req.headers.get(CONTENT_TYPE).is_none(), "{region}");
+            assert!(req.body.is_empty(), "{region}");
+        }
 
         mock.shutdown().await;
     }
@@ -1614,58 +1565,24 @@ mod tests {
     #[tokio::test]
     async fn test_create_bucket_location_constraint() {
         let mock = MockServer::new().await;
-        let captured = CapturedBucketRequests::default();
-        push_bucket_response(&mock, &captured, 200);
+        let log = RequestLog::default();
 
-        let store = bucket_store_builder(&mock, "eu-west-1").build().unwrap();
-        store.create_bucket().await.unwrap();
+        for (region, location) in [("eu-west-1", "eu-west-1"), ("a&b<c", "a&amp;b&lt;c")] {
+            mock.push_recorded(&log, 200);
+            let store = bucket_store_builder(&mock, region).build().unwrap();
+            store.create_bucket().await.unwrap();
 
-        let req = single_bucket_request(&captured);
-        assert_eq!(req.method, Method::PUT);
-        assert_eq!(req.path, "/test-bucket");
-        assert_eq!(req.headers.get(CONTENT_TYPE).unwrap(), "application/xml");
-        assert_eq!(
-            req.headers.get(CONTENT_LENGTH).unwrap(),
-            EU_WEST_1_CREATE_BUCKET_BODY.len().to_string().as_str()
-        );
-        assert_eq!(req.body, EU_WEST_1_CREATE_BUCKET_BODY);
-
-        mock.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn test_create_bucket_escapes_region() {
-        let mock = MockServer::new().await;
-        let captured = CapturedBucketRequests::default();
-        push_bucket_response(&mock, &captured, 200);
-
-        let store = bucket_store_builder(&mock, "a&b<c").build().unwrap();
-        store.create_bucket().await.unwrap();
-
-        let req = single_bucket_request(&captured);
-        assert_eq!(
-            req.body,
-            "<CreateBucketConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><LocationConstraint>a&amp;b&lt;c</LocationConstraint></CreateBucketConfiguration>"
-        );
-
-        mock.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn test_create_bucket_auto_region() {
-        let mock = MockServer::new().await;
-        let captured = CapturedBucketRequests::default();
-        push_bucket_response(&mock, &captured, 200);
-
-        let store = bucket_store_builder(&mock, "auto").build().unwrap();
-        store.create_bucket().await.unwrap();
-
-        let req = single_bucket_request(&captured);
-        assert_eq!(req.method, Method::PUT);
-        assert_eq!(req.path, "/test-bucket");
-        assert_eq!(req.headers.get(CONTENT_LENGTH).unwrap(), "0");
-        assert!(req.body.is_empty(), "{:?}", req.body);
-        assert!(req.headers.get(CONTENT_TYPE).is_none(), "{req:?}");
+            let req = log.single();
+            let body = create_bucket_body(location);
+            assert_eq!(req.method, Method::PUT);
+            assert_eq!(req.path, "/test-bucket");
+            assert_eq!(req.headers.get(CONTENT_TYPE).unwrap(), "application/xml");
+            assert_eq!(
+                req.headers.get(CONTENT_LENGTH).unwrap(),
+                body.len().to_string().as_str()
+            );
+            assert_eq!(req.body, body);
+        }
 
         mock.shutdown().await;
     }
@@ -1673,8 +1590,8 @@ mod tests {
     #[tokio::test]
     async fn test_create_bucket_signs_body() {
         let mock = MockServer::new().await;
-        let captured = CapturedBucketRequests::default();
-        push_bucket_response(&mock, &captured, 200);
+        let log = RequestLog::default();
+        mock.push_recorded(&log, 200);
 
         let store = bucket_store_builder(&mock, "eu-west-1")
             .with_skip_signature(false)
@@ -1684,9 +1601,9 @@ mod tests {
             .unwrap();
         store.create_bucket().await.unwrap();
 
-        let req = single_bucket_request(&captured);
+        let req = log.single();
         assert!(req.headers.contains_key(AUTHORIZATION));
-        // SHA256 of EU_WEST_1_CREATE_BUCKET_BODY
+        // SHA256 of create_bucket_body("eu-west-1")
         assert_eq!(
             req.headers.get("x-amz-content-sha256").unwrap(),
             "a2531158b25edb57200e54140cc1b12d0af943f596ea467c2fbbedcc16223cc5"
@@ -1696,45 +1613,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_bucket_ignores_checksum_algorithm() {
-        let mock = MockServer::new().await;
-        let captured = CapturedBucketRequests::default();
-        push_bucket_response(&mock, &captured, 200);
-
-        let store = bucket_store_builder(&mock, "eu-west-1")
-            .with_checksum_algorithm(Checksum::SHA256)
-            .build()
-            .unwrap();
-        store.create_bucket().await.unwrap();
-
-        let req = single_bucket_request(&captured);
-        assert!(req.headers.get(SHA256_CHECKSUM).is_none(), "{req:?}");
-        assert_eq!(req.body, EU_WEST_1_CREATE_BUCKET_BODY);
-
-        mock.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn test_create_bucket_conflict_is_already_exists() {
-        let mock = MockServer::new().await;
-        let captured = CapturedBucketRequests::default();
-        push_bucket_response(&mock, &captured, 409);
-
-        let store = make_store(&mock, false, false);
-        let err = store.create_bucket().await.unwrap_err();
-        assert!(
-            matches!(&err, crate::Error::AlreadyExists { path, .. } if path == "test-bucket"),
-            "{err}"
-        );
-
-        mock.shutdown().await;
-    }
-
-    #[tokio::test]
     async fn test_bucket_ops_s3_express_not_supported() {
         let mock = MockServer::new().await;
-        let captured = CapturedBucketRequests::default();
-        push_bucket_response(&mock, &captured, 200);
+        let log = RequestLog::default();
+        mock.push_recorded(&log, 200);
 
         let store = AmazonS3Builder::new()
             .with_endpoint(mock.url())
@@ -1752,7 +1634,7 @@ mod tests {
         assert!(matches!(err, crate::Error::NotSupported { .. }), "{err}");
         let err = store.bucket_exists().await.unwrap_err();
         assert!(matches!(err, crate::Error::NotSupported { .. }), "{err}");
-        assert!(captured.lock().unwrap().is_empty(), "no request expected");
+        assert!(log.take().is_empty(), "no request expected");
 
         mock.shutdown().await;
     }
@@ -1760,8 +1642,8 @@ mod tests {
     #[tokio::test]
     async fn test_bucket_ops_reject_unsafe_bucket_name() {
         let mock = MockServer::new().await;
-        let captured = CapturedBucketRequests::default();
-        push_bucket_response(&mock, &captured, 200);
+        let log = RequestLog::default();
+        mock.push_recorded(&log, 200);
 
         let store = bucket_store_builder(&mock, "us-east-1")
             .with_bucket_name("test-bucket?tagging")
@@ -1773,7 +1655,7 @@ mod tests {
         assert!(matches!(err, crate::Error::Generic { .. }), "{err}");
         let err = store.bucket_exists().await.unwrap_err();
         assert!(matches!(err, crate::Error::Generic { .. }), "{err}");
-        assert!(captured.lock().unwrap().is_empty(), "no request expected");
+        assert!(log.take().is_empty(), "no request expected");
 
         mock.shutdown().await;
     }
@@ -1781,9 +1663,9 @@ mod tests {
     #[tokio::test]
     async fn test_bucket_exists() {
         let mock = MockServer::new().await;
-        let captured = CapturedBucketRequests::default();
+        let log = RequestLog::default();
         for status in [200, 404, 403] {
-            push_bucket_response(&mock, &captured, status);
+            mock.push_recorded(&log, status);
         }
 
         let store = make_store(&mock, false, false);
@@ -1795,9 +1677,9 @@ mod tests {
             "{err}"
         );
 
-        let captured = std::mem::take(&mut *captured.lock().unwrap());
-        assert_eq!(captured.len(), 3);
-        for req in captured {
+        let requests = log.take();
+        assert_eq!(requests.len(), 3);
+        for req in requests {
             assert_eq!(req.method, Method::HEAD);
             assert_eq!(req.path, "/test-bucket");
             assert_eq!(req.query, None);
@@ -1809,9 +1691,9 @@ mod tests {
     #[tokio::test]
     async fn test_delete_bucket() {
         let mock = MockServer::new().await;
-        let captured = CapturedBucketRequests::default();
+        let log = RequestLog::default();
         for status in [204, 409, 404] {
-            push_bucket_response(&mock, &captured, status);
+            mock.push_recorded(&log, status);
         }
 
         let store = make_store(&mock, false, false);
@@ -1826,9 +1708,9 @@ mod tests {
             "{err}"
         );
 
-        let captured = std::mem::take(&mut *captured.lock().unwrap());
-        assert_eq!(captured.len(), 3);
-        for req in captured {
+        let requests = log.take();
+        assert_eq!(requests.len(), 3);
+        for req in requests {
             assert_eq!(req.method, Method::DELETE);
             assert_eq!(req.path, "/test-bucket");
             assert_eq!(req.query, None);

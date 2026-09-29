@@ -1593,6 +1593,7 @@ mod tests {
     use crate::ObjectStoreExt;
     use crate::StaticCredentialProvider;
     use crate::bucket::BucketStore;
+    use crate::client::mock_server::{RecordedRequest, RequestLog};
     use bytes::Bytes;
     use regex::bytes::Regex;
     use reqwest::Client;
@@ -2446,46 +2447,6 @@ Time:2018-06-14T16:46:54.6040685Z</Message></Error>\r
         assert_eq!("The specified blob does not exist.", reason);
     }
 
-    /// A container request recorded by [`push_container_response`].
-    #[derive(Debug)]
-    struct CapturedContainerRequest {
-        method: Method,
-        path: String,
-        query: Option<String>,
-        headers: HeaderMap,
-    }
-
-    type CapturedContainerRequests = Arc<std::sync::Mutex<Vec<CapturedContainerRequest>>>;
-
-    /// Queue a response with `status`, recording the request it answers into `captured`.
-    ///
-    /// `MockServer` swallows panics raised in its handlers, so assertions belong in the test body.
-    fn push_container_response(
-        server: &crate::client::mock_server::MockServer,
-        captured: &CapturedContainerRequests,
-        status: u16,
-    ) {
-        let captured = Arc::clone(captured);
-        server.push_fn(move |req| {
-            captured.lock().unwrap().push(CapturedContainerRequest {
-                method: req.method().clone(),
-                path: req.uri().path().to_string(),
-                query: req.uri().query().map(str::to_string),
-                headers: req.headers().clone(),
-            });
-            http::Response::builder()
-                .status(status)
-                .body(String::new())
-                .unwrap()
-        });
-    }
-
-    fn take_container_requests(
-        captured: &CapturedContainerRequests,
-    ) -> Vec<CapturedContainerRequest> {
-        std::mem::take(&mut *captured.lock().unwrap())
-    }
-
     fn container_store_builder(
         server: &crate::client::mock_server::MockServer,
     ) -> crate::azure::MicrosoftAzureBuilder {
@@ -2503,20 +2464,21 @@ Time:2018-06-14T16:46:54.6040685Z</Message></Error>\r
         container_store_builder(server).build().unwrap()
     }
 
-    fn assert_container_request(req: &CapturedContainerRequest, method: Method) {
+    fn assert_container_request(req: &RecordedRequest, method: Method) {
         assert_eq!(req.method, method);
         assert_eq!(req.path, "/testcontainer");
         assert_eq!(req.query.as_deref(), Some("restype=container"));
         assert_eq!(req.headers.get(CONTENT_LENGTH).unwrap(), "0");
         assert!(req.headers.contains_key("authorization"), "{req:?}");
+        assert!(req.body.is_empty(), "{req:?}");
     }
 
     #[tokio::test]
     async fn test_create_container() {
         let server = crate::client::mock_server::MockServer::new().await;
-        let captured = CapturedContainerRequests::default();
-        push_container_response(&server, &captured, 201);
-        push_container_response(&server, &captured, 409);
+        let log = RequestLog::default();
+        server.push_recorded(&log, 201);
+        server.push_recorded(&log, 409);
 
         let store = container_store(&server);
         store.create_bucket().await.unwrap();
@@ -2526,7 +2488,7 @@ Time:2018-06-14T16:46:54.6040685Z</Message></Error>\r
             "{err}"
         );
 
-        let captured = take_container_requests(&captured);
+        let captured = log.take();
         assert_eq!(captured.len(), 2);
         for req in &captured {
             assert_container_request(req, Method::PUT);
@@ -2538,8 +2500,8 @@ Time:2018-06-14T16:46:54.6040685Z</Message></Error>\r
     #[tokio::test]
     async fn test_container_ops_reject_names_that_address_the_account() {
         let server = crate::client::mock_server::MockServer::new().await;
-        let captured = CapturedContainerRequests::default();
-        push_container_response(&server, &captured, 200);
+        let log = RequestLog::default();
+        server.push_recorded(&log, 200);
 
         for name in ["", ".", ".."] {
             let store = container_store_builder(&server)
@@ -2559,7 +2521,7 @@ Time:2018-06-14T16:46:54.6040685Z</Message></Error>\r
                 );
             }
         }
-        assert!(take_container_requests(&captured).is_empty());
+        assert!(log.take().is_empty());
 
         server.shutdown().await;
     }
@@ -2567,9 +2529,9 @@ Time:2018-06-14T16:46:54.6040685Z</Message></Error>\r
     #[tokio::test]
     async fn test_container_exists() {
         let server = crate::client::mock_server::MockServer::new().await;
-        let captured = CapturedContainerRequests::default();
+        let log = RequestLog::default();
         for status in [200, 404, 403] {
-            push_container_response(&server, &captured, status);
+            server.push_recorded(&log, status);
         }
 
         let store = container_store(&server);
@@ -2581,7 +2543,7 @@ Time:2018-06-14T16:46:54.6040685Z</Message></Error>\r
             "{err}"
         );
 
-        let captured = take_container_requests(&captured);
+        let captured = log.take();
         assert_eq!(captured.len(), 3);
         for req in &captured {
             assert_container_request(req, Method::HEAD);
@@ -2593,9 +2555,9 @@ Time:2018-06-14T16:46:54.6040685Z</Message></Error>\r
     #[tokio::test]
     async fn test_delete_container() {
         let server = crate::client::mock_server::MockServer::new().await;
-        let captured = CapturedContainerRequests::default();
+        let log = RequestLog::default();
         for status in [202, 409, 404] {
-            push_container_response(&server, &captured, status);
+            server.push_recorded(&log, status);
         }
 
         let store = container_store(&server);
@@ -2610,14 +2572,14 @@ Time:2018-06-14T16:46:54.6040685Z</Message></Error>\r
             "{err}"
         );
 
-        let requests = take_container_requests(&captured);
+        let requests = log.take();
         assert_eq!(requests.len(), 3);
         for req in &requests {
             assert_container_request(req, Method::DELETE);
         }
 
         // An encryption key marks requests sensitive, which redacts the container from the URL
-        push_container_response(&server, &captured, 409);
+        server.push_recorded(&log, 409);
         let store = container_store_builder(&server)
             .with_encryption_key(BASE64_STANDARD.encode([7_u8; 32]))
             .build()
@@ -2625,7 +2587,7 @@ Time:2018-06-14T16:46:54.6040685Z</Message></Error>\r
         let err = store.delete_bucket().await.unwrap_err();
         assert!(matches!(err, crate::Error::Generic { .. }), "{err}");
         assert!(err.to_string().contains("testcontainer"), "{err}");
-        assert_eq!(take_container_requests(&captured).len(), 1);
+        assert_container_request(&log.single(), Method::DELETE);
 
         server.shutdown().await;
     }

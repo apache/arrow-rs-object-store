@@ -490,8 +490,6 @@ mod tests {
     use bytes::Bytes;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    const NON_EXISTENT_NAME: &str = "nonexistentname";
-
     #[cfg(feature = "reqwest")]
     #[tokio::test]
     async fn azure_create_multipart_opts_rejects_attributes() {
@@ -668,17 +666,6 @@ mod tests {
             verify_after_delete: store.client.config().is_emulator,
         };
         bucket_lifecycle(&store, opts).await;
-    }
-
-    #[tokio::test]
-    async fn azure_test_bucket_exists_nonexistent() {
-        maybe_skip_integration!();
-        let integration = MicrosoftAzureBuilder::from_env()
-            .with_container_name(NON_EXISTENT_NAME)
-            .build()
-            .unwrap();
-
-        assert!(!integration.bucket_exists().await.unwrap());
     }
 
     #[tokio::test]

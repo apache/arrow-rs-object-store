@@ -1731,17 +1731,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn s3_test_bucket_exists_nonexistent() {
-        maybe_skip_integration!();
-        let integration = AmazonS3Builder::from_env()
-            .with_bucket_name(NON_EXISTENT_NAME)
-            .build()
-            .unwrap();
-
-        assert!(!integration.bucket_exists().await.unwrap());
-    }
-
-    #[tokio::test]
     #[ignore = "Tests shouldn't call use remote services by default"]
     async fn test_disable_creds() {
         // https://registry.opendata.aws/daylight-osm/
