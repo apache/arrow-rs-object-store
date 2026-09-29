@@ -329,6 +329,10 @@ pub(crate) struct ServiceAccountCredentials {
     /// Disable oauth and use empty tokens.
     #[serde(default)]
     pub disable_oauth: bool,
+
+    /// The Google Cloud project the service account belongs to
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 impl ServiceAccountCredentials {
@@ -1061,6 +1065,7 @@ mod tests {
             retry_config: RetryConfig::default(),
             client_options: ClientOptions::default(),
             skip_signature: false,
+            project_id: None,
         };
         let client =
             GoogleCloudStorageClient::new(config, HttpClient::new(UnusedHttpService)).unwrap();
@@ -1106,6 +1111,7 @@ mod tests {
             retry_config: RetryConfig::default(),
             client_options: ClientOptions::default(),
             skip_signature: false,
+            project_id: None,
         };
         let client =
             GoogleCloudStorageClient::new(config, HttpClient::new(UnusedHttpService)).unwrap();

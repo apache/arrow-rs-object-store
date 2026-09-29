@@ -118,6 +118,17 @@ enum Error {
 
     #[error("Got invalid signing blob signature: {}", source)]
     InvalidSignBlobSignature { source: base64::DecodeError },
+
+    #[error("Error performing bucket request {}: {}", bucket, source)]
+    BucketRequest {
+        source: crate::client::retry::RetryError,
+        bucket: String,
+    },
+
+    #[error(
+        "Creating a bucket requires a project ID: set it with GoogleCloudStorageBuilder::with_project_id or GOOGLE_PROJECT_ID"
+    )]
+    MissingProjectId,
 }
 
 impl From<Error> for crate::Error {
@@ -126,6 +137,7 @@ impl From<Error> for crate::Error {
             Error::GetRequest { source, path } | Error::Request { source, path } => {
                 source.error(STORE, path)
             }
+            Error::BucketRequest { source, bucket } => source.error(STORE, bucket),
             _ => Self::Generic {
                 store: STORE,
                 source: Box::new(err),
@@ -151,6 +163,8 @@ pub(crate) struct GoogleCloudStorageConfig {
     pub client_options: ClientOptions,
 
     pub skip_signature: bool,
+
+    pub project_id: Option<String>,
 }
 
 impl GoogleCloudStorageConfig {
@@ -611,6 +625,98 @@ impl GoogleCloudStorageClient {
             })?;
 
         Ok(())
+    }
+
+    /// Create the bucket <https://cloud.google.com/storage/docs/json_api/v1/buckets/insert>
+    pub(crate) async fn create_bucket(&self) -> Result<()> {
+        crate::bucket::validate_bucket_name(STORE, &self.config.bucket_name)?;
+        let project = self
+            .config
+            .project_id
+            .as_deref()
+            .ok_or(Error::MissingProjectId)?;
+        let credential = self.get_credential().await?;
+
+        self.client
+            .post(format!("{}/storage/v1/b", self.config.base_url))
+            .query(&[("project", project)])
+            .header(CONTENT_TYPE, "application/json")
+            .json(serde_json::json!({ "name": self.config.bucket_name }))
+            .with_bearer_auth(credential.as_deref())
+            .retryable(&self.config.retry_config)
+            .send()
+            .await
+            .map_err(|source| Error::BucketRequest {
+                source,
+                bucket: self.config.bucket_name.clone(),
+            })?;
+
+        Ok(())
+    }
+
+    /// Delete the bucket <https://cloud.google.com/storage/docs/json_api/v1/buckets/delete>
+    pub(crate) async fn delete_bucket(&self) -> Result<()> {
+        crate::bucket::validate_bucket_name(STORE, &self.config.bucket_name)?;
+        let credential = self.get_credential().await?;
+
+        self.client
+            .delete(self.bucket_url())
+            .with_bearer_auth(credential.as_deref())
+            .retryable(&self.config.retry_config)
+            .send()
+            .await
+            .map_err(|source| match source.status() {
+                // GCS reports a non-empty bucket as 409, which is not "already exists"
+                Some(StatusCode::CONFLICT) => crate::Error::Generic {
+                    store: STORE,
+                    source: Box::new(Error::BucketRequest {
+                        source,
+                        bucket: self.config.bucket_name.clone(),
+                    }),
+                },
+                _ => Error::BucketRequest {
+                    source,
+                    bucket: self.config.bucket_name.clone(),
+                }
+                .into(),
+            })?;
+
+        Ok(())
+    }
+
+    /// Check whether the bucket exists <https://cloud.google.com/storage/docs/json_api/v1/buckets/get>
+    pub(crate) async fn bucket_exists(&self) -> Result<bool> {
+        crate::bucket::validate_bucket_name(STORE, &self.config.bucket_name)?;
+        let credential = self.get_credential().await?;
+
+        let result = self
+            .client
+            .get(self.bucket_url())
+            .with_bearer_auth(credential.as_deref())
+            .retryable(&self.config.retry_config)
+            .idempotent(true)
+            .send()
+            .await;
+
+        match result {
+            Ok(_) => Ok(true),
+            Err(source) if source.status() == Some(StatusCode::NOT_FOUND) => Ok(false),
+            Err(source) => Err(Error::BucketRequest {
+                source,
+                bucket: self.config.bucket_name.clone(),
+            }
+            .into()),
+        }
+    }
+
+    /// The JSON API URL of the bucket. The name is validated by the caller and strict-encoded here,
+    /// which keeps unreserved characters, so the JSON route sees the plain name.
+    fn bucket_url(&self) -> String {
+        format!(
+            "{}/storage/v1/b/{}",
+            self.config.base_url,
+            utf8_percent_encode(&self.config.bucket_name, &crate::util::STRICT_ENCODE_SET)
+        )
     }
 }
 

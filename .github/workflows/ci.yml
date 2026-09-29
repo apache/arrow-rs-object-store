@@ -179,6 +179,7 @@ jobs:
       HTTP_URL: "http://localhost:8080"
       GOOGLE_BUCKET: test-bucket
       GOOGLE_SERVICE_ACCOUNT: "/tmp/gcs.json"
+      GOOGLE_PROJECT_ID: test-project
 
     steps:
       - uses: actions/checkout@v7

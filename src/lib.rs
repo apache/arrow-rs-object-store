@@ -710,6 +710,8 @@
 pub mod aws;
 #[cfg(feature = "azure-base")]
 pub mod azure;
+#[cfg(feature = "cloud-base")]
+pub mod bucket;
 #[cfg(feature = "tokio")]
 pub mod buffered;
 #[cfg(not(target_arch = "wasm32"))]
@@ -2445,6 +2447,93 @@ mod tests {
         let loaded = resp.bytes().await.unwrap();
 
         assert_eq!(data, loaded);
+    }
+
+    /// A bucket name that is valid on S3, GCS and Azure and will not interfere with other runs.
+    #[cfg(any(feature = "aws-base", feature = "azure-base", feature = "gcp-base"))]
+    pub(crate) fn unique_bucket_name() -> String {
+        format!("object-store-bucket-ops-{:016x}", rand::random::<u64>())
+    }
+
+    /// Provider differences that `bucket_lifecycle` has to tolerate.
+    #[cfg(any(feature = "aws-base", feature = "azure-base", feature = "gcp-base"))]
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct BucketLifecycle {
+        /// Deleting a bucket that still holds an object fails (S3, GCS).
+        pub(crate) non_empty_delete_fails: bool,
+        /// A non-empty delete may be reported as `412 Precondition Failed` rather than `409 Conflict`.
+        pub(crate) non_empty_delete_may_be_precondition: bool,
+        /// Re-creating an existing bucket may succeed (S3 in `us-east-1`).
+        pub(crate) recreate_may_succeed: bool,
+        /// The bucket is gone right after deletion (Azure deletes asynchronously, so not always).
+        pub(crate) verify_after_delete: bool,
+    }
+
+    /// Exercise the full [`bucket::BucketStore`] lifecycle against `store`, which must be
+    /// configured for a bucket that does not exist yet.
+    #[cfg(any(feature = "aws-base", feature = "azure-base", feature = "gcp-base"))]
+    pub(crate) async fn bucket_lifecycle<T>(store: &T, opts: BucketLifecycle)
+    where
+        T: ObjectStore + bucket::BucketStore,
+    {
+        use futures_util::FutureExt;
+
+        let path = Path::from("bucket-lifecycle-object");
+        let steps = std::panic::AssertUnwindSafe(bucket_lifecycle_steps(store, &path, opts));
+        if let Err(panic) = steps.catch_unwind().await {
+            // Best effort, so a failed run against a real account doesn't leave the bucket behind
+            let _ = store.delete(&path).await;
+            let _ = store.delete_bucket().await;
+            std::panic::resume_unwind(panic);
+        }
+    }
+
+    #[cfg(any(feature = "aws-base", feature = "azure-base", feature = "gcp-base"))]
+    async fn bucket_lifecycle_steps<T>(store: &T, path: &Path, opts: BucketLifecycle)
+    where
+        T: ObjectStore + bucket::BucketStore,
+    {
+        assert!(!store.bucket_exists().await.unwrap());
+
+        store.create_bucket().await.unwrap();
+        assert!(store.bucket_exists().await.unwrap());
+
+        match store.create_bucket().await {
+            Err(Error::AlreadyExists { .. }) => {}
+            Ok(()) if opts.recreate_may_succeed => {}
+            other => panic!("expected AlreadyExists re-creating the bucket, got {other:?}"),
+        }
+
+        store.put(path, "data".into()).await.unwrap();
+
+        if opts.non_empty_delete_fails {
+            let err = store.delete_bucket().await.unwrap_err();
+            let expected = match err {
+                Error::Generic { .. } => true,
+                Error::Precondition { .. } => opts.non_empty_delete_may_be_precondition,
+                _ => false,
+            };
+            assert!(expected, "{err}");
+        }
+
+        store.delete(path).await.unwrap();
+        store.delete_bucket().await.unwrap();
+
+        if opts.verify_after_delete {
+            // S3 is eventually consistent: HeadBucket can succeed briefly after deletion.
+            let mut exists = true;
+            for _ in 0..20 {
+                exists = store.bucket_exists().await.unwrap();
+                if !exists {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            }
+            assert!(!exists, "bucket still exists after deletion");
+
+            let err = store.delete_bucket().await.unwrap_err();
+            assert!(matches!(err, Error::NotFound { .. }), "{err}");
+        }
     }
 
     #[cfg(any(feature = "aws-base", feature = "azure-base"))]

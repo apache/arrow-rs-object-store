@@ -40,6 +40,7 @@ use std::{sync::Arc, time::Duration};
 use url::Url;
 
 use crate::aws::client::{CompleteMultipartMode, PutPartPayload, RequestError, S3Client};
+use crate::bucket::BucketStore;
 use crate::client::CredentialProvider;
 use crate::client::get::GetClientExt;
 use crate::client::list::{ListClient, ListClientExt};
@@ -223,6 +224,54 @@ impl Signer for AmazonS3 {
         )?;
 
         Ok(url)
+    }
+}
+
+/// Manage the configured bucket with [CreateBucket], [DeleteBucket] and [HeadBucket].
+///
+/// [CreateBucket]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateBucket.html
+/// [DeleteBucket]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucket.html
+/// [HeadBucket]: https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadBucket.html
+///
+/// - The configured region is sent as the `LocationConstraint`, except `us-east-1` and `auto`
+///   (Cloudflare R2).
+/// - Bucket names with characters other than ASCII letters, digits, `-`, `.` and `_` are rejected
+///   with [`Error::Generic`] before any request.
+/// - S3 Express One Zone directory buckets return [`Error::NotSupported`].
+/// - With an explicit [endpoint](AmazonS3Builder::with_endpoint) and
+///   [virtual-hosted-style requests](AmazonS3Builder::with_virtual_hosted_style_request), the
+///   endpoint is used as-is, so bucket operations act on whichever bucket it names.
+///
+/// # Example
+///
+/// This example creates the bucket if it does not exist yet.
+///
+/// ```no_run
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// # use object_store::{aws::AmazonS3Builder, bucket::BucketStore};
+/// #
+/// let s3 = AmazonS3Builder::from_env()
+///     .with_bucket_name("my-bucket")
+///     .build()?;
+///
+/// if !s3.bucket_exists().await? {
+///     s3.create_bucket().await?;
+/// }
+/// #     Ok(())
+/// # }
+/// ```
+#[async_trait]
+impl BucketStore for AmazonS3 {
+    async fn create_bucket(&self) -> Result<()> {
+        self.client.create_bucket().await
+    }
+
+    async fn delete_bucket(&self) -> Result<()> {
+        self.client.delete_bucket().await
+    }
+
+    async fn bucket_exists(&self) -> Result<bool> {
+        self.client.bucket_exists().await
     }
 }
 
@@ -1659,6 +1708,37 @@ mod tests {
 
         let err = integration.delete(&location).await.unwrap_err();
         assert!(matches!(err, crate::Error::NotFound { .. }), "{}", err);
+    }
+
+    #[tokio::test]
+    async fn s3_test_bucket_lifecycle() {
+        maybe_skip_integration!();
+        for region in [None, Some("eu-west-1")] {
+            let mut builder = AmazonS3Builder::from_env().with_bucket_name(unique_bucket_name());
+            if let Some(region) = region {
+                builder = builder.with_region(region);
+            }
+            let store = builder.build().unwrap();
+            let recreate_may_succeed = store.client.config.region == "us-east-1";
+            let opts = BucketLifecycle {
+                non_empty_delete_fails: true,
+                non_empty_delete_may_be_precondition: false,
+                recreate_may_succeed,
+                verify_after_delete: true,
+            };
+            bucket_lifecycle(&store, opts).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn s3_test_bucket_exists_nonexistent() {
+        maybe_skip_integration!();
+        let integration = AmazonS3Builder::from_env()
+            .with_bucket_name(NON_EXISTENT_NAME)
+            .build()
+            .unwrap();
+
+        assert!(!integration.bucket_exists().await.unwrap());
     }
 
     #[tokio::test]
