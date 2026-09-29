@@ -41,6 +41,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::CopyOptions;
+use crate::bucket::BucketStore;
 use crate::client::{CredentialProvider, crypto_provider};
 use crate::gcp::credential::GCSAuthorizer;
 use crate::retry::{MultipartRetry, RetryPolicy};
@@ -397,6 +398,34 @@ impl Signer for GoogleCloudStorage {
     }
 }
 
+/// Bucket operations use the [GCS JSON API] on the configured base URL.
+///
+/// [`BucketStore::create_bucket`] needs a project ID, set with
+/// [`GoogleCloudStorageBuilder::with_project_id`], the `GOOGLE_PROJECT_ID` or
+/// `GOOGLE_CLOUD_PROJECT` environment variable read by [`GoogleCloudStorageBuilder::from_env`],
+/// or the `project_id` in the service account key or in a service-account application default
+/// credentials file. Without one it returns an error without sending a request. Buckets are
+/// created with the GCS defaults: the `US` multi-region and the `STANDARD` storage class.
+///
+/// Bucket names containing characters other than ASCII letters, digits, `-`, `.` and `_` are
+/// rejected with [`Error::Generic`](crate::Error::Generic) without sending a request.
+///
+/// [GCS JSON API]: https://cloud.google.com/storage/docs/json_api/v1/buckets
+#[async_trait]
+impl BucketStore for GoogleCloudStorage {
+    async fn create_bucket(&self) -> Result<()> {
+        self.client.create_bucket().await
+    }
+
+    async fn delete_bucket(&self) -> Result<()> {
+        self.client.delete_bucket().await
+    }
+
+    async fn bucket_exists(&self) -> Result<bool> {
+        self.client.bucket_exists().await
+    }
+}
+
 #[async_trait]
 impl PaginatedListStore for GoogleCloudStorage {
     async fn list_paginated(
@@ -572,5 +601,185 @@ mod test {
             "{}",
             err
         )
+    }
+
+    #[tokio::test]
+    async fn gcs_test_bucket_lifecycle() {
+        maybe_skip_integration!();
+        let store = GoogleCloudStorageBuilder::from_env()
+            .with_bucket_name(unique_bucket_name())
+            .build()
+            .unwrap();
+        let opts = BucketLifecycle {
+            non_empty_delete_fails: true,
+            non_empty_delete_may_be_precondition: true,
+            recreate_may_succeed: false,
+            verify_after_delete: true,
+        };
+        bucket_lifecycle(&store, opts).await;
+    }
+
+    // Building a store needs an HTTP connector, which only the reqwest feature provides
+    #[cfg(feature = "reqwest")]
+    mod bucket_ops {
+        use super::*;
+        use crate::client::mock_server::{MockServer, RequestLog};
+        use http::header::{AUTHORIZATION, CONTENT_TYPE};
+
+        const KEY: &str = r#"{"private_key": "", "private_key_id": "", "client_email": "", "disable_oauth": true}"#;
+
+        fn store(
+            server: &MockServer,
+            bucket: &str,
+            project_id: Option<&str>,
+        ) -> GoogleCloudStorage {
+            let builder = GoogleCloudStorageBuilder::new()
+                .with_bucket_name(bucket)
+                .with_base_url(server.url())
+                .with_service_account_key(KEY);
+            match project_id {
+                Some(project_id) => builder.with_project_id(project_id),
+                None => builder,
+            }
+            .build()
+            .unwrap()
+        }
+
+        #[tokio::test]
+        async fn gcs_test_create_bucket() {
+            let server = MockServer::new().await;
+            let log = RequestLog::default();
+            server.push_recorded(&log, 200);
+
+            let store = store(&server, "test-bucket", Some("my-project"));
+            store.create_bucket().await.unwrap();
+
+            let request = log.single();
+            server.shutdown().await;
+            assert_eq!(request.method, Method::POST);
+            assert_eq!(request.path, "/storage/v1/b");
+            assert_eq!(request.query.as_deref(), Some("project=my-project"));
+            assert_eq!(
+                request.headers.get(CONTENT_TYPE).unwrap(),
+                "application/json"
+            );
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            assert_eq!(body, serde_json::json!({ "name": "test-bucket" }));
+        }
+
+        #[tokio::test]
+        async fn gcs_test_create_bucket_requires_project_id() {
+            let server = MockServer::new().await;
+            let log = RequestLog::default();
+            server.push_recorded(&log, 200);
+
+            let store = store(&server, "test-bucket", None);
+            let err = store.create_bucket().await.unwrap_err();
+            assert!(matches!(err, crate::Error::Generic { .. }), "{err}");
+            assert!(err.to_string().contains("project ID"), "{err}");
+
+            assert!(log.take().is_empty());
+            server.shutdown().await;
+        }
+
+        #[tokio::test]
+        async fn gcs_test_bucket_exists() {
+            let server = MockServer::new().await;
+            let log = RequestLog::default();
+            server.push_recorded(&log, 200);
+            server.push_recorded(&log, 404);
+            server.push_recorded(&log, 403);
+
+            let store = store(&server, "test-bucket", Some("my-project"));
+            assert!(store.bucket_exists().await.unwrap());
+            assert!(!store.bucket_exists().await.unwrap());
+            let err = store.bucket_exists().await.unwrap_err();
+            assert!(
+                matches!(err, crate::Error::PermissionDenied { .. }),
+                "{err}"
+            );
+
+            let requests = log.take();
+            server.shutdown().await;
+            assert_eq!(requests.len(), 3);
+            for request in requests {
+                assert_eq!(request.method, Method::GET);
+                assert_eq!(request.path, "/storage/v1/b/test-bucket");
+            }
+        }
+
+        #[tokio::test]
+        async fn gcs_test_delete_bucket() {
+            let server = MockServer::new().await;
+            let log = RequestLog::default();
+            server.push_recorded(&log, 204);
+            server.push_recorded(&log, 409);
+            server.push_recorded(&log, 404);
+
+            let store = store(&server, "test-bucket", Some("my-project"));
+            store.delete_bucket().await.unwrap();
+            let err = store.delete_bucket().await.unwrap_err();
+            assert!(matches!(err, crate::Error::Generic { .. }), "{err}");
+            assert!(err.to_string().contains("test-bucket"), "{err}");
+            let err = store.delete_bucket().await.unwrap_err();
+            assert!(matches!(err, crate::Error::NotFound { .. }), "{err}");
+
+            let requests = log.take();
+            server.shutdown().await;
+            assert_eq!(requests.len(), 3);
+            for request in requests {
+                assert_eq!(request.method, Method::DELETE);
+                assert_eq!(request.path, "/storage/v1/b/test-bucket");
+            }
+        }
+
+        #[tokio::test]
+        async fn gcs_test_bucket_requests_are_authorized() {
+            let server = MockServer::new().await;
+            let log = RequestLog::default();
+            server.push_recorded(&log, 200);
+            server.push_recorded(&log, 200);
+            server.push_recorded(&log, 204);
+
+            let store = GoogleCloudStorageBuilder::new()
+                .with_bucket_name("test-bucket")
+                .with_base_url(server.url())
+                .with_bearer_token("test-token")
+                .with_project_id("my-project")
+                .build()
+                .unwrap();
+            store.create_bucket().await.unwrap();
+            assert!(store.bucket_exists().await.unwrap());
+            store.delete_bucket().await.unwrap();
+
+            let requests = log.take();
+            server.shutdown().await;
+            assert_eq!(requests.len(), 3);
+            for request in requests {
+                assert_eq!(
+                    request.headers.get(AUTHORIZATION).unwrap(),
+                    "Bearer test-token",
+                    "{request:?}"
+                );
+            }
+        }
+
+        #[tokio::test]
+        async fn gcs_test_bucket_ops_reject_unsafe_bucket_name() {
+            let server = MockServer::new().await;
+            let log = RequestLog::default();
+            server.push_recorded(&log, 200);
+
+            let store = store(&server, "test-bucket/o/secret", Some("my-project"));
+            let err = store.create_bucket().await.unwrap_err();
+            assert!(matches!(err, crate::Error::Generic { .. }), "{err}");
+            let err = store.delete_bucket().await.unwrap_err();
+            assert!(matches!(err, crate::Error::Generic { .. }), "{err}");
+            let err = store.bucket_exists().await.unwrap_err();
+            assert!(matches!(err, crate::Error::Generic { .. }), "{err}");
+
+            assert!(log.take().is_empty());
+            server.shutdown().await;
+        }
     }
 }

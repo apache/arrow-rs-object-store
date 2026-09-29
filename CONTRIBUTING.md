@@ -267,8 +267,9 @@ echo '{"gcs_base_url": "http://localhost:4443", "disable_oauth": true, "client_e
 Now run the tests:
 ```shell
 TEST_INTEGRATION=1 \
-OBJECT_STORE_BUCKET=test-bucket \
+GOOGLE_BUCKET=test-bucket \
 GOOGLE_SERVICE_ACCOUNT=/tmp/gcs.json \
+GOOGLE_PROJECT_ID=test-project \
 cargo test -p object_store --features=gcp
 ```
 

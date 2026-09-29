@@ -27,7 +27,7 @@ use crate::client::get::GetClient;
 use crate::client::header::{HeaderConfig, get_etag};
 use crate::client::header::{get_put_result, get_version};
 use crate::client::list::ListClient;
-use crate::client::retry::{RetryContext, RetryExt};
+use crate::client::retry::{RetryContext, RetryError, RetryExt, RetryableRequestBuilder};
 use crate::client::s3::{
     CompleteMultipartUpload, CompleteMultipartUploadResult, CopyPartResult,
     InitiateMultipartUploadResult, ListResponse, PartMetadata,
@@ -50,7 +50,7 @@ use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH,
     CONTENT_TYPE,
 };
-use http::{HeaderMap, HeaderName, Method};
+use http::{HeaderMap, HeaderName, Method, StatusCode};
 use itertools::Itertools;
 use md5::{Digest, Md5};
 use percent_encoding::{PercentEncode, utf8_percent_encode};
@@ -124,6 +124,12 @@ pub(crate) enum Error {
     Metadata {
         source: crate::client::header::Error,
     },
+
+    #[error("Error performing bucket request {}: {}", bucket, source)]
+    BucketRequest {
+        source: crate::client::retry::RetryError,
+        bucket: String,
+    },
 }
 
 impl From<Error> for crate::Error {
@@ -131,6 +137,7 @@ impl From<Error> for crate::Error {
         match err {
             Error::CompleteMultipartRequest { source, path } => source.error(STORE, path),
             Error::DeleteObjectsRequest { source, paths } => source.error(STORE, paths.join(",")),
+            Error::BucketRequest { source, bucket } => source.error(STORE, bucket),
             _ => Self::Generic {
                 store: STORE,
                 source: Box::new(err),
@@ -899,6 +906,100 @@ impl S3Client {
         })
     }
 
+    /// Make an S3 CreateBucket request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_CreateBucket.html>
+    pub(crate) async fn create_bucket(&self) -> Result<()> {
+        let builder = self.bucket_request(Method::PUT);
+        let builder = match self.config.region.as_str() {
+            // S3 rejects us-east-1 as a LocationConstraint, and R2's "auto" is not a location
+            "us-east-1" | "auto" => builder.header(CONTENT_LENGTH, "0"),
+            region => {
+                let region = quick_xml::escape::escape(region);
+                let body = Bytes::from(format!(
+                    "<CreateBucketConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><LocationConstraint>{region}</LocationConstraint></CreateBucketConfiguration>"
+                ));
+                builder
+                    .header(CONTENT_TYPE, "application/xml")
+                    .header(CONTENT_LENGTH, body.len())
+                    .body(body)
+            }
+        };
+
+        self.sign_bucket_request(builder)
+            .await?
+            .send()
+            .await
+            .map_err(|source| self.bucket_error(source))?;
+        Ok(())
+    }
+
+    /// Make an S3 DeleteBucket request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteBucket.html>
+    pub(crate) async fn delete_bucket(&self) -> Result<()> {
+        let request = self
+            .sign_bucket_request(self.bucket_request(Method::DELETE))
+            .await?;
+
+        match request.send().await {
+            Ok(_) => Ok(()),
+            // A conflict means the bucket is not empty, not that it already exists
+            Err(source) if source.status() == Some(StatusCode::CONFLICT) => {
+                Err(crate::Error::Generic {
+                    store: STORE,
+                    source: Box::new(self.bucket_error(source)),
+                })
+            }
+            Err(source) => Err(self.bucket_error(source).into()),
+        }
+    }
+
+    /// Make an S3 HeadBucket request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadBucket.html>
+    pub(crate) async fn bucket_exists(&self) -> Result<bool> {
+        let request = self
+            .sign_bucket_request(self.bucket_request(Method::HEAD))
+            .await?;
+
+        match request.idempotent(true).send().await {
+            Ok(_) => Ok(true),
+            Err(source) if source.status() == Some(StatusCode::NOT_FOUND) => Ok(false),
+            Err(source) => Err(self.bucket_error(source).into()),
+        }
+    }
+
+    /// Start a request addressed to the bucket itself rather than to an object in it
+    fn bucket_request(&self, method: Method) -> HttpRequestBuilder {
+        let mut builder = self.client.request(method, &self.config.bucket_endpoint);
+        if let Some(headers) = self.config.client_options.get_default_headers() {
+            builder = builder.headers(headers.clone());
+        }
+        builder
+    }
+
+    /// Sign a request from [`Self::bucket_request`], ready to send
+    async fn sign_bucket_request(
+        &self,
+        builder: HttpRequestBuilder,
+    ) -> Result<RetryableRequestBuilder> {
+        crate::bucket::validate_bucket_name(STORE, &self.config.bucket)?;
+        if self.config.is_s3_express() {
+            return Err(crate::Error::NotSupported {
+                source:
+                    "bucket operations are not supported for S3 Express One Zone directory buckets"
+                        .into(),
+            });
+        }
+        let credential = self.config.get_session_credential().await?;
+        let authorizer = credential.as_ref().map(|x| x.authorizer()).transpose()?;
+        Ok(builder
+            .with_aws_sigv4(authorizer, None)?
+            .retryable(&self.config.retry_config))
+    }
+
+    fn bucket_error(&self, source: RetryError) -> Error {
+        Error::BucketRequest {
+            source,
+            bucket: self.config.bucket.clone(),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) async fn get_object_tagging(&self, path: &Path) -> Result<HttpResponse> {
         let credential = self.config.get_session_credential().await?;
@@ -1054,9 +1155,10 @@ mod tests {
     use crate::GetOptions;
     use crate::ObjectStore;
     use crate::aws::{AmazonS3, AmazonS3Builder};
+    use crate::bucket::BucketStore;
     use crate::client::HttpClient;
     use crate::client::get::GetClient;
-    use crate::client::mock_server::MockServer;
+    use crate::client::mock_server::{MockServer, RequestLog};
     use crate::client::retry::RetryContext;
     use futures_util::{StreamExt, TryStreamExt};
     use http::Response;
@@ -1419,6 +1521,201 @@ mod tests {
             )
             .await
             .unwrap();
+        mock.shutdown().await;
+    }
+
+    fn create_bucket_body(location: &str) -> String {
+        format!(
+            "<CreateBucketConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><LocationConstraint>{location}</LocationConstraint></CreateBucketConfiguration>"
+        )
+    }
+
+    /// Like [`make_store`], but in `region`, and returning the builder for further options.
+    fn bucket_store_builder(mock: &MockServer, region: &str) -> AmazonS3Builder {
+        AmazonS3Builder::new()
+            .with_endpoint(mock.url())
+            .with_bucket_name("test-bucket")
+            .with_region(region)
+            .with_allow_http(true)
+            .with_skip_signature(true)
+    }
+
+    #[tokio::test]
+    async fn test_create_bucket_without_location_constraint() {
+        let mock = MockServer::new().await;
+        let log = RequestLog::default();
+
+        for region in ["us-east-1", "auto"] {
+            mock.push_recorded(&log, 200);
+            let store = bucket_store_builder(&mock, region).build().unwrap();
+            store.create_bucket().await.unwrap();
+
+            let req = log.single();
+            assert_eq!(req.method, Method::PUT, "{region}");
+            assert_eq!(req.path, "/test-bucket", "{region}");
+            assert_eq!(req.query, None, "{region}");
+            assert_eq!(req.headers.get(CONTENT_LENGTH).unwrap(), "0", "{region}");
+            assert!(req.headers.get(CONTENT_TYPE).is_none(), "{region}");
+            assert!(req.body.is_empty(), "{region}");
+        }
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_create_bucket_location_constraint() {
+        let mock = MockServer::new().await;
+        let log = RequestLog::default();
+
+        for (region, location) in [("eu-west-1", "eu-west-1"), ("a&b<c", "a&amp;b&lt;c")] {
+            mock.push_recorded(&log, 200);
+            let store = bucket_store_builder(&mock, region).build().unwrap();
+            store.create_bucket().await.unwrap();
+
+            let req = log.single();
+            let body = create_bucket_body(location);
+            assert_eq!(req.method, Method::PUT);
+            assert_eq!(req.path, "/test-bucket");
+            assert_eq!(req.headers.get(CONTENT_TYPE).unwrap(), "application/xml");
+            assert_eq!(
+                req.headers.get(CONTENT_LENGTH).unwrap(),
+                body.len().to_string().as_str()
+            );
+            assert_eq!(req.body, body);
+        }
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_create_bucket_signs_body() {
+        let mock = MockServer::new().await;
+        let log = RequestLog::default();
+        mock.push_recorded(&log, 200);
+
+        let store = bucket_store_builder(&mock, "eu-west-1")
+            .with_skip_signature(false)
+            .with_access_key_id("AKIAIOSFODNN7EXAMPLE")
+            .with_secret_access_key("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+            .build()
+            .unwrap();
+        store.create_bucket().await.unwrap();
+
+        let req = log.single();
+        assert!(req.headers.contains_key(AUTHORIZATION));
+        // SHA256 of create_bucket_body("eu-west-1")
+        assert_eq!(
+            req.headers.get("x-amz-content-sha256").unwrap(),
+            "a2531158b25edb57200e54140cc1b12d0af943f596ea467c2fbbedcc16223cc5"
+        );
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_bucket_ops_s3_express_not_supported() {
+        let mock = MockServer::new().await;
+        let log = RequestLog::default();
+        mock.push_recorded(&log, 200);
+
+        let store = AmazonS3Builder::new()
+            .with_endpoint(mock.url())
+            .with_bucket_name("test-bucket--usw2-az1--x-s3")
+            .with_region("us-west-2")
+            .with_allow_http(true)
+            .with_access_key_id("key")
+            .with_secret_access_key("secret")
+            .with_s3_express(true)
+            .build()
+            .unwrap();
+        let err = store.create_bucket().await.unwrap_err();
+        assert!(matches!(err, crate::Error::NotSupported { .. }), "{err}");
+        let err = store.delete_bucket().await.unwrap_err();
+        assert!(matches!(err, crate::Error::NotSupported { .. }), "{err}");
+        let err = store.bucket_exists().await.unwrap_err();
+        assert!(matches!(err, crate::Error::NotSupported { .. }), "{err}");
+        assert!(log.take().is_empty(), "no request expected");
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_bucket_ops_reject_unsafe_bucket_name() {
+        let mock = MockServer::new().await;
+        let log = RequestLog::default();
+        mock.push_recorded(&log, 200);
+
+        let store = bucket_store_builder(&mock, "us-east-1")
+            .with_bucket_name("test-bucket?tagging")
+            .build()
+            .unwrap();
+        let err = store.create_bucket().await.unwrap_err();
+        assert!(matches!(err, crate::Error::Generic { .. }), "{err}");
+        let err = store.delete_bucket().await.unwrap_err();
+        assert!(matches!(err, crate::Error::Generic { .. }), "{err}");
+        let err = store.bucket_exists().await.unwrap_err();
+        assert!(matches!(err, crate::Error::Generic { .. }), "{err}");
+        assert!(log.take().is_empty(), "no request expected");
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_bucket_exists() {
+        let mock = MockServer::new().await;
+        let log = RequestLog::default();
+        for status in [200, 404, 403] {
+            mock.push_recorded(&log, status);
+        }
+
+        let store = make_store(&mock, false, false);
+        assert!(store.bucket_exists().await.unwrap());
+        assert!(!store.bucket_exists().await.unwrap());
+        let err = store.bucket_exists().await.unwrap_err();
+        assert!(
+            matches!(&err, crate::Error::PermissionDenied { path, .. } if path == "test-bucket"),
+            "{err}"
+        );
+
+        let requests = log.take();
+        assert_eq!(requests.len(), 3);
+        for req in requests {
+            assert_eq!(req.method, Method::HEAD);
+            assert_eq!(req.path, "/test-bucket");
+            assert_eq!(req.query, None);
+        }
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_delete_bucket() {
+        let mock = MockServer::new().await;
+        let log = RequestLog::default();
+        for status in [204, 409, 404] {
+            mock.push_recorded(&log, status);
+        }
+
+        let store = make_store(&mock, false, false);
+        store.delete_bucket().await.unwrap();
+        // A non-empty bucket must not be reported as AlreadyExists
+        let err = store.delete_bucket().await.unwrap_err();
+        assert!(matches!(err, crate::Error::Generic { .. }), "{err}");
+        assert!(err.to_string().contains("test-bucket"), "{err}");
+        let err = store.delete_bucket().await.unwrap_err();
+        assert!(
+            matches!(&err, crate::Error::NotFound { path, .. } if path == "test-bucket"),
+            "{err}"
+        );
+
+        let requests = log.take();
+        assert_eq!(requests.len(), 3);
+        for req in requests {
+            assert_eq!(req.method, Method::DELETE);
+            assert_eq!(req.path, "/test-bucket");
+            assert_eq!(req.query, None);
+        }
+
         mock.shutdown().await;
     }
 }
