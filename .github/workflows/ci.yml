@@ -63,31 +63,36 @@ jobs:
             exit 1
           fi
           echo "✅ *-base features do not enable reqwest"
-      - name: Check ring build does not pull aws-lc-rs
-        # A `ring` build (with a non-aws-lc-rs reqwest TLS backend) must be free
-        # of aws-lc-rs entirely, so users can opt out of it on every target.
+      - name: Run independent downstream feature examples
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target/downstream
         run: |
-          found=$(cargo tree --no-default-features --features aws-base,azure-base,gcp-base,http-base,reqwest,reqwest/native-tls,ring --edges normal --prefix none -f '{p}' \
-            | grep -E '^(aws-lc-rs|aws-lc-sys) v' | sort -u || true)
-          if [ -n "$found" ]; then
-            echo "❌ aws-lc-rs pulled into a ring-only build:"
-            echo "$found"
-            exit 1
-          fi
-          echo "✅ ring build is free of aws-lc-rs"
-      - name: Check batteries-included features do not pull ring
-        # The batteries-included features use reqwest/rustls, which uses aws-lc-rs
-        # for TLS by default. Keep object_store's default bundled crypto provider
-        # aligned with that choice by ensuring these features don't pull ring.
-        run: |
-          found=$(cargo tree --no-default-features --features aws,azure,gcp,http --edges normal --prefix none -f '{p}' \
-            | grep -E '^ring v' | sort -u || true)
-          if [ -n "$found" ]; then
-            echo "❌ batteries-included features pulled ring:"
-            echo "$found"
-            exit 1
-          fi
-          echo "✅ batteries-included features are free of ring"
+          set -eu
+          rustfmt --check --edition 2024 examples/feature-matrix/common.rs
+          for example in reqwest-ring reqwest-external-crypto custom-http-aws-lc custom-http-ring custom-http-external-crypto batteries-included; do
+            manifest="examples/feature-matrix/$example/Cargo.toml"
+            cargo fmt --check --manifest-path "$manifest"
+            cargo clippy --manifest-path "$manifest" -- -D warnings
+            cargo run --manifest-path "$manifest"
+            tree=$(cargo tree --manifest-path "$manifest" --edges normal --prefix none -f '{p}')
+            case "$example" in
+              reqwest-ring) required='reqwest rustls ring'; forbidden='aws-lc-rs aws-lc-sys native-tls' ;;
+              reqwest-external-crypto) required='reqwest native-tls sha2 hmac'; forbidden='aws-lc-rs aws-lc-sys ring rustls' ;;
+              custom-http-aws-lc) required='aws-lc-rs aws-lc-sys'; forbidden='reqwest ring native-tls openssl rustls' ;;
+              custom-http-ring) required='ring'; forbidden='reqwest aws-lc-rs aws-lc-sys native-tls openssl rustls' ;;
+              custom-http-external-crypto) required='sha2 hmac'; forbidden='reqwest ring aws-lc-rs aws-lc-sys native-tls openssl rustls' ;;
+              batteries-included) required='reqwest aws-lc-rs'; forbidden='ring' ;;
+            esac
+            for crate in $required; do
+              printf '%s\n' "$tree" | grep -E "^$crate v" > /dev/null
+            done
+            for crate in $forbidden; do
+              if printf '%s\n' "$tree" | grep -E "^$crate v"; then
+                echo "Unexpected $crate in $example"
+                exit 1
+              fi
+            done
+          done
       # Run different tests for the library on its own as well as
       # all targets to ensure that it still works in the absence of
       # features that might be enabled by dev-dependencies of other
@@ -114,23 +119,6 @@ jobs:
         run: cargo clippy --no-default-features --features gcp-base -- -D warnings
       - name: Run clippy with http-base feature
         run: cargo clippy --no-default-features --features http-base -- -D warnings
-      # Testing matrix of HTTP and crypto providers
-      #
-      # Improvements tracked in  https://github.com/apache/arrow-rs-object-store/issues/759
-      #
-      # Notes:
-      # Direct `reqwest` needs a TLS backend. Use `rustls-no-provider` so TLS
-      # does not add AWS-LC to ring/custom CryptoProvider checks.
-      - name: Run clippy with base features, reqwest and ring CryptoProvider
-        run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base,reqwest,reqwest/rustls-no-provider,ring -- -D warnings
-      - name: Run clippy with base features, reqwest and no bundled CryptoProvider
-        run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base,reqwest,reqwest/rustls-no-provider -- -D warnings
-      - name: Run clippy with base features, custom HTTP and aws-lc-rs CryptoProvider
-        run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base,aws-lc-rs,aws-lc-rs/aws-lc-sys -- -D warnings
-      - name: Run clippy with base features, custom HTTP and ring CryptoProvider
-        run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base,ring -- -D warnings
-      - name: Run clippy with base features, custom HTTP and no bundled CryptoProvider
-        run: cargo clippy --no-default-features --features aws-base,azure-base,gcp-base,http-base -- -D warnings
       - name: Run clippy with integration feature
         run: cargo clippy --no-default-features --features integration -- -D warnings
       - name: Run clippy with all features
