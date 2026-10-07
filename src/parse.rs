@@ -122,7 +122,8 @@ impl ObjectStoreScheme {
                 {
                     (Self::MicrosoftAzure, strip_bucket().unwrap_or_default())
                 } else if host.ends_with("amazonaws.com") {
-                    match host.starts_with("s3") {
+                    // Virtual-hosted URLs have a bucket name before the S3 service label.
+                    match host.starts_with("s3") && !host.contains(".s3") {
                         true => (Self::AmazonS3, strip_bucket().unwrap_or_default()),
                         false => (Self::AmazonS3, url.path()),
                     }
