@@ -402,6 +402,38 @@ mod tests {
                 "https://account.blob.fabric.microsoft.com/container/path",
                 (ObjectStoreScheme::MicrosoftAzure, "path"),
             ),
+            // Regression: bucket names starting with "s3" must not cause virtual-hosted
+            // URLs to lose the first object-key segment.
+            // Path-style URLs must still strip the bucket segment from the path.
+            (
+                "https://s3.us-east-1.amazonaws.com/s3bucket/table/file.parquet",
+                (ObjectStoreScheme::AmazonS3, "table/file.parquet"),
+            ),
+            // Virtual-hosted URLs must retain every object-key segment.
+            (
+                "https://s3bucket.s3.us-east-1.amazonaws.com/table/file.parquet",
+                (ObjectStoreScheme::AmazonS3, "table/file.parquet"),
+            ),
+            (
+                "https://s3bucket.s3.amazonaws.com/table/file.parquet",
+                (ObjectStoreScheme::AmazonS3, "table/file.parquet"),
+            ),
+            (
+                "https://s3-bucket.s3.us-east-1.amazonaws.com/table/file.parquet",
+                (ObjectStoreScheme::AmazonS3, "table/file.parquet"),
+            ),
+            (
+                "https://s3-bucket.s3.amazonaws.com/table/file.parquet",
+                (ObjectStoreScheme::AmazonS3, "table/file.parquet"),
+            ),
+            (
+                "https://s3bucket.s3.dualstack.us-east-1.amazonaws.com/table/file.parquet",
+                (ObjectStoreScheme::AmazonS3, "table/file.parquet"),
+            ),
+            (
+                "https://s3bucket.s3.us-east-1.amazonaws.com/file.parquet",
+                (ObjectStoreScheme::AmazonS3, "file.parquet"),
+            ),
         ];
 
         for (s, (expected_scheme, expected_path)) in cases {
