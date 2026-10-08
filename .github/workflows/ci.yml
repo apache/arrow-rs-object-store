@@ -275,6 +275,13 @@ jobs:
       - name: Run object_store tests with ring crypto provider
         run: env -u TEST_INTEGRATION cargo test --lib --tests --no-default-features --features fs,aws-base,azure-base,gcp-base,http-base,reqwest,reqwest/native-tls,ring
 
+      - name: Run downstream crypto provider tests
+        run: |
+          cargo fmt --manifest-path tests/crypto-provider/Cargo.toml -- --check
+          cargo test --manifest-path tests/crypto-provider/Cargo.toml
+          cargo test --manifest-path tests/crypto-provider/Cargo.toml --features bundled-ring
+          cargo test --manifest-path tests/crypto-provider/Cargo.toml --features default-aws
+
       - name: GCS Output
         if: ${{ !cancelled() }}
         run: docker logs $GCS_CONTAINER
