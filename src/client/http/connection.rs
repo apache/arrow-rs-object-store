@@ -293,6 +293,12 @@ pub trait HttpConnector: std::fmt::Debug + Send + Sync + 'static {
     fn connect(&self, options: &ClientOptions) -> crate::Result<HttpClient>;
 }
 
+impl<T: HttpConnector + ?Sized> HttpConnector for Arc<T> {
+    fn connect(&self, options: &ClientOptions) -> crate::Result<HttpClient> {
+        self.as_ref().connect(options)
+    }
+}
+
 /// [`HttpConnector`] using [`reqwest::Client`]
 #[derive(Debug, Default)]
 #[allow(missing_copy_implementations)]

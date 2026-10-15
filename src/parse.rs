@@ -16,10 +16,14 @@
 // under the License.
 
 use crate::ObjectStore;
+#[cfg(feature = "cloud-base")]
+use crate::client::HttpConnector;
 #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
 use crate::local::LocalFileSystem;
 use crate::memory::InMemory;
 use crate::path::Path;
+#[cfg(feature = "cloud-base")]
+use std::sync::Arc;
 use url::Url;
 
 #[derive(Debug, thiserror::Error)]
@@ -141,7 +145,7 @@ impl ObjectStoreScheme {
 
 #[cfg(feature = "cloud-base")]
 macro_rules! builder_opts {
-    ($builder:ty, $url:expr, $options:expr) => {{
+    ($builder:ty, $url:expr, $options:expr, $connector:expr) => {{
         let builder = $options.into_iter().fold(
             <$builder>::new().with_url($url.to_string()),
             |builder, (key, value)| match key.as_ref().to_ascii_lowercase().parse() {
@@ -149,6 +153,10 @@ macro_rules! builder_opts {
                 Err(_) => builder,
             },
         );
+        let builder = match $connector {
+            Some(connector) => builder.with_http_connector(connector),
+            None => builder,
+        };
         Box::new(builder.build()?) as _
     }};
 }
@@ -193,6 +201,42 @@ where
     K: AsRef<str>,
     V: Into<String>,
 {
+    parse_url_opts_impl(
+        url,
+        options,
+        #[cfg(feature = "cloud-base")]
+        None,
+    )
+}
+
+/// Create an [`ObjectStore`] with the URL and options accepted by [`parse_url_opts`].
+///
+/// Cloud and HTTP stores use `connector` when provided, or their default connector otherwise.
+/// Local and in-memory stores ignore the connector.
+#[cfg(feature = "cloud-base")]
+pub fn parse_url_opts_with_http_connector<I, K, V>(
+    url: &Url,
+    options: I,
+    connector: Option<Arc<dyn HttpConnector>>,
+) -> Result<(Box<dyn ObjectStore>, Path), super::Error>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<str>,
+    V: Into<String>,
+{
+    parse_url_opts_impl(url, options, connector)
+}
+
+fn parse_url_opts_impl<I, K, V>(
+    url: &Url,
+    options: I,
+    #[cfg(feature = "cloud-base")] _connector: Option<Arc<dyn HttpConnector>>,
+) -> Result<(Box<dyn ObjectStore>, Path), super::Error>
+where
+    I: IntoIterator<Item = (K, V)>,
+    K: AsRef<str>,
+    V: Into<String>,
+{
     let _options = options;
     let (scheme, path) = ObjectStoreScheme::parse(url)?;
     let path = Path::parse(path)?;
@@ -203,20 +247,30 @@ where
         ObjectStoreScheme::Memory => Box::new(InMemory::new()) as _,
         #[cfg(feature = "aws-base")]
         ObjectStoreScheme::AmazonS3 => {
-            builder_opts!(crate::aws::AmazonS3Builder, url, _options)
+            builder_opts!(crate::aws::AmazonS3Builder, url, _options, _connector)
         }
         #[cfg(feature = "gcp-base")]
         ObjectStoreScheme::GoogleCloudStorage => {
-            builder_opts!(crate::gcp::GoogleCloudStorageBuilder, url, _options)
+            builder_opts!(
+                crate::gcp::GoogleCloudStorageBuilder,
+                url,
+                _options,
+                _connector
+            )
         }
         #[cfg(feature = "azure-base")]
         ObjectStoreScheme::MicrosoftAzure => {
-            builder_opts!(crate::azure::MicrosoftAzureBuilder, url, _options)
+            builder_opts!(
+                crate::azure::MicrosoftAzureBuilder,
+                url,
+                _options,
+                _connector
+            )
         }
         #[cfg(feature = "http-base")]
         ObjectStoreScheme::Http => {
             let url = &url[..url::Position::BeforePath];
-            builder_opts!(crate::http::HttpBuilder, url, _options)
+            builder_opts!(crate::http::HttpBuilder, url, _options, _connector)
         }
         #[cfg(not(all(
             feature = "fs",

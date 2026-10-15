@@ -771,6 +771,8 @@ pub mod integration;
 
 pub use attributes::*;
 
+#[cfg(feature = "cloud-base")]
+pub use parse::parse_url_opts_with_http_connector;
 pub use parse::{ObjectStoreScheme, parse_url, parse_url_opts};
 pub use payload::*;
 pub use upload::*;
