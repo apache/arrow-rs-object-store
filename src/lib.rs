@@ -1637,6 +1637,8 @@ pub struct GetOptions {
     /// Request will succeed if the `ObjectMeta::e_tag` matches
     /// otherwise returning [`Error::Precondition`]
     ///
+    /// Uses strong entity-tag comparison: weak entity tags do not match.
+    ///
     /// See <https://datatracker.ietf.org/doc/html/rfc9110#name-if-match>
     ///
     /// Examples:
@@ -1649,6 +1651,8 @@ pub struct GetOptions {
     pub if_match: Option<String>,
     /// Request will succeed if the `ObjectMeta::e_tag` does not match
     /// otherwise returning [`Error::NotModified`]
+    ///
+    /// Uses weak entity-tag comparison: `W/"xyzzy"` matches `"xyzzy"`.
     ///
     /// See <https://datatracker.ietf.org/doc/html/rfc9110#section-13.1.2>
     ///
@@ -1700,7 +1704,9 @@ impl GetOptions {
         let last_modified = meta.last_modified;
 
         if let Some(m) = &self.if_match {
-            if m != "*" && m.split(',').map(str::trim).all(|x| x != etag) {
+            if m != "*"
+                && (etag.starts_with("W/") || m.split(',').map(str::trim).all(|x| x != etag))
+            {
                 return Err(Error::Precondition {
                     path: meta.location.to_string(),
                     source: format!("{etag} does not match {m}").into(),
@@ -1716,7 +1722,12 @@ impl GetOptions {
         }
 
         if let Some(m) = &self.if_none_match {
-            if m == "*" || m.split(',').map(str::trim).any(|x| x == etag) {
+            let weak_etag = etag.strip_prefix("W/").unwrap_or(etag);
+            if m == "*"
+                || m.split(',')
+                    .map(str::trim)
+                    .any(|x| x.strip_prefix("W/").unwrap_or(x) == weak_etag)
+            {
                 return Err(Error::NotModified {
                     path: meta.location.to_string(),
                     source: format!("{etag} matches {m}").into(),
@@ -2533,6 +2544,95 @@ mod tests {
         let store = memory::InMemory::new();
         let mut stream = list_store(&store, "path");
         assert!(stream.next().await.is_none());
+    }
+
+    #[test]
+    fn test_preconditions_if_none_match_weak_etags() {
+        // RFC 9110 section 8.8.3.2: weak comparison ignores the weakness flag.
+        for (etag, condition) in [
+            ("\"1\"", "W/\"1\""),
+            ("W/\"1\"", "\"1\""),
+            ("W/\"1\"", "W/\"1\""),
+            ("\"1\"", "\"1\""),
+            ("\"1\"", "\"other\", W/\"1\""),
+            ("W/\"1\"", " W/\"other\", \"1\" "),
+        ] {
+            let meta = ObjectMeta {
+                location: Path::from("test"),
+                last_modified: Utc.timestamp_nanos(100),
+                size: 4,
+                e_tag: Some(etag.to_string()),
+                version: None,
+            };
+            let options = GetOptions::new().with_if_none_match(Some(condition));
+            assert!(
+                matches!(
+                    options.check_preconditions(&meta),
+                    Err(Error::NotModified { .. })
+                ),
+                "{condition} should weakly match {etag}"
+            );
+            for other in ["\"2\"", "W/\"2\"", "w/\"1\""] {
+                GetOptions::new()
+                    .with_if_none_match(Some(other))
+                    .check_preconditions(&meta)
+                    .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn test_preconditions_if_match_rejects_weak_etags() {
+        for (etag, condition) in [
+            ("W/\"1\"", "W/\"1\""),
+            ("W/\"1\"", "\"1\""),
+            ("\"1\"", "W/\"1\""),
+            ("W/\"1\"", "\"other\", W/\"1\""),
+        ] {
+            let meta = ObjectMeta {
+                location: Path::from("test"),
+                last_modified: Utc.timestamp_nanos(100),
+                size: 4,
+                e_tag: Some(etag.to_string()),
+                version: None,
+            };
+            assert!(matches!(
+                GetOptions::new()
+                    .with_if_match(Some(condition))
+                    .check_preconditions(&meta),
+                Err(Error::Precondition { .. })
+            ));
+            GetOptions::new()
+                .with_if_match(Some("*"))
+                .check_preconditions(&meta)
+                .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn test_preconditions_in_memory_weak_if_none_match() {
+        let store = memory::InMemory::new();
+        let path = Path::from("cached-object");
+        let result = store
+            .put(&path, Bytes::from_static(b"data").into())
+            .await
+            .unwrap();
+        let etag = result.e_tag.unwrap();
+        let options = GetOptions::new().with_if_none_match(Some(format!("W/{etag}")));
+        assert!(matches!(
+            store.get_opts(&path, options).await,
+            Err(Error::NotModified { .. })
+        ));
+
+        let options = GetOptions::new().with_if_none_match(Some("W/\"different\""));
+        let bytes = store
+            .get_opts(&path, options)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(bytes, Bytes::from_static(b"data"));
     }
 
     #[test]
