@@ -480,7 +480,7 @@ mod test {
                 .with_bucket_name("test-bucket")
                 .with_base_url(mock.url())
                 .with_client_options(ClientOptions::new().with_allow_http(true))
-                .with_credentials(credentials.clone())
+                .with_credentials(Arc::<CountingCredentialProvider>::clone(&credentials))
                 .with_skip_signature(skip_signature)
                 .build()
                 .unwrap()
