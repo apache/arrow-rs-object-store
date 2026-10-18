@@ -1012,9 +1012,12 @@ impl ListClient for Arc<S3Client> {
             query.push(("max-keys", max_keys_str.as_ref()))
         }
 
-        let response = self
-            .client
-            .request(Method::GET, &url)
+        let mut builder = self.client.request(Method::GET, &url);
+        if let Some(headers) = self.config.client_options.get_default_headers() {
+            builder = builder.headers(headers.clone());
+        }
+
+        let response = builder
             .extensions(opts.extensions)
             .query(&query)
             .with_aws_sigv4(authorizer, None)?
@@ -1388,6 +1391,52 @@ mod tests {
 
         assert!(result.is_ok());
         mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_default_headers_signed_list_request() {
+        let mock = MockServer::new().await;
+        // Checked after the request returns, since `MockServer` swallows a
+        // panic raised inside its handler.
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured_in_mock = Arc::clone(&captured);
+        mock.push_fn(move |req| {
+            captured_in_mock.lock().unwrap().push(req.headers().clone());
+            Response::builder()
+                .status(200)
+                .body(
+                    "<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>"
+                        .to_string(),
+                )
+                .unwrap()
+        });
+
+        let config = default_headers_config(&mock);
+        let client = Arc::new(S3Client::new(
+            config,
+            HttpClient::new(reqwest::Client::new()),
+        ));
+        client
+            .list_request(Some("test/"), PaginatedListOptions::default())
+            .await
+            .unwrap();
+        mock.shutdown().await;
+
+        let captured = captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        let headers = &captured[0];
+        assert_eq!(headers.get("x-amz-meta-test").unwrap(), "test-value");
+        assert_eq!(headers.get("x-amz-tagging").unwrap(), "key=value");
+        let auth = headers.get(AUTHORIZATION).unwrap().to_str().unwrap();
+        assert!(
+            auth.contains("x-amz-meta-test"),
+            "x-amz-meta-test not in SignedHeaders: {auth}"
+        );
+        assert!(
+            auth.contains("x-amz-tagging"),
+            "x-amz-tagging not in SignedHeaders: {auth}"
+        );
     }
 
     #[cfg(feature = "reqwest")]
