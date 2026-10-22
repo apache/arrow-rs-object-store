@@ -19,8 +19,6 @@
 use std::fs::{File, Metadata, OpenOptions, metadata, symlink_metadata};
 use std::io::{ErrorKind, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
-#[cfg(target_family = "unix")]
-use std::os::unix::fs::FileExt;
 #[cfg(target_family = "windows")]
 use std::os::windows::fs::FileExt;
 use std::sync::Arc;
@@ -1242,6 +1240,50 @@ pub(crate) fn chunked_stream(
     .boxed()
 }
 
+/// Reads from `file` at `offset` into the spare capacity of `buf`, without initializing it
+/// first, and extends the length of `buf` by the number of bytes read.
+///
+/// This avoids zero-filling every buffer before reading into it, as `read_at` on a `&mut [u8]`
+/// would require. std has no stable positioned read into uninitialized memory yet, so this calls
+/// `pread` directly.
+#[cfg(target_family = "unix")]
+fn read_at_uninit(file: &File, buf: &mut Vec<u8>, offset: u64) -> io::Result<usize> {
+    use nix::libc;
+    use std::os::fd::AsRawFd;
+
+    // Like std, cap the size of a single read: macOS fails reads larger than `c_int::MAX`
+    // with EINVAL. The caller loops until the range is filled.
+    const MAX_READ: usize = libc::c_int::MAX as usize - 1;
+
+    let spare = buf.spare_capacity_mut();
+    let len = spare.len().min(MAX_READ);
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let read = {
+        let offset = libc::off64_t::try_from(offset).map_err(|_| ErrorKind::InvalidInput)?;
+        // SAFETY: `spare` is valid for writes of `len` bytes, and pread writes at most `len`
+        // bytes into it.
+        unsafe { libc::pread64(file.as_raw_fd(), spare.as_mut_ptr().cast(), len, offset) }
+    };
+
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let read = {
+        let offset = libc::off_t::try_from(offset).map_err(|_| ErrorKind::InvalidInput)?;
+        // SAFETY: `spare` is valid for writes of `len` bytes, and pread writes at most `len`
+        // bytes into it.
+        unsafe { libc::pread(file.as_raw_fd(), spare.as_mut_ptr().cast(), len, offset) }
+    };
+
+    if read < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let read = read as usize;
+    // SAFETY: pread initialized the first `read` bytes of the spare capacity, and `read <= len`
+    // so the new length stays within the capacity.
+    unsafe { buf.set_len(buf.len() + read) };
+    Ok(read)
+}
+
 pub(crate) fn read_range(
     file: &mut File,
     path: &std::path::Path,
@@ -1253,25 +1295,25 @@ pub(crate) fn read_range(
 
     #[cfg(any(target_family = "unix", target_family = "windows"))]
     {
+        // On unix, `read_at_uninit` reads straight into the spare capacity of `buf`. There is no
+        // equivalent on Windows yet, so zero-fill the buffer and read into it with `seek_read`.
+        #[cfg(target_family = "windows")]
         buf.resize(requested as usize, 0_u8);
 
-        let mut buf_slice = &mut buf[..];
-        let mut offset = range.start;
+        let mut filled = 0_usize;
 
-        while !buf_slice.is_empty() {
+        while (filled as u64) < requested {
+            let offset = range.start + filled as u64;
+
             #[cfg(target_family = "unix")]
-            let read_result = file.read_at(buf_slice, offset);
+            let read_result = read_at_uninit(file, &mut buf, offset);
 
             #[cfg(target_family = "windows")]
-            let read_result = file.seek_read(buf_slice, offset);
+            let read_result = file.seek_read(&mut buf[filled..], offset);
 
             match read_result {
                 Ok(0) => break,
-                Ok(n) => {
-                    let tmp = buf_slice;
-                    buf_slice = &mut tmp[n..];
-                    offset += n as u64;
-                }
+                Ok(n) => filled += n,
                 // This error is recoverable
                 Err(e) if e.kind() == ErrorKind::Interrupted => {}
                 Err(source) => {
@@ -1286,7 +1328,7 @@ pub(crate) fn read_range(
         }
 
         // If we reached EOF before filling the buffer
-        if !buf_slice.is_empty() {
+        if (filled as u64) < requested {
             let metadata = open_metadata(file, path)?;
             let file_len = metadata.len();
 
@@ -1308,7 +1350,7 @@ pub(crate) fn read_range(
             let error = Error::OutOfRange {
                 path: path.into(),
                 expected,
-                actual: offset - range.start,
+                actual: filled as u64,
             };
 
             return Err(error.into());
@@ -1763,6 +1805,36 @@ mod tests {
 
         let read_data = integration.get_range(&location, 0..100).await.unwrap();
         assert_eq!(&*read_data, data);
+    }
+
+    #[test]
+    fn read_range_reads_exact_bytes() {
+        let root = TempDir::new().unwrap();
+        let path = root.path().join("some_file");
+
+        // Position-dependent content, larger than a single small read
+        let data: Vec<u8> = (0..(3 << 20) as u32).map(|i| (i % 251) as u8).collect();
+        std::fs::write(&path, &data).unwrap();
+        let mut file = File::open(&path).unwrap();
+
+        for range in [
+            0..0,
+            0..1,
+            7..4103,
+            1000..(1 << 20) + 1000,
+            0..data.len() as u64,
+        ] {
+            let got = read_range(&mut file, &path, range.clone()).unwrap();
+            assert_eq!(&*got, &data[range.start as usize..range.end as usize]);
+        }
+
+        // A range that ends past EOF reports how many bytes it could read
+        let len = data.len() as u64;
+        let err = read_range(&mut file, &path, len - 10..len + 10).unwrap_err();
+        assert!(
+            err.to_string().contains("expected: 10, actual: 10"),
+            "{err}"
+        );
     }
 
     #[tokio::test]
