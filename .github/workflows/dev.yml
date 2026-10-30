@@ -38,6 +38,6 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v7
         with:
-          python-version: 3.8
+          python-version: '3.x'
       - name: Audit licenses
         run: ./dev/release/run-rat.sh .
