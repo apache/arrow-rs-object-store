@@ -17,13 +17,16 @@
 
 use crate::client::{HttpClient, HttpError, HttpErrorKind, HttpRequest, HttpRequestBody};
 use http::header::{InvalidHeaderName, InvalidHeaderValue};
-use http::uri::InvalidUri;
+use http::uri::{InvalidUri, InvalidUriParts};
 use http::{HeaderName, HeaderValue, Method, Uri};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RequestBuilderError {
     #[error("Invalid URI")]
     InvalidUri(#[from] InvalidUri),
+
+    #[error("Invalid URI parts: {0}")]
+    InvalidUriParts(#[from] InvalidUriParts),
 
     #[error("Invalid Header Value")]
     InvalidHeaderValue(#[from] InvalidHeaderValue),
@@ -40,7 +43,7 @@ pub(crate) enum RequestBuilderError {
 
 impl From<RequestBuilderError> for HttpError {
     fn from(value: RequestBuilderError) -> Self {
-        Self::new(HttpErrorKind::Request, value)
+        Self::new(HttpErrorKind::InvalidRequest, value)
     }
 }
 
@@ -203,29 +206,18 @@ impl HttpRequestBuilder {
         feature = "azure-base"
     ))]
     pub(crate) fn query<T: serde::Serialize + ?Sized>(mut self, query: &T) -> Self {
-        let mut error = None;
-        if let Ok(ref mut req) = self.request {
+        self.request = self.request.and_then(|mut req| {
             let mut out = format!("{}?", req.uri().path());
             let start_position = out.len();
             let mut encoder = form_urlencoded::Serializer::for_suffix(&mut out, start_position);
             let serializer = serde_urlencoded::Serializer::new(&mut encoder);
+            query.serialize(serializer)?;
 
-            if let Err(err) = query.serialize(serializer) {
-                error = Some(err.into());
-            }
-
-            match http::uri::PathAndQuery::from_maybe_shared(out) {
-                Ok(p) => {
-                    let mut parts = req.uri().clone().into_parts();
-                    parts.path_and_query = Some(p);
-                    *req.uri_mut() = Uri::from_parts(parts).unwrap();
-                }
-                Err(err) => error = Some(err.into()),
-            }
-        }
-        if let Some(err) = error {
-            self.request = Err(err);
-        }
+            let mut parts = req.uri().clone().into_parts();
+            parts.path_and_query = Some(http::uri::PathAndQuery::from_maybe_shared(out)?);
+            *req.uri_mut() = Uri::from_parts(parts)?;
+            Ok(req)
+        });
         self
     }
 
@@ -264,7 +256,10 @@ impl HttpRequestBuilder {
 }
 
 #[cfg(any(test, feature = "azure-base"))]
-pub(crate) fn add_query_pairs<I, K, V>(uri: &mut Uri, query_pairs: I)
+pub(crate) fn add_query_pairs<I, K, V>(
+    uri: &mut Uri,
+    query_pairs: I,
+) -> Result<(), RequestBuilderError>
 where
     I: IntoIterator,
     I::Item: std::borrow::Borrow<(K, V)>,
@@ -289,8 +284,9 @@ where
 
     serializer.extend_pairs(query_pairs);
 
-    parts.path_and_query = Some(out.try_into().unwrap());
-    *uri = Uri::from_parts(parts).unwrap();
+    parts.path_and_query = Some(out.try_into()?);
+    *uri = Uri::from_parts(parts)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -301,16 +297,16 @@ mod tests {
     fn test_add_query_pairs() {
         let mut uri = Uri::from_static("https://foo@example.com/bananas");
 
-        add_query_pairs(&mut uri, [("foo", "1")]);
+        add_query_pairs(&mut uri, [("foo", "1")]).unwrap();
         assert_eq!(uri.to_string(), "https://foo@example.com/bananas?foo=1");
 
-        add_query_pairs(&mut uri, [("bingo", "foo"), ("auth", "test")]);
+        add_query_pairs(&mut uri, [("bingo", "foo"), ("auth", "test")]).unwrap();
         assert_eq!(
             uri.to_string(),
             "https://foo@example.com/bananas?foo=1&bingo=foo&auth=test"
         );
 
-        add_query_pairs(&mut uri, [("t1", "funky shenanigans"), ("a", "😀")]);
+        add_query_pairs(&mut uri, [("t1", "funky shenanigans"), ("a", "😀")]).unwrap();
         assert_eq!(
             uri.to_string(),
             "https://foo@example.com/bananas?foo=1&bingo=foo&auth=test&t1=funky+shenanigans&a=%F0%9F%98%80"
@@ -320,7 +316,7 @@ mod tests {
     #[test]
     fn test_add_query_pairs_no_path() {
         let mut uri = Uri::from_static("https://foo@example.com");
-        add_query_pairs(&mut uri, [("foo", "1")]);
+        add_query_pairs(&mut uri, [("foo", "1")]).unwrap();
         assert_eq!(uri.to_string(), "https://foo@example.com/?foo=1");
     }
 
@@ -346,6 +342,42 @@ mod tests {
                 .query(&[("foo", "1")]),
             "http://example.com/?foo=1",
         );
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[test]
+    fn test_query_invalid_uri() {
+        let client = HttpClient::new(reqwest::Client::new());
+        let (_, result) = HttpRequestBuilder::new(client)
+            .uri("example.invalid")
+            .query(&[("list-type", "2")])
+            .header("x-test", "valid")
+            .into_parts();
+        assert!(matches!(
+            result,
+            Err(RequestBuilderError::InvalidUriParts(_))
+        ));
+    }
+
+    #[test]
+    fn test_add_query_pairs_invalid_uri() {
+        let mut uri = Uri::from_static("example.invalid");
+        let original = uri.clone();
+        assert!(add_query_pairs(&mut uri, [("foo", "bar")]).is_err());
+        assert_eq!(uri, original);
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[test]
+    fn test_query_serialization_error() {
+        let client = HttpClient::new(reqwest::Client::new());
+        let (_, result) = HttpRequestBuilder::new(client)
+            .uri("example.invalid")
+            .query(&42)
+            .uri("https://example.invalid")
+            .query(&[("foo", "bar")])
+            .into_parts();
+        assert!(matches!(result, Err(RequestBuilderError::SerdeUrl(_))));
     }
 
     fn assert_request_uri(builder: HttpRequestBuilder, expected: &str) {

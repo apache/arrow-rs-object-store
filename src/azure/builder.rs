@@ -64,6 +64,9 @@ enum Error {
         source: url::ParseError,
     },
 
+    #[error("Endpoint URL cannot be used as a base")]
+    InvalidEndpoint,
+
     #[error("Account must be specified")]
     MissingAccount {},
 
@@ -1246,6 +1249,10 @@ impl MicrosoftAzureBuilder {
             // Allow overriding defaults. Values taken from
             // from https://docs.rs/azure_storage/0.2.0/src/azure_storage/core/clients/storage_account_client.rs.html#129-141
             let url = url_from_env("AZURITE_BLOB_STORAGE_URL", "http://127.0.0.1:10000")?;
+            if url.cannot_be_a_base() {
+                return Err(Error::InvalidEndpoint.into());
+            }
+
             let credential = if let Some(k) = self.access_key {
                 AzureCredential::AccessKey(AzureAccessKey::try_new(&k)?)
             } else if let Some(bearer_token) = self.bearer_token {
@@ -1276,6 +1283,10 @@ impl MicrosoftAzureBuilder {
                 let url = account_url.clone();
                 Error::UnableToParseUrl { url, source }
             })?;
+
+            if url.cannot_be_a_base() {
+                return Err(Error::InvalidEndpoint.into());
+            }
 
             let credential = if let Some(credential) = self.credentials {
                 credential
