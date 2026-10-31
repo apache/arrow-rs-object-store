@@ -30,7 +30,7 @@ use base64::Engine;
 use base64::prelude::BASE64_URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 use futures_util::TryFutureExt;
-use http::{HeaderMap, Method};
+use http::{HeaderMap, Method, header::ACCEPT_ENCODING};
 use itertools::Itertools;
 use percent_encoding::utf8_percent_encode;
 use serde::Deserialize;
@@ -406,6 +406,7 @@ async fn make_metadata_request(
         format!("http://{hostname}/computeMetadata/v1/instance/service-accounts/default/token");
     let response: TokenResponse = client
         .get(url)
+        .header(ACCEPT_ENCODING, "identity")
         .header("Metadata-Flavor", "Google")
         .query(&[("audience", "https://www.googleapis.com/oauth2/v4/token")])
         .send_retry(retry)
@@ -471,6 +472,7 @@ async fn make_metadata_request_for_email(
         format!("http://{hostname}/computeMetadata/v1/instance/service-accounts/default/email",);
     let response = client
         .get(url)
+        .header(ACCEPT_ENCODING, "identity")
         .header("Metadata-Flavor", "Google")
         .send_retry(retry)
         .await
@@ -619,6 +621,7 @@ async fn get_token_response(
 ) -> Result<TokenResponse> {
     client
         .post(DEFAULT_TOKEN_GCP_URI)
+        .header(ACCEPT_ENCODING, "identity")
         .form([
             ("grant_type", "refresh_token"),
             ("client_id", client_id),
@@ -674,6 +677,7 @@ impl AuthorizedUserSigningCredentials {
         // Fallback to the original method if id_token is not available or invalid
         let response = client
             .get("https://oauth2.googleapis.com/tokeninfo")
+            .header(ACCEPT_ENCODING, "identity")
             .query(&[("access_token", response.access_token)])
             .send_retry(retry)
             .await
@@ -954,11 +958,290 @@ impl CredentialExt for HttpRequestBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    use crate::client::get::GetClientExt;
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    use crate::client::mock_server::MockServer;
     use crate::client::{
         ClientOptions, DigestAlgorithm, DigestContext, HmacContext, StaticCredentialProvider,
     };
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    use crate::client::{HttpRequest, HttpResponse, HttpService};
     use crate::gcp::client::{GoogleCloudStorageClient, GoogleCloudStorageConfig};
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    use crate::{GetOptions, Path};
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    use bytes::Bytes;
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    use http::Method;
     use http::{HeaderName, HeaderValue};
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    use parking_lot::Mutex;
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    #[derive(Debug)]
+    struct RequestAttempt {
+        method: Method,
+        path_query: String,
+        headers: HeaderMap,
+        body: Option<Vec<u8>>,
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    #[derive(Debug)]
+    struct ServerRequest {
+        method: Method,
+        path_query: String,
+        headers: HeaderMap,
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    #[derive(Debug)]
+    struct UriRedirectService {
+        client: reqwest::Client,
+        base: String,
+        attempts: Arc<Mutex<Vec<RequestAttempt>>>,
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    #[async_trait::async_trait]
+    impl HttpService for UriRedirectService {
+        async fn call(
+            &self,
+            mut request: HttpRequest,
+        ) -> std::result::Result<HttpResponse, HttpError> {
+            let path = request
+                .uri()
+                .path_and_query()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "/".to_string());
+            self.attempts.lock().push(RequestAttempt {
+                method: request.method().clone(),
+                path_query: path.clone(),
+                headers: request.headers().clone(),
+                body: request.body().as_bytes().map(|bytes| bytes.to_vec()),
+            });
+            *request.uri_mut() = format!("{}{}", self.base, path).parse().unwrap();
+            HttpService::call(&self.client, request).await
+        }
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    async fn redirected_client(
+        server: &MockServer,
+        default_headers: HeaderMap,
+        attempts: Arc<Mutex<Vec<RequestAttempt>>>,
+    ) -> HttpClient {
+        let options = ClientOptions::default()
+            .with_allow_http(true)
+            .with_default_headers(default_headers);
+        HttpClient::new(UriRedirectService {
+            client: options.client().unwrap(),
+            base: server.url().to_string(),
+            attempts,
+        })
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    fn assert_attempt(
+        attempts: &[RequestAttempt],
+        index: usize,
+        method: Method,
+        path_fragment: &str,
+        body_fragment: Option<&str>,
+    ) {
+        let attempt = &attempts[index];
+        assert_eq!(attempt.method, method);
+        assert!(attempt.path_query.contains(path_fragment));
+        if let Some(body_fragment) = body_fragment {
+            let body = String::from_utf8_lossy(attempt.body.as_deref().unwrap());
+            assert!(body.contains(body_fragment));
+        }
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    fn assert_refresh(attempts: &[RequestAttempt], index: usize) {
+        let attempt = &attempts[index];
+        assert_eq!(attempt.method, Method::POST);
+        assert_eq!(attempt.path_query, "/o/oauth2/token");
+        let fields = form_urlencoded::parse(attempt.body.as_deref().unwrap())
+            .into_owned()
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            fields,
+            BTreeMap::from([
+                ("client_id".to_string(), "client".to_string()),
+                ("client_secret".to_string(), "secret".to_string()),
+                ("grant_type".to_string(), "refresh_token".to_string()),
+                ("refresh_token".to_string(), "refresh".to_string()),
+            ])
+        );
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    fn assert_refresh_server(requests: &[ServerRequest], index: usize, sentinel: &str) {
+        let request = &requests[index];
+        assert_eq!(request.method, Method::POST);
+        assert_eq!(request.path_query, "/o/oauth2/token");
+        assert_eq!(request.headers.get("x-test-sentinel").unwrap(), sentinel);
+        assert_eq!(
+            request.headers.get("content-type").unwrap(),
+            "application/x-www-form-urlencoded"
+        );
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    fn assert_server(
+        requests: &[ServerRequest],
+        index: usize,
+        method: Method,
+        path_query: &str,
+        sentinel: &str,
+    ) {
+        let request = &requests[index];
+        assert_eq!(request.method, method);
+        assert_eq!(request.path_query, path_query);
+        assert_eq!(request.headers.get("x-test-sentinel").unwrap(), sentinel);
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    fn assert_metadata_server(
+        requests: &[ServerRequest],
+        index: usize,
+        path: &str,
+        audience: Option<&str>,
+    ) {
+        let request = &requests[index];
+        assert_eq!(request.method, Method::GET);
+        let url = url::Url::parse(&format!("http://metadata{0}", request.path_query)).unwrap();
+        assert_eq!(url.path(), path);
+        let query = url.query_pairs().collect::<BTreeMap<_, _>>();
+        assert_eq!(query.get("audience").map(|value| value.as_ref()), audience);
+        assert_eq!(request.headers.get("Metadata-Flavor").unwrap(), "Google");
+        assert_eq!(
+            request.headers.get("x-test-sentinel").unwrap(),
+            "credential"
+        );
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    fn no_retries() -> RetryConfig {
+        RetryConfig {
+            max_retries: 0,
+            ..RetryConfig::default()
+        }
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    fn gzip_json(kind: &str) -> Bytes {
+        let bytes: &[u8] = match kind {
+            "token" => &[
+                0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xab, 0x56, 0x4a, 0x4c,
+                0x4e, 0x4e, 0x2d, 0x2e, 0x8e, 0x2f, 0xc9, 0xcf, 0x4e, 0xcd, 0x53, 0xb2, 0x52, 0x82,
+                0xd0, 0x3a, 0x4a, 0xa9, 0x15, 0x05, 0x99, 0x45, 0xa9, 0xc5, 0xf1, 0x99, 0x40, 0x41,
+                0x63, 0x33, 0x03, 0x83, 0x5a, 0x00, 0x11, 0x8b, 0xb0, 0x47, 0x2a, 0x00, 0x00, 0x00,
+            ],
+            "metadata_email" => &[
+                0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x2b, 0x4e, 0x2d, 0x2a,
+                0xcb, 0x4c, 0x4e, 0x75, 0x48, 0xad, 0x48, 0xcc, 0x2d, 0xc8, 0x49, 0xd5, 0x4b, 0xce,
+                0xcf, 0x05, 0x00, 0x98, 0x1a, 0xec, 0x04, 0x13, 0x00, 0x00, 0x00,
+            ],
+            "email" => &[
+                0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xab, 0x56, 0x4a, 0xcd,
+                0x4d, 0xcc, 0xcc, 0x51, 0xb2, 0x52, 0x2a, 0x4e, 0x2d, 0x2a, 0xcb, 0x4c, 0x4e, 0x75,
+                0x48, 0xad, 0x48, 0xcc, 0x2d, 0xc8, 0x49, 0xd5, 0x4b, 0xce, 0xcf, 0x55, 0xaa, 0x05,
+                0x00, 0xb6, 0xfc, 0x2b, 0x40, 0x1f, 0x00, 0x00, 0x00,
+            ],
+            "signature" => &[
+                0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xab, 0x56, 0x2a, 0xce,
+                0x4c, 0xcf, 0x4b, 0x4d, 0x71, 0xca, 0xc9, 0x4f, 0x52, 0xb2, 0x52, 0x4a, 0x36, 0xca,
+                0xc9, 0x4b, 0xca, 0x75, 0x33, 0x48, 0x89, 0xf0, 0xca, 0x51, 0xaa, 0x05, 0x00, 0xc7,
+                0xc3, 0x81, 0x3d, 0x1d, 0x00, 0x00, 0x00,
+            ],
+            _ => panic!("unknown gzip fixture"),
+        };
+        Bytes::from_static(bytes)
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    fn plain_json(kind: &str) -> Bytes {
+        match kind {
+            "token" => Bytes::from_static(br#"{"access_token":"token","expires_in":3600}"#),
+            "metadata_email" => Bytes::from_static(b"service@example.com"),
+            "email" => Bytes::from_static(br#"{"email":"service@example.com"}"#),
+            "signature" => Bytes::from_static(br#"{"signedBlob":"c2lnbmF0dXJl"}"#),
+            "token_valid_id" => Bytes::from_static(br#"{"access_token":"token","expires_in":3600,"id_token":"eyJhbGciOiJub25lIn0.eyJlbWFpbCI6InNlcnZpY2VAZXhhbXBsZS5jb20ifQ."}"#),
+            _ => panic!("unknown JSON fixture"),
+        }
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    const OBJECT_GZIP: &[u8] = &[
+        0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x4b, 0xce, 0xcf, 0x2d, 0x28,
+        0x4a, 0x2d, 0x2e, 0x4e, 0x4d, 0xd1, 0xcd, 0x4f, 0xca, 0x4a, 0x4d, 0x2e, 0x01, 0x00, 0x27,
+        0x73, 0xd3, 0xef, 0x11, 0x00, 0x00, 0x00,
+    ];
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    fn object_response(
+        seen: Arc<Mutex<Vec<ServerRequest>>>,
+    ) -> impl FnOnce(http::Request<hyper::body::Incoming>) -> http::Response<Bytes> + Send + 'static
+    {
+        move |request| {
+            seen.lock().push(ServerRequest {
+                method: request.method().clone(),
+                path_query: request
+                    .uri()
+                    .path_and_query()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "/".to_string()),
+                headers: request.headers().clone(),
+            });
+            http::Response::builder()
+                .header("content-type", "application/octet-stream")
+                .header("content-encoding", "gzip")
+                .header("content-length", OBJECT_GZIP.len().to_string())
+                .header("etag", "object-etag")
+                .header("last-modified", "Wed, 21 Oct 2015 07:28:00 GMT")
+                .body(Bytes::from_static(OBJECT_GZIP))
+                .unwrap()
+        }
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    fn gzip_response(
+        kind: &'static str,
+        seen: Arc<Mutex<Vec<ServerRequest>>>,
+    ) -> impl FnOnce(http::Request<hyper::body::Incoming>) -> http::Response<Bytes> + Send + 'static
+    {
+        move |request| {
+            seen.lock().push(ServerRequest {
+                method: request.method().clone(),
+                path_query: request
+                    .uri()
+                    .path_and_query()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "/".to_string()),
+                headers: request.headers().clone(),
+            });
+            let accepts_gzip = request
+                .headers()
+                .get("accept-encoding")
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value.contains("gzip"));
+            let mut response = http::Response::builder().header("content-type", "application/json");
+            if accepts_gzip {
+                response = response.header("content-encoding", "gzip");
+            }
+            response
+                .body(if accepts_gzip {
+                    gzip_json(kind)
+                } else {
+                    plain_json(kind)
+                })
+                .unwrap()
+        }
+    }
 
     const SIGNATURE_BYTES: &[u8] = &[0x00, 0x01, 0x02, 0xab, 0xcd];
 
@@ -1185,5 +1468,510 @@ x-goog-meta-reviewer:jane,john"
             "text/plain; charset=utf-8"
         );
         assert_eq!(trim_header_value("single"), "single");
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    #[tokio::test]
+    async fn metadata_token_response_preserves_identity_encoding() {
+        let server = MockServer::new().await;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        server.push_fn(gzip_response("token", Arc::clone(&seen)));
+        let mut headers = HeaderMap::new();
+        headers.insert("accept-encoding", HeaderValue::from_static("gzip"));
+        headers.insert("x-test-sentinel", HeaderValue::from_static("credential"));
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let client = redirected_client(&server, headers, Arc::clone(&attempts)).await;
+        let result = make_metadata_request(&client, "metadata.google.internal", &no_retries())
+            .await
+            .unwrap();
+        assert_eq!(result.access_token, "token");
+        {
+            let attempts_guard = attempts.lock();
+            assert_eq!(attempts_guard.len(), 1);
+            assert_attempt(
+                &attempts_guard,
+                0,
+                Method::GET,
+                "/computeMetadata/v1/instance/service-accounts/default/token",
+                None,
+            );
+        }
+        {
+            let requests = seen.lock();
+            assert_eq!(requests.len(), 1);
+            assert_metadata_server(
+                &requests,
+                0,
+                "/computeMetadata/v1/instance/service-accounts/default/token",
+                Some("https://www.googleapis.com/oauth2/v4/token"),
+            );
+            assert_eq!(
+                requests[0].headers.get("accept-encoding").unwrap(),
+                "identity"
+            );
+            assert_eq!(
+                requests[0].headers.get("x-test-sentinel").unwrap(),
+                "credential"
+            );
+        }
+        server.shutdown().await;
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    #[tokio::test]
+    async fn metadata_email_response_preserves_identity_encoding() {
+        let server = MockServer::new().await;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        server.push_fn(gzip_response("metadata_email", Arc::clone(&seen)));
+        let mut headers = HeaderMap::new();
+        headers.insert("accept-encoding", HeaderValue::from_static("gzip"));
+        headers.insert("x-test-sentinel", HeaderValue::from_static("credential"));
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let client = redirected_client(&server, headers, Arc::clone(&attempts)).await;
+        let result =
+            make_metadata_request_for_email(&client, "metadata.google.internal", &no_retries())
+                .await
+                .unwrap();
+        assert_eq!(result, "service@example.com");
+        {
+            let attempts_guard = attempts.lock();
+            assert_eq!(attempts_guard.len(), 1);
+            assert_attempt(
+                &attempts_guard,
+                0,
+                Method::GET,
+                "/computeMetadata/v1/instance/service-accounts/default/email",
+                None,
+            );
+        }
+        {
+            let requests = seen.lock();
+            assert_eq!(requests.len(), 1);
+            assert_metadata_server(
+                &requests,
+                0,
+                "/computeMetadata/v1/instance/service-accounts/default/email",
+                None,
+            );
+            assert_eq!(
+                requests[0].headers.get("accept-encoding").unwrap(),
+                "identity"
+            );
+            assert_eq!(
+                requests[0].headers.get("x-test-sentinel").unwrap(),
+                "credential"
+            );
+        }
+        server.shutdown().await;
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    #[tokio::test]
+    async fn authorized_user_token_response_preserves_identity_encoding() {
+        let server = MockServer::new().await;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        server.push_fn(gzip_response("token", Arc::clone(&seen)));
+        let mut headers = HeaderMap::new();
+        headers.insert("accept-encoding", HeaderValue::from_static("gzip"));
+        headers.insert("x-test-sentinel", HeaderValue::from_static("credential"));
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let client = redirected_client(&server, headers, Arc::clone(&attempts)).await;
+        let credentials = AuthorizedUserCredentials {
+            client_id: "client".into(),
+            client_secret: "secret".into(),
+            refresh_token: "refresh".into(),
+        };
+        let result = credentials.fetch_token(&client, &no_retries()).await;
+        assert_eq!(result.unwrap().token.bearer, "token");
+        {
+            let attempts_guard = attempts.lock();
+            assert_eq!(attempts_guard.len(), 1);
+            assert_refresh(&attempts_guard, 0);
+        }
+        {
+            let requests = seen.lock();
+            assert_eq!(requests.len(), 1);
+            assert_refresh_server(&requests, 0, "credential");
+            assert_eq!(
+                requests[0].headers.get("accept-encoding").unwrap(),
+                "identity"
+            );
+            assert_eq!(
+                requests[0].headers.get("x-test-sentinel").unwrap(),
+                "credential"
+            );
+        }
+        server.shutdown().await;
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    #[tokio::test]
+    async fn authorized_user_tokeninfo_fallback_preserves_identity_encoding() {
+        let server = MockServer::new().await;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let first_seen = Arc::clone(&seen);
+        server.push_fn(move |request| {
+            first_seen.lock().push(ServerRequest {
+                method: request.method().clone(),
+                path_query: request
+                    .uri()
+                    .path_and_query()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "/".to_string()),
+                headers: request.headers().clone(),
+            });
+            http::Response::builder()
+                .header("content-type", "application/json")
+                .body(Bytes::from_static(
+                    br#"{"access_token":"token","expires_in":3600,"id_token":"invalid"}"#,
+                ))
+                .unwrap()
+        });
+        server.push_fn(gzip_response("email", Arc::clone(&seen)));
+        let mut headers = HeaderMap::new();
+        headers.insert("accept-encoding", HeaderValue::from_static("gzip"));
+        headers.insert("x-test-sentinel", HeaderValue::from_static("credential"));
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let client = redirected_client(&server, headers, Arc::clone(&attempts)).await;
+        let credentials = AuthorizedUserSigningCredentials {
+            credential: AuthorizedUserCredentials {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                refresh_token: "refresh".into(),
+            },
+        };
+        let result = credentials.fetch_token(&client, &no_retries()).await;
+        assert_eq!(result.unwrap().token.email, "service@example.com");
+        {
+            let attempts_guard = attempts.lock();
+            assert_eq!(attempts_guard.len(), 2);
+            assert_attempt(
+                &attempts_guard,
+                1,
+                Method::GET,
+                "/tokeninfo?access_token=token",
+                None,
+            );
+            assert_refresh(&attempts_guard, 0);
+        }
+        {
+            let requests = seen.lock();
+            assert_eq!(requests.len(), 2);
+            assert_refresh_server(&requests, 0, "credential");
+            assert_server(
+                &requests,
+                1,
+                Method::GET,
+                "/tokeninfo?access_token=token",
+                "credential",
+            );
+            assert_eq!(
+                requests[1].headers.get("accept-encoding").unwrap(),
+                "identity"
+            );
+            assert_eq!(
+                requests[1].headers.get("x-test-sentinel").unwrap(),
+                "credential"
+            );
+        }
+        server.shutdown().await;
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    #[tokio::test]
+    async fn authorized_user_tokeninfo_missing_id_token_falls_back() {
+        let server = MockServer::new().await;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let first_seen = Arc::clone(&seen);
+        server.push_fn(move |request| {
+            first_seen.lock().push(ServerRequest {
+                method: request.method().clone(),
+                path_query: request
+                    .uri()
+                    .path_and_query()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "/".to_string()),
+                headers: request.headers().clone(),
+            });
+            http::Response::builder()
+                .header("content-type", "application/json")
+                .body(Bytes::from_static(
+                    br#"{"access_token":"token","expires_in":3600}"#,
+                ))
+                .unwrap()
+        });
+        server.push_fn(gzip_response("email", Arc::clone(&seen)));
+        let mut headers = HeaderMap::new();
+        headers.insert("accept-encoding", HeaderValue::from_static("gzip"));
+        headers.insert("x-test-sentinel", HeaderValue::from_static("credential"));
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let client = redirected_client(&server, headers, Arc::clone(&attempts)).await;
+        let credentials = AuthorizedUserSigningCredentials {
+            credential: AuthorizedUserCredentials {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                refresh_token: "refresh".into(),
+            },
+        };
+        let result = credentials
+            .fetch_token(&client, &no_retries())
+            .await
+            .unwrap();
+        assert_eq!(result.token.email, "service@example.com");
+        {
+            let attempts_guard = attempts.lock();
+            assert_eq!(attempts_guard.len(), 2);
+            assert_attempt(
+                &attempts_guard,
+                1,
+                Method::GET,
+                "/tokeninfo?access_token=token",
+                None,
+            );
+            assert_refresh(&attempts_guard, 0);
+        }
+        {
+            let requests = seen.lock();
+            assert_eq!(requests.len(), 2);
+            assert_refresh_server(&requests, 0, "credential");
+            assert_server(
+                &requests,
+                1,
+                Method::GET,
+                "/tokeninfo?access_token=token",
+                "credential",
+            );
+            assert_eq!(
+                requests[1].headers.get("accept-encoding").unwrap(),
+                "identity"
+            );
+        }
+        server.shutdown().await;
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    #[tokio::test]
+    async fn authorized_user_tokeninfo_valid_id_token_bypasses_lookup() {
+        let server = MockServer::new().await;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        server.push_fn({
+            let response_seen = Arc::clone(&seen);
+            move |request| {
+                response_seen.lock().push(ServerRequest {
+                    method: request.method().clone(),
+                    path_query: request
+                        .uri()
+                        .path_and_query()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "/".to_string()),
+                    headers: request.headers().clone(),
+                });
+                http::Response::builder()
+                    .header("content-type", "application/json")
+                    .body(plain_json("token_valid_id"))
+                    .unwrap()
+            }
+        });
+        let mut headers = HeaderMap::new();
+        headers.insert("accept-encoding", HeaderValue::from_static("gzip"));
+        headers.insert("x-test-sentinel", HeaderValue::from_static("credential"));
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let client = redirected_client(&server, headers, Arc::clone(&attempts)).await;
+        let credentials = AuthorizedUserSigningCredentials {
+            credential: AuthorizedUserCredentials {
+                client_id: "client".into(),
+                client_secret: "secret".into(),
+                refresh_token: "refresh".into(),
+            },
+        };
+        let result = credentials
+            .fetch_token(&client, &no_retries())
+            .await
+            .unwrap();
+        assert_eq!(result.token.email, "service@example.com");
+        {
+            let attempts_guard = attempts.lock();
+            assert_eq!(attempts_guard.len(), 1);
+            assert_refresh(&attempts_guard, 0);
+        }
+        {
+            let requests = seen.lock();
+            assert_eq!(requests.len(), 1);
+            assert_refresh_server(&requests, 0, "credential");
+        }
+        server.shutdown().await;
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    #[tokio::test]
+    async fn sign_blob_response_preserves_identity_encoding() {
+        let server = MockServer::new().await;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        server.push_fn(gzip_response("signature", Arc::clone(&seen)));
+        let mut headers = HeaderMap::new();
+        headers.insert("accept-encoding", HeaderValue::from_static("gzip"));
+        headers.insert("x-test-sentinel", HeaderValue::from_static("credential"));
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let http_client = redirected_client(&server, headers, Arc::clone(&attempts)).await;
+        let config = GoogleCloudStorageConfig {
+            base_url: DEFAULT_GCS_BASE_URL.into(),
+            credentials: Arc::new(StaticCredentialProvider::new(GcpCredential {
+                bearer: "bearer".into(),
+            })),
+            signing_credentials: Arc::new(StaticCredentialProvider::new(GcpSigningCredential {
+                email: "service@example.com".into(),
+                private_key: None,
+            })),
+            crypto: None,
+            bucket_name: "bucket".into(),
+            retry_config: no_retries(),
+            client_options: ClientOptions::default(),
+            skip_signature: false,
+        };
+        let client = GoogleCloudStorageClient::new(config, http_client).unwrap();
+        let result = client.sign_blob("payload", "service@example.com").await;
+        assert_eq!(result.unwrap(), "7369676e6174757265");
+        {
+            let attempts_guard = attempts.lock();
+            assert_eq!(attempts_guard.len(), 1);
+            assert_eq!(attempts_guard[0].method, Method::POST);
+            assert_eq!(
+                attempts_guard[0].path_query,
+                "/v1/projects/-/serviceAccounts/service@example.com:signBlob"
+            );
+            let body: serde_json::Value =
+                serde_json::from_slice(attempts_guard[0].body.as_deref().unwrap()).unwrap();
+            assert_eq!(body, serde_json::json!({"payload": "cGF5bG9hZA=="}));
+            assert!(attempts_guard[0].headers.get("authorization").is_some());
+        }
+        {
+            let requests = seen.lock();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].method, Method::POST);
+            assert_eq!(
+                requests[0].path_query,
+                "/v1/projects/-/serviceAccounts/service@example.com:signBlob"
+            );
+            assert_eq!(
+                requests[0].headers.get("authorization").unwrap(),
+                "Bearer bearer"
+            );
+            assert_eq!(
+                requests[0].headers.get("accept-encoding").unwrap(),
+                "identity"
+            );
+            assert_eq!(
+                requests[0].headers.get("x-test-sentinel").unwrap(),
+                "credential"
+            );
+        }
+        server.shutdown().await;
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    #[tokio::test]
+    async fn metadata_token_plain_response_without_default_encoding_is_healthy() {
+        let server = MockServer::new().await;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let response_seen = Arc::clone(&seen);
+        server.push_fn(move |request| {
+            response_seen.lock().push(ServerRequest {
+                method: request.method().clone(),
+                path_query: request
+                    .uri()
+                    .path_and_query()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "/".to_string()),
+                headers: request.headers().clone(),
+            });
+            http::Response::builder()
+                .header("content-type", "application/json")
+                .body(Bytes::from_static(
+                    br#"{"access_token":"token","expires_in":3600}"#,
+                ))
+                .unwrap()
+        });
+        let mut headers = HeaderMap::new();
+        headers.insert("x-test-sentinel", HeaderValue::from_static("credential"));
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let client = redirected_client(&server, headers, Arc::clone(&attempts)).await;
+        let result = make_metadata_request(&client, "metadata.google.internal", &no_retries())
+            .await
+            .unwrap();
+        assert_eq!(result.access_token, "token");
+        {
+            let attempts_guard = attempts.lock();
+            assert_eq!(attempts_guard.len(), 1);
+            assert_attempt(
+                &attempts_guard,
+                0,
+                Method::GET,
+                "/computeMetadata/v1/instance/service-accounts/default/token",
+                None,
+            );
+        }
+        {
+            let requests = seen.lock();
+            assert_eq!(requests.len(), 1);
+            assert_metadata_server(
+                &requests,
+                0,
+                "/computeMetadata/v1/instance/service-accounts/default/token",
+                Some("https://www.googleapis.com/oauth2/v4/token"),
+            );
+            assert_eq!(
+                requests[0].headers.get("x-test-sentinel").unwrap(),
+                "credential"
+            );
+        }
+        server.shutdown().await;
+    }
+
+    #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
+    #[tokio::test]
+    async fn object_get_preserves_gzip_response_and_sentinel_header() {
+        let server = MockServer::new().await;
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        server.push_fn(object_response(Arc::clone(&seen)));
+        let mut headers = HeaderMap::new();
+        headers.insert("accept-encoding", HeaderValue::from_static("gzip"));
+        headers.insert("x-test-sentinel", HeaderValue::from_static("object"));
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let http_client = redirected_client(&server, headers, Arc::clone(&attempts)).await;
+        let config = GoogleCloudStorageConfig {
+            base_url: DEFAULT_GCS_BASE_URL.into(),
+            credentials: Arc::new(StaticCredentialProvider::new(GcpCredential {
+                bearer: "bearer".into(),
+            })),
+            signing_credentials: Arc::new(StaticCredentialProvider::new(GcpSigningCredential {
+                email: "service@example.com".into(),
+                private_key: None,
+            })),
+            crypto: None,
+            bucket_name: "bucket".into(),
+            retry_config: no_retries(),
+            client_options: ClientOptions::default(),
+            skip_signature: true,
+        };
+        let client = Arc::new(GoogleCloudStorageClient::new(config, http_client).unwrap());
+        let result = client
+            .get_opts(&Path::from("object"), GetOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(result.meta.size, OBJECT_GZIP.len() as u64);
+        let body = result.bytes().await.unwrap();
+
+        assert_eq!(body.as_ref(), OBJECT_GZIP);
+        {
+            let requests = seen.lock();
+            assert_eq!(requests.len(), 1);
+            assert_server(&requests, 0, Method::GET, "/bucket/object", "object");
+            assert_eq!(requests[0].headers.get("accept-encoding").unwrap(), "gzip");
+            assert_eq!(
+                requests[0].headers.get("x-test-sentinel").unwrap(),
+                "object"
+            );
+        }
+        server.shutdown().await;
     }
 }

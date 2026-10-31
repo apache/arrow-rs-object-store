@@ -40,8 +40,8 @@ use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use bytes::Buf;
 use http::header::{
-    CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH,
-    CONTENT_TYPE,
+    ACCEPT_ENCODING, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE,
+    CONTENT_LENGTH, CONTENT_TYPE,
 };
 use http::{HeaderName, Method, StatusCode};
 use percent_encoding::{NON_ALPHANUMERIC, percent_encode, utf8_percent_encode};
@@ -339,6 +339,7 @@ impl GoogleCloudStorageClient {
         let response = self
             .client
             .post(&url)
+            .header(ACCEPT_ENCODING, "identity")
             .with_bearer_auth(credential.as_deref())
             .json(&body)
             .retryable(&self.config.retry_config)
