@@ -156,28 +156,28 @@ a tampered signature, an expired URL, or a signed header whose value the client 
 require a backend that actually validates SigV4. LocalStack does not (it accepts presigned
 requests regardless of signature or expiry), so these tests are gated behind a separate
 `TEST_S3_SIGNATURE_ENFORCEMENT` variable rather than running in the main LocalStack integration
-pass. CI runs them against MinIO instead, which does validate SigV4 (the "Run presigned-URL
-signature-enforcement tests (MinIO)" step in `ci.yml`), so they stay exercised. The steps below
+pass. CI runs them against RustFS instead, which does validate SigV4 (the "Run presigned-URL
+signature-enforcement tests (RustFS)" step in `ci.yml`), so they stay exercised. The steps below
 reproduce that locally or point at real S3.
 
 These tests use a dedicated `test-bucket-for-signing` bucket so their writes cannot contaminate the
 shared `test-bucket` whose exact contents `s3_test` asserts. To point at a bucket in your own
 account instead, set `OBJECT_STORE_SIGNING_BUCKET` (no source edit required).
 
-MinIO is the recommended local backend: unlike LocalStack it validates SigV4 signatures and expiry,
+RustFS is the recommended local backend: unlike LocalStack it validates SigV4 signatures and expiry,
 so the enforcement assertions actually exercise. Plain HTTP is enough (these tests don't use SSE-C,
 so the self-signed-cert setup from the SSE-C section is not needed, and the test client would
 reject that cert anyway):
 
 ```shell
 docker run -d -p 9000:9000 \
-  -e MINIO_ROOT_USER=minio -e MINIO_ROOT_PASSWORD=minio123 \
-  minio/minio server /data
+  -e RUSTFS_ACCESS_KEY=rustfs -e RUSTFS_SECRET_KEY=rustfs123 \
+  -e RUSTFS_CONSOLE_ENABLE=false rustfs/rustfs:1.0.0
 
 export AWS_ENDPOINT=http://localhost:9000
 export AWS_ALLOW_HTTP=true
-export AWS_ACCESS_KEY_ID=minio
-export AWS_SECRET_ACCESS_KEY=minio123
+export AWS_ACCESS_KEY_ID=rustfs
+export AWS_SECRET_ACCESS_KEY=rustfs123
 export AWS_REGION=us-east-1
 aws --endpoint-url=http://localhost:9000 s3 mb s3://test-bucket-for-signing
 ```
