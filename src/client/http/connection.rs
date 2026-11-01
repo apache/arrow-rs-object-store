@@ -28,6 +28,8 @@ use std::error::Error;
 use std::sync::Arc;
 #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
 use tokio::runtime::Handle;
+#[cfg(feature = "reqwest")]
+use url::Url;
 
 /// An HTTP protocol error
 ///
@@ -49,6 +51,10 @@ pub struct HttpError {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum HttpErrorKind {
+    /// Invalid input prevented the request from being built or signed
+    ///
+    /// Retrying the same input cannot succeed. Will not be automatically retried
+    InvalidRequest,
     /// An error occurred whilst connecting to the remote
     ///
     /// Will be automatically retried
@@ -97,7 +103,9 @@ impl HttpError {
         #[cfg(target_arch = "wasm32")]
         let is_connect = || false;
 
-        let mut kind = if e.is_timeout() {
+        let mut kind = if e.is_builder() {
+            HttpErrorKind::InvalidRequest
+        } else if e.is_timeout() {
             HttpErrorKind::Timeout
         } else if is_connect() {
             HttpErrorKind::Connect
@@ -221,7 +229,8 @@ impl HttpService for reqwest::Client {
     async fn call(&self, req: HttpRequest) -> Result<HttpResponse, HttpError> {
         let (parts, body) = req.into_parts();
 
-        let url = parts.uri.to_string().parse().unwrap();
+        let url = Url::parse(&parts.uri.to_string())
+            .map_err(|e| HttpError::new(HttpErrorKind::InvalidRequest, e))?;
         let mut req = reqwest::Request::new(parts.method, url);
         *req.headers_mut() = parts.headers;
         *req.body_mut() = Some(body.into_reqwest());
@@ -245,7 +254,8 @@ impl HttpService for reqwest::Client {
         use wasm_bindgen_futures::spawn_local;
 
         let (parts, body) = req.into_parts();
-        let url = parts.uri.to_string().parse().unwrap();
+        let url = Url::parse(&parts.uri.to_string())
+            .map_err(|e| HttpError::new(HttpErrorKind::InvalidRequest, e))?;
         let mut req = reqwest::Request::new(parts.method, url);
         *req.headers_mut() = parts.headers;
         *req.body_mut() = Some(body.into_reqwest());

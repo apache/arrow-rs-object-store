@@ -68,6 +68,9 @@ enum Error {
         url: String,
     },
 
+    #[error("Endpoint URL cannot be used as a base")]
+    InvalidEndpoint,
+
     #[error("Unable to extract metadata from headers: {}", source)]
     Metadata {
         source: crate::client::header::Error,
@@ -282,6 +285,10 @@ impl HttpBuilder {
     pub fn build(self) -> Result<HttpStore> {
         let url = self.url.ok_or(Error::MissingUrl)?;
         let parsed = Url::parse(&url).map_err(|source| Error::UnableToParseUrl { url, source })?;
+
+        if parsed.cannot_be_a_base() {
+            return Err(Error::InvalidEndpoint.into());
+        }
 
         let client = http_connector(self.http_connector)?.connect(&self.client_options)?;
 

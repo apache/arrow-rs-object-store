@@ -19,7 +19,7 @@
 
 use crate::PutPayload;
 use crate::client::backoff::{Backoff, BackoffConfig};
-use crate::client::builder::HttpRequestBuilder;
+use crate::client::builder::{HttpRequestBuilder, RequestBuilderError};
 use crate::client::{HttpClient, HttpError, HttpErrorKind, HttpRequest, HttpResponse};
 use futures_util::future::BoxFuture;
 use http::StatusCode;
@@ -38,7 +38,7 @@ pub struct RetryError(Box<RetryErrorImpl>);
 /// Box error to avoid large error variant
 #[derive(Debug)]
 struct RetryErrorImpl {
-    method: Method,
+    method: Option<Method>,
     uri: Option<Uri>,
     retries: usize,
     max_retries: usize,
@@ -49,10 +49,14 @@ struct RetryErrorImpl {
 
 impl std::fmt::Display for RetryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Error performing {} ", self.0.method)?;
+        match &self.0.method {
+            Some(method) => write!(f, "Error performing {method} ")?,
+            None => write!(f, "Error performing request ")?,
+        }
         match &self.0.uri {
             Some(uri) => write!(f, "{uri} ")?,
-            None => write!(f, "REDACTED ")?,
+            None if self.0.method.is_some() => write!(f, "REDACTED ")?,
+            None => {}
         }
         write!(f, "in {:?}", self.0.elapsed)?;
         if self.0.retries != 0 {
@@ -199,6 +203,7 @@ impl From<RetryError> for std::io::Error {
             }
             _ => match err.inner() {
                 RequestError::Http(h) => match h.kind() {
+                    HttpErrorKind::InvalidRequest => ErrorKind::InvalidInput,
                     HttpErrorKind::Timeout => ErrorKind::TimedOut,
                     HttpErrorKind::Connect => ErrorKind::NotConnected,
                     _ => ErrorKind::Other,
@@ -315,7 +320,7 @@ impl RetryableRequestBuilder {
 /// A retryable request
 pub(crate) struct RetryableRequest {
     client: HttpClient,
-    http: HttpRequest,
+    http: Result<HttpRequest, RequestBuilderError>,
 
     sensitive: bool,
     idempotent: Option<bool>,
@@ -332,9 +337,10 @@ impl RetryableRequest {
     }
 
     fn err(&self, error: RequestError, ctx: &RetryContext) -> RetryError {
+        let request = self.http.as_ref().ok();
         RetryError(Box::new(RetryErrorImpl {
-            uri: (!self.sensitive).then(|| self.http.uri().clone()),
-            method: self.http.method().clone(),
+            uri: request.filter(|_| !self.sensitive).map(|r| r.uri().clone()),
+            method: request.map(|r| r.method().clone()),
             retries: ctx.retries,
             max_retries: ctx.max_retries,
             elapsed: ctx.start.elapsed(),
@@ -344,8 +350,22 @@ impl RetryableRequest {
     }
 
     pub(crate) async fn send(self, ctx: &mut RetryContext) -> Result<HttpResponse> {
+        let http = match self.http {
+            Ok(ref http) => http,
+            Err(error) => {
+                return Err(RetryError(Box::new(RetryErrorImpl {
+                    method: None,
+                    uri: None,
+                    retries: ctx.retries,
+                    max_retries: ctx.max_retries,
+                    elapsed: ctx.start.elapsed(),
+                    retry_timeout: ctx.retry_timeout,
+                    inner: RequestError::Http(error.into()),
+                })));
+            }
+        };
         loop {
-            let mut request = self.http.clone();
+            let mut request = http.clone();
 
             if let Some(payload) = &self.payload {
                 *request.body_mut() = payload.clone().into();
@@ -432,14 +452,14 @@ impl RetryableRequest {
                     }
                 }
                 Err(e) => {
-                    let is_idempotent = self
-                        .idempotent
-                        .unwrap_or_else(|| self.http.method().is_safe());
+                    let is_idempotent = self.idempotent.unwrap_or_else(|| http.method().is_safe());
 
                     let do_retry = match e.kind() {
                         HttpErrorKind::Connect | HttpErrorKind::Request => true, // Request not sent, can retry
                         HttpErrorKind::Timeout | HttpErrorKind::Interrupted => is_idempotent,
-                        HttpErrorKind::Unknown | HttpErrorKind::Decode => false,
+                        HttpErrorKind::InvalidRequest
+                        | HttpErrorKind::Unknown
+                        | HttpErrorKind::Decode => false,
                     };
 
                     if ctx.exhausted() || !do_retry {
@@ -486,7 +506,6 @@ impl RetryExt for HttpRequestBuilder {
 
     fn retryable_request(self) -> RetryableRequest {
         let (client, request) = self.into_parts();
-        let request = request.expect("request must be valid");
 
         RetryableRequest {
             client,
@@ -511,7 +530,10 @@ mod tests {
     use crate::RetryConfig;
     use crate::client::mock_server::MockServer;
     use crate::client::retry::{RequestError, RetryContext, RetryExt, body_contains_error};
-    use crate::client::{HttpClient, HttpError, HttpErrorKind, HttpResponse};
+    use crate::client::{
+        HttpClient, HttpError, HttpErrorKind, HttpRequest, HttpResponse, HttpService,
+    };
+    use async_trait::async_trait;
     use http::Method;
     use http::StatusCode;
     use hyper::Response;
@@ -523,9 +545,45 @@ mod tests {
     use reqwest::Client;
     use std::convert::Infallible;
     use std::error::Error;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use tokio::net::TcpListener;
     use tokio::time::timeout;
+
+    #[tokio::test]
+    async fn test_invalid_request_no_retry() {
+        #[derive(Debug)]
+        struct InvalidRequestService(Arc<AtomicUsize>);
+
+        #[async_trait]
+        impl HttpService for InvalidRequestService {
+            async fn call(&self, _: HttpRequest) -> Result<HttpResponse, HttpError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                Err(HttpError::new(
+                    HttpErrorKind::InvalidRequest,
+                    std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid request"),
+                ))
+            }
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let client = HttpClient::new(InvalidRequestService(Arc::clone(&calls)));
+        let config = RetryConfig {
+            max_retries: 2,
+            ..Default::default()
+        };
+        let error = client
+            .request(Method::GET, "https://example.invalid/object")
+            .send_retry(&config)
+            .await
+            .unwrap_err();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(matches!(
+            error.inner(),
+            RequestError::Http(error) if error.kind() == HttpErrorKind::InvalidRequest
+        ));
+    }
 
     #[test]
     fn test_body_contains_error() {

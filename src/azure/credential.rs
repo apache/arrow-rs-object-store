@@ -22,8 +22,8 @@ use crate::client::builder::{HttpRequestBuilder, add_query_pairs};
 use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
 use crate::client::{
-    CredentialProvider, CryptoProvider, DigestAlgorithm, HttpClient, HttpError, HttpRequest,
-    TokenProvider, crypto_provider,
+    CredentialProvider, CryptoProvider, DigestAlgorithm, HttpClient, HttpError, HttpErrorKind,
+    HttpRequest, TokenProvider, crypto_provider,
 };
 use async_trait::async_trait;
 use base64::Engine;
@@ -277,8 +277,8 @@ impl<'a> AzureAuthorizer<'a> {
 
         match self.credential {
             AzureCredential::AccessKey(key) => {
+                let url = Url::parse(&request.uri().to_string()).map_err(invalid_request)?;
                 let crypto = self.crypto()?;
-                let url = Url::parse(&request.uri().to_string()).unwrap();
                 let signature = generate_authorization(
                     crypto,
                     request.headers(),
@@ -288,21 +288,19 @@ impl<'a> AzureAuthorizer<'a> {
                     key,
                 )?;
 
-                // "signature" is a base 64 encoded string so it should never
-                // contain illegal characters
                 request.headers_mut().append(
                     AUTHORIZATION,
-                    HeaderValue::from_str(signature.as_str()).unwrap(),
+                    HeaderValue::from_str(&signature).map_err(invalid_request)?,
                 );
             }
             AzureCredential::BearerToken(token) => {
                 request.headers_mut().append(
                     AUTHORIZATION,
-                    HeaderValue::from_str(format!("Bearer {token}").as_str()).unwrap(),
+                    HeaderValue::from_str(&format!("Bearer {token}")).map_err(invalid_request)?,
                 );
             }
             AzureCredential::SASToken(query_pairs) => {
-                add_query_pairs(request.uri_mut(), query_pairs);
+                add_query_pairs(request.uri_mut(), query_pairs).map_err(invalid_request)?;
             }
         }
         Ok(())
@@ -328,7 +326,7 @@ impl CredentialExt for HttpRequestBuilder {
         account: &str,
     ) -> crate::Result<Self> {
         let (client, request) = self.into_parts();
-        let mut request = request.expect("request valid");
+        let mut request = request.map_err(invalid_request)?;
 
         match credential.as_deref() {
             Some(credential) => {
@@ -347,6 +345,13 @@ impl CredentialExt for HttpRequestBuilder {
     }
 }
 
+fn invalid_request(error: impl std::error::Error + Send + Sync + 'static) -> crate::Error {
+    crate::Error::Generic {
+        store: STORE,
+        source: Box::new(HttpError::new(HttpErrorKind::InvalidRequest, error)),
+    }
+}
+
 /// Generate signed key for authorization via access keys
 /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key>
 fn generate_authorization(
@@ -357,7 +362,7 @@ fn generate_authorization(
     account: &str,
     key: &AzureAccessKey,
 ) -> crate::Result<String> {
-    let str_to_sign = string_to_sign(h, u, method, account);
+    let str_to_sign = string_to_sign(h, u, method, account)?;
     let mut ctx = crypto.hmac(DigestAlgorithm::Sha256, &key.0)?;
     ctx.update(str_to_sign.as_bytes());
     let auth = ctx.finish()?;
@@ -524,7 +529,7 @@ fn string_to_sign_user_delegation_sas(
 }
 
 /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key#constructing-the-signature-string>
-fn string_to_sign(h: &HeaderMap, u: &Url, method: &Method, account: &str) -> String {
+fn string_to_sign(h: &HeaderMap, u: &Url, method: &Method, account: &str) -> crate::Result<String> {
     // content length must only be specified if != 0
     // this is valid from 2015-02-21
     let content_length = h
@@ -535,7 +540,7 @@ fn string_to_sign(h: &HeaderMap, u: &Url, method: &Method, account: &str) -> Str
         .flatten()
         .filter(|&v| v != "0")
         .unwrap_or_default();
-    format!(
+    Ok(format!(
         "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}{}",
         method.as_ref(),
         add_if_exists(h, &CONTENT_ENCODING),
@@ -549,19 +554,18 @@ fn string_to_sign(h: &HeaderMap, u: &Url, method: &Method, account: &str) -> Str
         add_if_exists(h, &IF_NONE_MATCH),
         add_if_exists(h, &IF_UNMODIFIED_SINCE),
         add_if_exists(h, &RANGE),
-        canonicalize_header(h),
+        canonicalize_header(h)?,
         canonicalize_resource(account, u)
-    )
+    ))
 }
 
 /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key#constructing-the-canonicalized-headers-string>
-fn canonicalize_header(headers: &HeaderMap) -> String {
+fn canonicalize_header(headers: &HeaderMap) -> crate::Result<String> {
     let mut names = headers
         .iter()
         .filter(|&(k, _)| k.as_str().starts_with("x-ms"))
-        // TODO remove unwraps
-        .map(|(k, _)| (k.as_str(), headers.get(k).unwrap().to_str().unwrap()))
-        .collect::<Vec<_>>();
+        .map(|(k, v)| Ok((k.as_str(), v.to_str().map_err(invalid_request)?)))
+        .collect::<crate::Result<Vec<_>>>()?;
     names.sort_unstable();
 
     let mut result = String::new();
@@ -571,7 +575,7 @@ fn canonicalize_header(headers: &HeaderMap) -> String {
         result.push_str(value);
         result.push('\n');
     }
-    result
+    Ok(result)
 }
 
 /// <https://docs.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key#constructing-the-canonicalized-resource-string>

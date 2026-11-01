@@ -20,8 +20,8 @@ use crate::client::builder::HttpRequestBuilder;
 use crate::client::retry::RetryExt;
 use crate::client::token::{TemporaryToken, TokenCache};
 use crate::client::{
-    CryptoProvider, DigestAlgorithm, HttpClient, HttpError, HttpRequest, TokenProvider,
-    crypto_provider,
+    CryptoProvider, DigestAlgorithm, HttpClient, HttpError, HttpErrorKind, HttpRequest,
+    TokenProvider, crypto_provider,
 };
 use crate::util::{append_strict_query_pairs, hex_digest, hex_encode};
 use crate::{CredentialProvider, Result, RetryConfig};
@@ -218,11 +218,11 @@ impl<'a> AwsAuthorizer<'a> {
         request: &mut HttpRequest,
         pre_calculated_digest: Option<&[u8]>,
     ) -> Result<()> {
+        let url = Url::parse(&request.uri().to_string()).map_err(invalid_request)?;
         let crypto = crypto_provider(self.crypto)?;
-        let url = Url::parse(&request.uri().to_string()).unwrap();
 
         if let Some(ref token) = self.credential.token {
-            let token_val = HeaderValue::from_str(token).unwrap();
+            let token_val = HeaderValue::from_str(token).map_err(invalid_request)?;
             let header = self.token_header.as_ref().unwrap_or(&TOKEN_HEADER);
             request.headers_mut().insert(header, token_val);
         }
@@ -265,7 +265,7 @@ impl<'a> AwsAuthorizer<'a> {
         request
             .headers_mut()
             .insert(&HOST, HeaderValue::from_str(host).unwrap());
-        let (signed_headers, canonical_headers) = canonicalize_headers(request.headers());
+        let (signed_headers, canonical_headers) = canonicalize_headers(request.headers())?;
         request.headers_mut().remove(&HOST);
 
         let scope = self.scope(date);
@@ -292,7 +292,7 @@ impl<'a> AwsAuthorizer<'a> {
             ALGORITHM, self.credential.key_id, scope, signed_headers, signature
         );
 
-        let authorization_val = HeaderValue::from_str(&authorisation).unwrap();
+        let authorization_val = HeaderValue::from_str(&authorisation).map_err(invalid_request)?;
         request
             .headers_mut()
             .insert(&AUTHORIZATION, authorization_val);
@@ -336,7 +336,7 @@ impl<'a> AwsAuthorizer<'a> {
             headers.append(name.clone(), value.clone());
         }
 
-        let (signed_headers, canonical_headers) = canonicalize_headers(&headers);
+        let (signed_headers, canonical_headers) = canonicalize_headers(&headers)?;
 
         // https://docs.aws.amazon.com/AmazonS3/latest/API/sigv4-query-string-auth.html
         url.query_pairs_mut()
@@ -458,13 +458,20 @@ impl CredentialExt for HttpRequestBuilder {
         match authorizer {
             Some(authorizer) => {
                 let (client, request) = self.into_parts();
-                let mut request = request.expect("request valid");
+                let mut request = request.map_err(invalid_request)?;
                 authorizer.try_authorize(&mut request, payload_sha256)?;
 
                 Ok(Self::from_parts(client, request))
             }
             None => Ok(self),
         }
+    }
+}
+
+fn invalid_request(error: impl std::error::Error + Send + Sync + 'static) -> crate::Error {
+    crate::Error::Generic {
+        store: STORE,
+        source: Box::new(HttpError::new(HttpErrorKind::InvalidRequest, error)),
     }
 }
 
@@ -519,7 +526,7 @@ fn append_normalized_whitespace_value(headers: &'_ mut String, input: &str) {
 /// Canonicalizes headers into the AWS Canonical Form.
 ///
 /// <https://docs.aws.amazon.com/general/latest/gr/sigv4-create-canonical-request.html>
-fn canonicalize_headers(header_map: &HeaderMap) -> (String, String) {
+fn canonicalize_headers(header_map: &HeaderMap) -> Result<(String, String)> {
     let mut headers = BTreeMap::<&str, Vec<&str>>::new();
     let mut value_count = 0;
     let mut value_bytes = 0;
@@ -531,7 +538,7 @@ fn canonicalize_headers(header_map: &HeaderMap) -> (String, String) {
             continue;
         }
 
-        let value = std::str::from_utf8(value.as_bytes()).unwrap();
+        let value = std::str::from_utf8(value.as_bytes()).map_err(invalid_request)?;
         key_bytes += key.len();
         value_bytes += value.len();
         value_count += 1;
@@ -559,7 +566,7 @@ fn canonicalize_headers(header_map: &HeaderMap) -> (String, String) {
         canonical_headers.push('\n');
     }
 
-    (signed_headers, canonical_headers)
+    Ok((signed_headers, canonical_headers))
 }
 
 /// Credentials sourced from the instance metadata service
@@ -1772,7 +1779,7 @@ mod tests {
         headers.insert("authorization", "SHOULD_BE_IGNORED".parse().unwrap());
         headers.insert("content-length", "1337".parse().unwrap());
 
-        let (signed_headers, canonical_headers) = super::canonicalize_headers(&headers);
+        let (signed_headers, canonical_headers) = super::canonicalize_headers(&headers).unwrap();
 
         assert_eq!(
             signed_headers,
