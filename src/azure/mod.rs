@@ -457,6 +457,171 @@ mod tests {
     use bytes::Bytes;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    // Model Azure's block states so a lost successful completion response exercises
+    // the real SDK retry path, including the exact block list sent on retry.
+    mod completion_retry {
+        use super::*;
+        use crate::RetryConfig;
+        use crate::client::{
+            ClientOptions, HttpClient, HttpConnector, HttpError, HttpErrorKind, HttpRequest,
+            HttpResponse, HttpResponseBody, HttpService,
+        };
+        use parking_lot::Mutex;
+        use std::collections::HashMap;
+
+        #[derive(Debug, Default)]
+        struct Blocks {
+            uncommitted: HashMap<String, Bytes>,
+            committed: HashMap<String, Bytes>,
+            object: Vec<u8>,
+            completions: Vec<Bytes>,
+        }
+
+        #[derive(Debug, Clone)]
+        struct BlockService(Arc<Mutex<Blocks>>);
+
+        impl HttpConnector for BlockService {
+            fn connect(&self, _: &ClientOptions) -> Result<HttpClient> {
+                Ok(HttpClient::new(self.clone()))
+            }
+        }
+
+        fn response(status: u16, body: &'static str) -> HttpResponse {
+            http::Response::builder()
+                .status(status)
+                .header("etag", "completed")
+                .body(HttpResponseBody::from(body.to_owned()))
+                .unwrap()
+        }
+
+        #[async_trait]
+        impl HttpService for BlockService {
+            async fn call(
+                &self,
+                request: HttpRequest,
+            ) -> std::result::Result<HttpResponse, HttpError> {
+                assert_eq!(request.method(), http::Method::PUT);
+                let query: HashMap<_, _> =
+                    url::form_urlencoded::parse(request.uri().query().unwrap().as_bytes())
+                        .into_owned()
+                        .collect();
+                let body = HttpResponseBody::new(request.body().clone())
+                    .bytes()
+                    .await?;
+                let mut blocks = self.0.lock();
+                if query["comp"] == "block" {
+                    blocks.uncommitted.insert(query["blockid"].clone(), body);
+                    return Ok(response(201, ""));
+                }
+                assert_eq!(query["comp"], "blocklist");
+                blocks.completions.push(body.clone());
+                let mut committed = HashMap::new();
+                let mut object = Vec::new();
+                for line in std::str::from_utf8(&body).unwrap().lines().map(str::trim) {
+                    let (id, latest) = if let Some(id) = line
+                        .strip_prefix("<Uncommitted>")
+                        .and_then(|v| v.strip_suffix("</Uncommitted>"))
+                    {
+                        (id, false)
+                    } else if let Some(id) = line
+                        .strip_prefix("<Latest>")
+                        .and_then(|v| v.strip_suffix("</Latest>"))
+                    {
+                        (id, true)
+                    } else {
+                        continue;
+                    };
+                    // Latest searches uncommitted blocks first, then committed blocks.
+                    // Uncommitted fails after a previous completion moved the blocks.
+                    let part = blocks
+                        .uncommitted
+                        .get(id)
+                        .or_else(|| latest.then(|| blocks.committed.get(id)).flatten());
+                    let Some(part) = part else {
+                        return Ok(response(
+                            400,
+                            "<Error><Code>InvalidBlockList</Code></Error>",
+                        ));
+                    };
+                    object.extend_from_slice(part);
+                    committed.insert(id.to_owned(), part.clone());
+                }
+                assert!(!committed.is_empty());
+                for id in committed.keys() {
+                    blocks.uncommitted.remove(id);
+                }
+                blocks.committed = committed;
+                blocks.object = object;
+                if blocks.completions.len() == 1 {
+                    // The service has committed successfully; only its response is lost.
+                    return Err(HttpError::new(
+                        HttpErrorKind::Timeout,
+                        std::io::Error::new(
+                            std::io::ErrorKind::TimedOut,
+                            "lost completion response",
+                        ),
+                    ));
+                }
+                Ok(response(201, ""))
+            }
+        }
+
+        fn store(blocks: Arc<Mutex<Blocks>>) -> MicrosoftAzure {
+            MicrosoftAzureBuilder::new()
+                .with_account("account")
+                .with_container_name("container")
+                .with_skip_signature(true)
+                .with_retry(RetryConfig {
+                    max_retries: 1,
+                    ..Default::default()
+                })
+                .with_http_connector(BlockService(blocks))
+                .build()
+                .unwrap()
+        }
+
+        #[tokio::test]
+        async fn complete_retries_after_lost_success_response() {
+            let blocks = Arc::new(Mutex::new(Blocks::default()));
+            let store = store(Arc::clone(&blocks));
+            let mut upload = store.put_multipart(&Path::from("blob")).await.unwrap();
+            upload
+                .put_part(PutPayload::from_static(b"first"))
+                .await
+                .unwrap();
+            upload
+                .put_part(PutPayload::from_static(b"second"))
+                .await
+                .unwrap();
+            let result = upload.complete().await.unwrap();
+            assert_eq!(result.e_tag.as_deref(), Some("completed"));
+            let blocks = blocks.lock();
+            assert_eq!(blocks.object, b"firstsecond");
+            assert!(blocks.uncommitted.is_empty());
+            assert_eq!(blocks.committed.len(), 2);
+            assert_eq!(blocks.completions.len(), 2);
+            assert_eq!(blocks.completions[0], blocks.completions[1]);
+        }
+
+        #[tokio::test]
+        async fn complete_does_not_retry_missing_blocks() {
+            let blocks = Arc::new(Mutex::new(Blocks::default()));
+            let store = store(Arc::clone(&blocks));
+            let mut upload = store.put_multipart(&Path::from("blob")).await.unwrap();
+            upload
+                .put_part(PutPayload::from_static(b"expired"))
+                .await
+                .unwrap();
+            blocks.lock().uncommitted.clear();
+            let error = upload.complete().await.unwrap_err();
+            assert!(error.to_string().contains("InvalidBlockList"));
+            let blocks = blocks.lock();
+            assert_eq!(blocks.completions.len(), 1);
+            assert!(blocks.committed.is_empty());
+            assert!(blocks.object.is_empty());
+        }
+    }
+
     #[cfg(feature = "reqwest")]
     #[tokio::test]
     async fn azure_create_multipart_opts_rejects_attributes() {

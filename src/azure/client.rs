@@ -1466,11 +1466,10 @@ impl BlockList {
     pub(crate) fn to_xml(&self) -> String {
         let mut s = String::new();
         s.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<BlockList>\n");
+        // Completion may succeed even if its response is lost. On retry, the
+        // same block IDs are already committed, so accept either block state.
         for block_id in &self.blocks {
-            let node = format!(
-                "\t<Uncommitted>{}</Uncommitted>\n",
-                BASE64_STANDARD.encode(block_id)
-            );
+            let node = format!("\t<Latest>{}</Latest>\n", BASE64_STANDARD.encode(block_id));
             s.push_str(&node);
         }
 
@@ -1681,9 +1680,9 @@ mod tests {
     fn to_xml() {
         const S: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>
 <BlockList>
-\t<Uncommitted>bnVtZXJvMQ==</Uncommitted>
-\t<Uncommitted>bnVtZXJvMg==</Uncommitted>
-\t<Uncommitted>bnVtZXJvMw==</Uncommitted>
+\t<Latest>bnVtZXJvMQ==</Latest>
+\t<Latest>bnVtZXJvMg==</Latest>
+\t<Latest>bnVtZXJvMw==</Latest>
 </BlockList>";
         let mut blocks = BlockList { blocks: Vec::new() };
         blocks.blocks.push(Bytes::from_static(b"numero1").into());
