@@ -87,8 +87,6 @@ pub trait MultipartUpload: Send + std::fmt::Debug {
     ///
     /// Returns [`crate::Error::AlreadyExists`] if the destination exists, or
     /// [`crate::Error::NotSupported`] if the backend cannot enforce this condition.
-    /// Supported by the S3, in-memory and local filesystem backends.
-    /// S3-compatible endpoints must enforce the condition on multipart completion.
     async fn complete_create(&mut self) -> Result<PutResult> {
         Err(crate::Error::NotSupported {
             source: "create-only multipart completion is not supported".into(),

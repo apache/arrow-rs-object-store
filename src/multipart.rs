@@ -120,12 +120,8 @@ pub trait MultipartStore: Send + Sync + 'static {
     /// Complete an upload atomically only if no object exists at `path`.
     ///
     /// The same part ordering requirements as [`Self::complete_multipart`] apply.
-    /// Unsupported backends return an error instead of overwriting an object.
-    /// Returns [`crate::Error::AlreadyExists`] if the destination exists.
-    /// Supported by the S3 and in-memory backends.
-    /// S3-compatible endpoints must enforce the condition on multipart completion.
-    /// An I/O error may leave the publication outcome uncertain; verify the destination's
-    /// contents before starting another upload. Aborting does not remove a published object.
+    /// The atomicity, errors and cleanup requirements of
+    /// [`MultipartUpload::complete_create`](crate::MultipartUpload::complete_create) apply.
     async fn complete_multipart_create(
         &self,
         _path: &Path,

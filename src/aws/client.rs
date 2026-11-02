@@ -27,7 +27,7 @@ use crate::client::get::GetClient;
 use crate::client::header::{HeaderConfig, get_etag};
 use crate::client::header::{get_put_result, get_version};
 use crate::client::list::ListClient;
-use crate::client::retry::{RetryContext, RetryExt};
+use crate::client::retry::{RetryContext, RetryError, RetryExt};
 use crate::client::s3::{
     CompleteMultipartUpload, CompleteMultipartUploadResult, CopyPartResult,
     InitiateMultipartUploadResult, ListResponse, PartMetadata,
@@ -48,7 +48,7 @@ use base64::prelude::BASE64_STANDARD;
 use bytes::{Buf, Bytes};
 use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH,
-    CONTENT_TYPE,
+    CONTENT_TYPE, IF_NONE_MATCH,
 };
 use http::{HeaderMap, HeaderName, Method, StatusCode};
 use itertools::Itertools;
@@ -162,6 +162,27 @@ pub(crate) enum CompleteMultipartMode {
     Create,
 }
 
+fn complete_multipart_error(
+    mode: CompleteMultipartMode,
+    source: RetryError,
+    path: &Path,
+) -> crate::Error {
+    let path = path.to_string();
+    match (mode, source.status()) {
+        (
+            CompleteMultipartMode::Create,
+            Some(StatusCode::PRECONDITION_FAILED | StatusCode::NOT_MODIFIED),
+        ) => crate::Error::AlreadyExists {
+            path,
+            source: Box::new(source),
+        },
+        (CompleteMultipartMode::Create, Some(StatusCode::CONFLICT)) => {
+            Error::ConditionalMultipartConflict { source, path }.into()
+        }
+        _ => Error::CompleteMultipartRequest { source, path }.into(),
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase", rename = "DeleteResult")]
 struct BatchDeleteResponse {
@@ -223,6 +244,15 @@ pub(crate) struct S3Config {
 }
 
 impl S3Config {
+    pub(crate) fn ensure_conditional_put_enabled(&self) -> Result<()> {
+        if self.conditional_put == S3ConditionalPut::Disabled {
+            return Err(crate::Error::NotSupported {
+                source: "conditional S3 writes are disabled".into(),
+            });
+        }
+        Ok(())
+    }
+
     pub(crate) fn path_url(&self, path: &Path) -> String {
         format!("{}/{}", self.bucket_endpoint, encode_path(path))
     }
@@ -867,47 +897,26 @@ impl S3Client {
 
         let request = builder.query(&[("uploadId", upload_id)]).body(body);
 
-        let request = match mode {
-            CompleteMultipartMode::Overwrite => request,
-            CompleteMultipartMode::Create => request.header("If-None-Match", "*"),
+        let (request, retry_config) = match mode {
+            CompleteMultipartMode::Overwrite => (request, self.config.retry_config.clone()),
+            // A retry after an ambiguous failure can report our own write as a conflict.
+            CompleteMultipartMode::Create => (
+                request.header(IF_NONE_MATCH, "*"),
+                RetryConfig {
+                    max_retries: 0,
+                    ..self.config.retry_config.clone()
+                },
+            ),
         };
-
-        let mut retry_config = self.config.retry_config.clone();
-        if matches!(mode, CompleteMultipartMode::Create) {
-            // A retry after an ambiguous failure can report our own successful write as a conflict.
-            retry_config.max_retries = 0;
-        }
 
         let response = request
             .with_aws_sigv4(authorizer, None)?
             .retryable(&retry_config)
-            .idempotent(matches!(mode, CompleteMultipartMode::Overwrite))
+            .idempotent(true)
             .retry_error_body(true)
             .send()
             .await
-            .map_err(|source| {
-                if matches!(mode, CompleteMultipartMode::Create)
-                    && source.status() == Some(StatusCode::CONFLICT)
-                {
-                    return Error::ConditionalMultipartConflict {
-                        source,
-                        path: location.to_string(),
-                    }
-                    .into();
-                }
-                let error = crate::Error::from(Error::CompleteMultipartRequest {
-                    source,
-                    path: location.as_ref().to_string(),
-                });
-                match (mode, error) {
-                    (
-                        CompleteMultipartMode::Create,
-                        crate::Error::Precondition { path, source }
-                        | crate::Error::NotModified { path, source },
-                    ) => crate::Error::AlreadyExists { path, source },
-                    (_, error) => error,
-                }
-            })?;
+            .map_err(|source| complete_multipart_error(mode, source, location))?;
 
         let (parts, body) = response.into_parts();
 

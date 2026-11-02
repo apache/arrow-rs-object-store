@@ -29,10 +29,10 @@
 //! S3-compatible endpoints may support this condition on `PutObject` but not on multipart
 //! completion; enable conditional writes only when the endpoint supports both operations.
 //!
-//! Conditional completion is sent once, without automatic retries. After a transport or
-//! server error, the object may already have been published: verify the destination's
-//! contents before deciding whether to start another upload. A `409 ConditionalRequestConflict`
-//! is returned as [`Error::Generic`] and requires starting a new upload with all parts.
+//! Conditional completion, including multipart copy-if-not-exists, is sent once without
+//! automatic retries; see [`MultipartUpload::complete_create`] for uncertain outcomes.
+//! A `409 ConditionalRequestConflict` is returned as [`Error::Generic`] and requires a new
+//! upload with all parts.
 //! An existing destination (`412`, or `304` on compatible endpoints) returns [`Error::AlreadyExists`].
 //!
 //! If the writer fails for any reason, you may have parts uploaded to AWS but not
@@ -552,11 +552,7 @@ impl MultipartUpload for S3MultiPartUpload {
     }
 
     async fn complete_create(&mut self) -> Result<PutResult> {
-        if self.state.client.config.conditional_put == S3ConditionalPut::Disabled {
-            return Err(Error::NotSupported {
-                source: "conditional S3 writes are disabled".into(),
-            });
-        }
+        self.state.client.config.ensure_conditional_put_enabled()?;
         let parts = self.state.parts.finish(self.part_idx)?;
         self.state
             .client
@@ -738,11 +734,7 @@ impl MultipartStore for AmazonS3 {
         id: &MultipartId,
         parts: Vec<PartId>,
     ) -> Result<PutResult> {
-        if self.client.config.conditional_put == S3ConditionalPut::Disabled {
-            return Err(Error::NotSupported {
-                source: "conditional S3 writes are disabled".into(),
-            });
-        }
+        self.client.config.ensure_conditional_put_enabled()?;
         self.client
             .complete_multipart(path, id, parts, CompleteMultipartMode::Create)
             .await
@@ -924,59 +916,46 @@ mod tests {
             .build()
             .unwrap();
         let path = Path::from("object");
-        for low_level in [false, true] {
-            for status in [
-                StatusCode::OK,
-                StatusCode::PRECONDITION_FAILED,
-                StatusCode::CONFLICT,
-                StatusCode::NOT_MODIFIED,
-            ] {
-                mock.push(Response::new("<InitiateMultipartUploadResult><UploadId>upload</UploadId></InitiateMultipartUploadResult>".to_owned()));
-                mock.push(
-                    Response::builder()
-                        .header("ETag", "part")
-                        .body(String::new())
-                        .unwrap(),
+        for status in [
+            StatusCode::OK,
+            StatusCode::PRECONDITION_FAILED,
+            StatusCode::CONFLICT,
+            StatusCode::NOT_MODIFIED,
+        ] {
+            mock.push(Response::new("<InitiateMultipartUploadResult><UploadId>upload</UploadId></InitiateMultipartUploadResult>".to_owned()));
+            mock.push(
+                Response::builder()
+                    .header("ETag", "part")
+                    .body(String::new())
+                    .unwrap(),
+            );
+            mock.push_fn(move |request| {
+                assert_eq!(request.method(), Method::POST);
+                assert_eq!(request.uri().query(), Some("uploadId=upload"));
+                assert_eq!(request.headers()[IF_NONE_MATCH], "*");
+                let authorization = request.headers()[AUTHORIZATION].to_str().unwrap();
+                let signed = authorization.split("SignedHeaders=").nth(1).unwrap()
+                    .split(',').next().unwrap();
+                assert!(signed.split(';').any(|name| name == "if-none-match"));
+                Response::builder().status(status).body(match status {
+                    StatusCode::OK => "<CompleteMultipartUploadResult><ETag>object</ETag></CompleteMultipartUploadResult>",
+                    StatusCode::CONFLICT => "<Error><Code>ConditionalRequestConflict</Code></Error>",
+                    StatusCode::NOT_MODIFIED => "",
+                    _ => "<Error><Code>PreconditionFailed</Code></Error>",
+                }.to_owned()).unwrap()
+            });
+            let mut upload = store.put_multipart(&path).await.unwrap();
+            upload.put_part("payload".into()).await.unwrap();
+            let result = upload.complete_create().await;
+            if status.is_success() {
+                assert_eq!(result.unwrap().e_tag.as_deref(), Some("object"));
+            } else if status == StatusCode::CONFLICT {
+                assert!(matches!(&result, Err(Error::Generic { .. })), "{result:?}");
+            } else {
+                assert!(
+                    matches!(&result, Err(Error::AlreadyExists { .. })),
+                    "{result:?}"
                 );
-                mock.push_fn(move |request| {
-                    assert_eq!(request.method(), Method::POST);
-                    assert_eq!(request.uri().query(), Some("uploadId=upload"));
-                    assert_eq!(request.headers()[IF_NONE_MATCH], "*");
-                    let authorization = request.headers()[AUTHORIZATION].to_str().unwrap();
-                    let signed = authorization.split("SignedHeaders=").nth(1).unwrap()
-                        .split(',').next().unwrap();
-                    assert!(signed.split(';').any(|name| name == "if-none-match"));
-                    Response::builder().status(status).body(match status {
-                        StatusCode::OK => "<CompleteMultipartUploadResult><ETag>object</ETag></CompleteMultipartUploadResult>",
-                        StatusCode::CONFLICT => "<Error><Code>ConditionalRequestConflict</Code></Error>",
-                        StatusCode::NOT_MODIFIED => "",
-                        _ => "<Error><Code>PreconditionFailed</Code></Error>",
-                    }.to_owned()).unwrap()
-                });
-                let result = if low_level {
-                    let id = store.create_multipart(&path).await.unwrap();
-                    let part = store
-                        .put_part(&path, &id, 0, "payload".into())
-                        .await
-                        .unwrap();
-                    store
-                        .complete_multipart_create(&path, &id, vec![part])
-                        .await
-                } else {
-                    let mut upload = store.put_multipart(&path).await.unwrap();
-                    upload.put_part("payload".into()).await.unwrap();
-                    upload.complete_create().await
-                };
-                if status.is_success() {
-                    assert_eq!(result.unwrap().e_tag.as_deref(), Some("object"));
-                } else if status == StatusCode::CONFLICT {
-                    assert!(matches!(&result, Err(Error::Generic { .. })), "{result:?}");
-                } else {
-                    assert!(
-                        matches!(&result, Err(Error::AlreadyExists { .. })),
-                        "{result:?}"
-                    );
-                }
             }
         }
         mock.push_fn(|request| {

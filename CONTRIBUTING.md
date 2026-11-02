@@ -156,7 +156,7 @@ a tampered signature, an expired URL, or a signed header whose value the client 
 require a backend that actually validates SigV4. LocalStack does not (it accepts presigned
 requests regardless of signature or expiry), so these tests are gated behind a separate
 `TEST_S3_SIGNATURE_ENFORCEMENT` variable rather than running in the main LocalStack integration
-pass. CI runs them against RustFS instead, which does validate SigV4 (the "Run presigned-URL
+pass. CI runs them against RustFS instead, which does validate SigV4 (the "Run S3 integration and
 signature-enforcement tests (RustFS)" step in `ci.yml`), so they stay exercised. The steps below
 reproduce that locally or point at real S3.
 

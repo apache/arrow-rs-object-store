@@ -123,12 +123,26 @@ struct PartStorage {
 type SharedStorage = Arc<RwLock<Storage>>;
 
 impl Storage {
-    fn insert(&mut self, location: &Path, bytes: Bytes, attributes: Attributes) -> usize {
+    fn put(
+        &mut self,
+        location: &Path,
+        bytes: Bytes,
+        attributes: Attributes,
+        mode: PutMode,
+    ) -> Result<PutResult> {
         let etag = self.next_etag;
-        self.next_etag += 1;
         let entry = Entry::new(bytes, Utc::now(), etag, attributes);
-        self.overwrite(location, entry);
-        etag
+        match mode {
+            PutMode::Overwrite => self.overwrite(location, entry),
+            PutMode::Create => self.create(location, entry)?,
+            PutMode::Update(version) => self.update(location, version, entry)?,
+        }
+        self.next_etag += 1;
+        Ok(PutResult {
+            e_tag: Some(format!("\"{}\"", etag)),
+            version: None,
+            extensions: Default::default(),
+        })
     }
 
     fn overwrite(&mut self, location: &Path, entry: Entry) {
@@ -205,22 +219,9 @@ impl ObjectStore for InMemory {
         payload: PutPayload,
         opts: PutOptions,
     ) -> Result<PutResult> {
-        let mut storage = self.storage.write();
-        let etag = storage.next_etag;
-        let entry = Entry::new(payload.into(), Utc::now(), etag, opts.attributes);
-
-        match opts.mode {
-            PutMode::Overwrite => storage.overwrite(location, entry),
-            PutMode::Create => storage.create(location, entry)?,
-            PutMode::Update(v) => storage.update(location, v, entry)?,
-        }
-        storage.next_etag += 1;
-
-        Ok(PutResult {
-            e_tag: Some(format!("\"{}\"", etag)),
-            version: None,
-            extensions: Default::default(),
-        })
+        self.storage
+            .write()
+            .put(location, payload.into(), opts.attributes, opts.mode)
     }
 
     async fn put_multipart_opts(
@@ -399,22 +400,13 @@ impl ObjectStore for InMemory {
         let entry = self.entry(from)?;
         let mut storage = self.storage.write();
 
-        match mode {
-            CopyMode::Overwrite => {
-                storage.insert(to, entry.data, entry.attributes);
-            }
-            CopyMode::Create => {
-                if storage.map.contains_key(to) {
-                    return Err(Error::AlreadyExists {
-                        path: to.to_string(),
-                    }
-                    .into());
-                }
-                storage.insert(to, entry.data, entry.attributes);
-            }
-        }
-
-        Ok(())
+        let mode = match mode {
+            CopyMode::Overwrite => PutMode::Overwrite,
+            CopyMode::Create => PutMode::Create,
+        };
+        storage
+            .put(to, entry.data, entry.attributes, mode)
+            .map(|_| ())
     }
 }
 
@@ -498,20 +490,9 @@ impl InMemory {
             buf.extend_from_slice(data.as_ref().unwrap());
         }
         let attributes = upload.attributes.clone();
-        let etag = storage.next_etag;
-        let entry = Entry::new(buf.into(), Utc::now(), etag, attributes);
-        match mode {
-            PutMode::Overwrite => storage.overwrite(path, entry),
-            PutMode::Create => storage.create(path, entry)?,
-            PutMode::Update(version) => storage.update(path, version, entry)?,
-        }
+        let result = storage.put(path, buf.into(), attributes, mode)?;
         storage.remove_upload(id)?;
-        storage.next_etag += 1;
-        Ok(PutResult {
-            e_tag: Some(format!("\"{}\"", etag)),
-            version: None,
-            extensions: Default::default(),
-        })
+        Ok(result)
     }
 
     /// Create new in-memory storage.
@@ -549,6 +530,21 @@ struct InMemoryUpload {
     storage: Arc<RwLock<Storage>>,
 }
 
+impl InMemoryUpload {
+    fn finish(&self, mode: PutMode) -> Result<PutResult> {
+        let bytes = self
+            .parts
+            .iter()
+            .flatten()
+            .cloned()
+            .collect::<PutPayload>()
+            .into();
+        self.storage
+            .write()
+            .put(&self.location, bytes, self.attributes.clone(), mode)
+    }
+}
+
 #[async_trait]
 impl MultipartUpload for InMemoryUpload {
     fn put_part(&mut self, payload: PutPayload) -> UploadPart {
@@ -557,38 +553,11 @@ impl MultipartUpload for InMemoryUpload {
     }
 
     async fn complete(&mut self) -> Result<PutResult> {
-        let cap = self.parts.iter().map(|x| x.content_length()).sum();
-        let mut buf = Vec::with_capacity(cap);
-        let parts = self.parts.iter().flatten();
-        parts.for_each(|x| buf.extend_from_slice(x));
-        let etag = self.storage.write().insert(
-            &self.location,
-            buf.into(),
-            std::mem::take(&mut self.attributes),
-        );
-
-        Ok(PutResult {
-            e_tag: Some(format!("\"{}\"", etag)),
-            version: None,
-            extensions: Default::default(),
-        })
+        self.finish(PutMode::Overwrite)
     }
 
     async fn complete_create(&mut self) -> Result<PutResult> {
-        let payload = self.parts.iter().flatten().cloned().collect::<PutPayload>();
-        InMemory {
-            storage: Arc::clone(&self.storage),
-        }
-        .put_opts(
-            &self.location,
-            payload,
-            PutOptions {
-                mode: PutMode::Create,
-                attributes: self.attributes.clone(),
-                ..Default::default()
-            },
-        )
-        .await
+        self.finish(PutMode::Create)
     }
 
     async fn abort(&mut self) -> Result<()> {
