@@ -258,7 +258,15 @@ impl ObjectStore for AmazonS3 {
                 implementer: self.to_string(),
             }),
             (PutMode::Create, S3ConditionalPut::ETagMatch) => {
-                match request.header(&IF_NONE_MATCH, "*").do_put().await {
+                match request
+                    .header(&IF_NONE_MATCH, "*")
+                    // Real S3 can report 409 Conflict when a concurrent delete
+                    // of the key completes before this write does. Nothing was
+                    // written in that case, so the request is safe to retry.
+                    .retry_on_conflict(true)
+                    .do_put()
+                    .await
+                {
                     // Technically If-None-Match should return NotModified but some stores,
                     // such as R2, instead return PreconditionFailed
                     // https://developers.cloudflare.com/r2/api/s3/extensions/#conditional-operations-in-putobject
