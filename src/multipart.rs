@@ -25,7 +25,8 @@ use async_trait::async_trait;
 
 use crate::path::Path;
 use crate::{
-    Error, Extensions, MultipartId, PutMode, PutMultipartOptions, PutPayload, PutResult, Result,
+    CompleteMultipartOptions, Error, MultipartId, PutMode, PutMultipartOptions, PutPayload,
+    PutResult, Result,
 };
 
 /// Represents a part of a file that has been successfully uploaded in a multipart upload process.
@@ -33,48 +34,6 @@ use crate::{
 pub struct PartId {
     /// Id of this part
     pub content_id: String,
-}
-
-/// Options for [`MultipartStore::complete_multipart_opts`]
-#[derive(Debug, Clone, Default)]
-pub struct CompleteMultipartOptions {
-    /// Configure the [`PutMode`] for this completion
-    ///
-    /// [`PutMode::Create`] fails with [`Error::AlreadyExists`] if an object already
-    /// exists at the path.
-    pub mode: PutMode,
-    /// Implementation-specific extensions. Intended for use by [`MultipartStore`] implementations
-    /// that need to pass context-specific information (like tracing spans) via trait methods.
-    ///
-    /// These extensions are ignored entirely by backends offered through this crate.
-    ///
-    /// They are also excluded from [`PartialEq`] and [`Eq`].
-    pub extensions: Extensions,
-}
-
-impl PartialEq<Self> for CompleteMultipartOptions {
-    fn eq(&self, other: &Self) -> bool {
-        let Self {
-            mode,
-            extensions: _,
-        } = self;
-        let Self {
-            mode: other_mode,
-            extensions: _,
-        } = other;
-        mode == other_mode
-    }
-}
-
-impl Eq for CompleteMultipartOptions {}
-
-impl From<PutMode> for CompleteMultipartOptions {
-    fn from(mode: PutMode) -> Self {
-        Self {
-            mode,
-            ..Default::default()
-        }
-    }
 }
 
 /// A low-level interface for interacting with multipart upload APIs
@@ -201,6 +160,7 @@ pub trait MultipartStore: Send + Sync + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Extensions;
 
     struct TestMultipartStore;
 

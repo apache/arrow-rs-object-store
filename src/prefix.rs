@@ -20,13 +20,14 @@ use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream::BoxStream};
 use std::ops::Range;
 
-use crate::multipart::{CompleteMultipartOptions, MultipartStore, PartId};
+use crate::multipart::{MultipartStore, PartId};
 use crate::path::Path;
 #[cfg(feature = "cloud-base")]
 use crate::signer::Signer;
 use crate::{
-    CopyOptions, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result,
+    CompleteMultipartOptions, CopyOptions, GetOptions, GetResult, ListResult, MultipartId,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload,
+    PutResult, RenameOptions, Result,
 };
 
 /// Store wrapper that applies a constant prefix to all paths handled by the store.

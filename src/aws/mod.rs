@@ -43,14 +43,14 @@ use crate::aws::client::{CompleteMultipartMode, PutPartPayload, RequestError, S3
 use crate::client::CredentialProvider;
 use crate::client::get::GetClientExt;
 use crate::client::list::{ListClient, ListClientExt};
-use crate::multipart::{CompleteMultipartOptions, MultipartStore, PartId};
+use crate::multipart::{MultipartStore, PartId};
 use crate::retry::{MultipartRetry, RetryPolicy};
 use crate::signer::{SignedUrlOptions, Signer};
 use crate::util::{STRICT_ENCODE_SET, validate_signed_url_extras};
 use crate::{
-    CopyMode, CopyOptions, Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, Path, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult,
-    Result, UploadPart,
+    CompleteMultipartOptions, CopyMode, CopyOptions, Error, GetOptions, GetResult, ListResult,
+    MultipartId, MultipartUpload, ObjectMeta, ObjectStore, Path, PutMode, PutMultipartOptions,
+    PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 
 static TAGS_HEADER: HeaderName = HeaderName::from_static("x-amz-tagging");

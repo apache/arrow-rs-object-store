@@ -20,8 +20,8 @@ use parking_lot::Mutex;
 use std::ops::Range;
 use std::{convert::TryInto, sync::Arc};
 
-use crate::multipart::{CompleteMultipartOptions, MultipartStore, PartId};
-use crate::{CopyOptions, GetOptions, RenameOptions, UploadPart};
+use crate::multipart::{MultipartStore, PartId};
+use crate::{CompleteMultipartOptions, CopyOptions, GetOptions, RenameOptions, UploadPart};
 use crate::{
     GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
     PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, path::Path,
