@@ -585,16 +585,18 @@ pub async fn get_opts(storage: &dyn ObjectStore) {
     }
 }
 
-/// Tests that competing multipart creates cannot overwrite the winner.
+/// Tests atomic multipart creation, mode changes and streaming completion.
 pub async fn multipart_create(storage: &dyn ObjectStore) {
     let path = Path::from("multipart-create");
     let mut first = storage.put_multipart(&path).await.unwrap();
     let mut second = storage.put_multipart(&path).await.unwrap();
     first.put_part("first".into()).await.unwrap();
     second.put_part("second".into()).await.unwrap();
-    first.complete_create().await.unwrap();
+    first.put_mode(PutMode::Create).unwrap();
+    second.put_mode(PutMode::Create).unwrap();
+    first.complete().await.unwrap();
     assert!(matches!(
-        second.complete_create().await,
+        second.complete().await,
         Err(crate::Error::AlreadyExists { .. })
     ));
     second.abort().await.unwrap();
@@ -602,11 +604,39 @@ pub async fn multipart_create(storage: &dyn ObjectStore) {
         storage.get(&path).await.unwrap().bytes().await.unwrap(),
         "first"
     );
+    let mut overwrite = storage.put_multipart(&path).await.unwrap();
+    overwrite.put_part("overwrite".into()).await.unwrap();
+    overwrite.put_mode(PutMode::Create).unwrap();
+    overwrite.put_mode(PutMode::Overwrite).unwrap();
+    overwrite.complete().await.unwrap();
+    assert_eq!(
+        storage.get(&path).await.unwrap().bytes().await.unwrap(),
+        "overwrite"
+    );
     storage.delete(&path).await.unwrap();
 
     let mut empty = storage.put_multipart(&path).await.unwrap();
-    empty.complete_create().await.unwrap();
+    empty.put_mode(PutMode::Create).unwrap();
+    empty.complete().await.unwrap();
     assert_eq!(storage.head(&path).await.unwrap().size, 0);
+    storage.delete(&path).await.unwrap();
+
+    for content in ["streamed", "conflict"] {
+        let upload = storage.put_multipart(&path).await.unwrap();
+        let mut writer = WriteMultipart::new(upload);
+        writer.write(content.as_bytes());
+        writer.put_mode(PutMode::Create).unwrap();
+        let result = writer.finish().await;
+        if content == "streamed" {
+            result.unwrap();
+        } else {
+            assert!(matches!(result, Err(Error::AlreadyExists { .. })));
+        }
+    }
+    assert_eq!(
+        storage.get(&path).await.unwrap().bytes().await.unwrap(),
+        "streamed"
+    );
     storage.delete(&path).await.unwrap();
 }
 

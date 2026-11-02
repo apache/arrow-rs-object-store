@@ -27,6 +27,7 @@ use futures_util::{StreamExt, stream::BoxStream};
 use parking_lot::RwLock;
 
 use crate::multipart::{MultipartStore, PartId};
+use crate::upload::MultipartUploadMode;
 use crate::util::InvalidGetRange;
 use crate::{
     Attributes, GetRange, GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload,
@@ -230,6 +231,7 @@ impl ObjectStore for InMemory {
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
         Ok(Box::new(InMemoryUpload {
+            mode: MultipartUploadMode::Overwrite,
             location: location.clone(),
             attributes: opts.attributes,
             parts: vec![],
@@ -524,6 +526,7 @@ impl InMemory {
 
 #[derive(Debug)]
 struct InMemoryUpload {
+    mode: MultipartUploadMode,
     location: Path,
     attributes: Attributes,
     parts: Vec<PutPayload>,
@@ -531,7 +534,7 @@ struct InMemoryUpload {
 }
 
 impl InMemoryUpload {
-    fn finish(&self, mode: PutMode) -> Result<PutResult> {
+    fn finish(&self) -> Result<PutResult> {
         let bytes = self
             .parts
             .iter()
@@ -539,9 +542,12 @@ impl InMemoryUpload {
             .cloned()
             .collect::<PutPayload>()
             .into();
-        self.storage
-            .write()
-            .put(&self.location, bytes, self.attributes.clone(), mode)
+        self.storage.write().put(
+            &self.location,
+            bytes,
+            self.attributes.clone(),
+            self.mode.into(),
+        )
     }
 }
 
@@ -552,12 +558,13 @@ impl MultipartUpload for InMemoryUpload {
         Box::pin(futures_util::future::ready(Ok(())))
     }
 
-    async fn complete(&mut self) -> Result<PutResult> {
-        self.finish(PutMode::Overwrite)
+    fn put_mode(&mut self, mode: PutMode) -> Result<()> {
+        self.mode = MultipartUploadMode::try_from(mode)?;
+        Ok(())
     }
 
-    async fn complete_create(&mut self) -> Result<PutResult> {
-        self.finish(PutMode::Create)
+    async fn complete(&mut self) -> Result<PutResult> {
+        self.finish()
     }
 
     async fn abort(&mut self) -> Result<()> {

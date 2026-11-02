@@ -38,6 +38,7 @@ use crate::client::{
 };
 use crate::list::{PaginatedListOptions, PaginatedListResult};
 use crate::multipart::PartId;
+use crate::upload::MultipartUploadMode;
 use crate::{
     Attribute, Attributes, ClientOptions, GetOptions, ListResult, MultipartId, Path,
     PutMultipartOptions, PutPayload, PutResult, Result, RetryConfig, TagSet,
@@ -156,27 +157,21 @@ impl Default for PutPartPayload<'_> {
     }
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum CompleteMultipartMode {
-    Overwrite,
-    Create,
-}
-
 fn complete_multipart_error(
-    mode: CompleteMultipartMode,
+    mode: MultipartUploadMode,
     source: RetryError,
     path: &Path,
 ) -> crate::Error {
     let path = path.to_string();
     match (mode, source.status()) {
         (
-            CompleteMultipartMode::Create,
+            MultipartUploadMode::Create,
             Some(StatusCode::PRECONDITION_FAILED | StatusCode::NOT_MODIFIED),
         ) => crate::Error::AlreadyExists {
             path,
             source: Box::new(source),
         },
-        (CompleteMultipartMode::Create, Some(StatusCode::CONFLICT)) => {
+        (MultipartUploadMode::Create, Some(StatusCode::CONFLICT)) => {
             Error::ConditionalMultipartConflict { source, path }.into()
         }
         _ => Error::CompleteMultipartRequest { source, path }.into(),
@@ -866,7 +861,7 @@ impl S3Client {
         location: &Path,
         upload_id: &str,
         parts: Vec<PartId>,
-        mode: CompleteMultipartMode,
+        mode: MultipartUploadMode,
     ) -> Result<PutResult> {
         let parts = if parts.is_empty() {
             // If no parts were uploaded, upload an empty part
@@ -898,9 +893,9 @@ impl S3Client {
         let request = builder.query(&[("uploadId", upload_id)]).body(body);
 
         let (request, retry_config) = match mode {
-            CompleteMultipartMode::Overwrite => (request, self.config.retry_config.clone()),
+            MultipartUploadMode::Overwrite => (request, self.config.retry_config.clone()),
             // A retry after an ambiguous failure can report our own write as a conflict.
-            CompleteMultipartMode::Create => (
+            MultipartUploadMode::Create => (
                 request.header(IF_NONE_MATCH, "*"),
                 RetryConfig {
                     max_retries: 0,
@@ -1454,7 +1449,7 @@ mod tests {
                 &Path::from("test"),
                 "test-upload-id",
                 parts,
-                CompleteMultipartMode::Overwrite,
+                MultipartUploadMode::Overwrite,
             )
             .await
             .unwrap();

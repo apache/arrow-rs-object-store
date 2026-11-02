@@ -38,6 +38,7 @@ use parking_lot::Mutex;
 use url::Url;
 use walkdir::{DirEntry, WalkDir};
 
+use crate::upload::MultipartUploadMode;
 use crate::{
     Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
     ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
@@ -1088,6 +1089,7 @@ fn staged_upload_path(dest: &std::path::Path, suffix: &str) -> PathBuf {
 
 #[derive(Debug)]
 struct LocalUpload {
+    mode: MultipartUploadMode,
     /// The upload state
     state: Arc<UploadState>,
     /// The location of the temporary file
@@ -1107,6 +1109,7 @@ struct UploadState {
 impl LocalUpload {
     pub(crate) fn new(src: PathBuf, dest: PathBuf, file: File, fsync: bool) -> Self {
         Self {
+            mode: MultipartUploadMode::Overwrite,
             state: Arc::new(UploadState {
                 dest,
                 file: Mutex::new(Some(file)),
@@ -1172,12 +1175,16 @@ impl MultipartUpload for LocalUpload {
         .boxed()
     }
 
-    async fn complete(&mut self) -> Result<PutResult> {
-        self.publish(finish_staged_rename).await
+    fn put_mode(&mut self, mode: PutMode) -> Result<()> {
+        self.mode = MultipartUploadMode::try_from(mode)?;
+        Ok(())
     }
 
-    async fn complete_create(&mut self) -> Result<PutResult> {
-        self.publish(finish_staged_hard_link).await
+    async fn complete(&mut self) -> Result<PutResult> {
+        match self.mode {
+            MultipartUploadMode::Overwrite => self.publish(finish_staged_rename).await,
+            MultipartUploadMode::Create => self.publish(finish_staged_hard_link).await,
+        }
     }
 
     async fn abort(&mut self) -> Result<()> {
@@ -2298,7 +2305,7 @@ mod not_wasm_tests {
     use tempfile::TempDir;
 
     use crate::local::LocalFileSystem;
-    use crate::{Error, ObjectStoreExt, Path, PutPayload};
+    use crate::{Error, ObjectStoreExt, Path, PutMode, PutPayload};
 
     #[tokio::test]
     async fn test_abort_after_failed_create_completion() {
@@ -2309,10 +2316,12 @@ mod not_wasm_tests {
         let mut upload = storage.put_multipart(&path).await.unwrap();
         upload.put_part("second".into()).await.unwrap();
 
+        upload.put_mode(PutMode::Create).unwrap();
         assert!(matches!(
-            upload.complete_create().await,
+            upload.complete().await,
             Err(Error::AlreadyExists { .. })
         ));
+        upload.put_mode(PutMode::Overwrite).unwrap();
         let _ = upload.complete().await;
         upload.abort().await.unwrap();
 

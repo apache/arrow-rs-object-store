@@ -120,8 +120,10 @@ pub trait MultipartStore: Send + Sync + 'static {
     /// Complete an upload atomically only if no object exists at `path`.
     ///
     /// The same part ordering requirements as [`Self::complete_multipart`] apply.
-    /// The atomicity, errors and cleanup requirements of
-    /// [`MultipartUpload::complete_create`](crate::MultipartUpload::complete_create) apply.
+    /// Returns [`Error::AlreadyExists`] if the destination exists, or
+    /// [`Error::NotSupported`] if conditional completion is unsupported.
+    /// See [`MultipartUpload::complete`](crate::MultipartUpload::complete) for uncertain
+    /// publication outcomes and cleanup.
     async fn complete_multipart_create(
         &self,
         _path: &Path,

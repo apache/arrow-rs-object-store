@@ -24,13 +24,14 @@
 //!
 //! Multipart uploads can be initiated with the [`ObjectStore::put_multipart_opts`] method.
 //!
-//! [`MultipartUpload::complete_create`] and [`MultipartStore::complete_multipart_create`]
-//! require the endpoint to enforce `If-None-Match: *` on `CompleteMultipartUpload`.
+//! Selecting [`PutMode::Create`] through [`MultipartUpload::put_mode`], or using
+//! [`MultipartStore::complete_multipart_create`], requires the endpoint to enforce
+//! `If-None-Match: *` on `CompleteMultipartUpload`.
 //! S3-compatible endpoints may support this condition on `PutObject` but not on multipart
 //! completion; enable conditional writes only when the endpoint supports both operations.
 //!
 //! Conditional completion, including multipart copy-if-not-exists, is sent once without
-//! automatic retries; see [`MultipartUpload::complete_create`] for uncertain outcomes.
+//! automatic retries; see [`MultipartUpload::complete`] for uncertain outcomes.
 //! A `409 ConditionalRequestConflict` is returned as [`Error::Generic`] and requires a new
 //! upload with all parts.
 //! An existing destination (`412`, or `304` on compatible endpoints) returns [`Error::AlreadyExists`].
@@ -50,13 +51,14 @@ use http::{Method, StatusCode};
 use std::{sync::Arc, time::Duration};
 use url::Url;
 
-use crate::aws::client::{CompleteMultipartMode, PutPartPayload, RequestError, S3Client};
+use crate::aws::client::{PutPartPayload, RequestError, S3Client};
 use crate::client::CredentialProvider;
 use crate::client::get::GetClientExt;
 use crate::client::list::{ListClient, ListClientExt};
 use crate::multipart::{MultipartStore, PartId};
 use crate::retry::{MultipartRetry, RetryPolicy};
 use crate::signer::{SignedUrlOptions, Signer};
+use crate::upload::MultipartUploadMode;
 use crate::util::{STRICT_ENCODE_SET, validate_signed_url_extras};
 use crate::{
     CopyMode, CopyOptions, Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
@@ -329,6 +331,7 @@ impl ObjectStore for AmazonS3 {
         let upload_id = self.client.create_multipart(location, opts).await?;
 
         Ok(Box::new(S3MultiPartUpload {
+            mode: MultipartUploadMode::Overwrite,
             part_idx: 0,
             state: Arc::new(UploadState {
                 client: Arc::clone(&self.client),
@@ -450,7 +453,7 @@ impl ObjectStore for AmazonS3 {
                                     to,
                                     &upload_id,
                                     vec![part_id],
-                                    CompleteMultipartMode::Create,
+                                    MultipartUploadMode::Create,
                                 )
                                 .await
                                 .map(|_| ())
@@ -494,6 +497,7 @@ impl ObjectStore for AmazonS3 {
 
 #[derive(Debug)]
 struct S3MultiPartUpload {
+    mode: MultipartUploadMode,
     part_idx: usize,
     state: Arc<UploadState>,
 }
@@ -537,22 +541,16 @@ impl MultipartUpload for S3MultiPartUpload {
         })
     }
 
-    async fn complete(&mut self) -> Result<PutResult> {
-        let parts = self.state.parts.finish(self.part_idx)?;
-
-        self.state
-            .client
-            .complete_multipart(
-                &self.state.location,
-                &self.state.upload_id,
-                parts,
-                CompleteMultipartMode::Overwrite,
-            )
-            .await
+    fn put_mode(&mut self, mode: PutMode) -> Result<()> {
+        let mode = MultipartUploadMode::try_from(mode)?;
+        if matches!(mode, MultipartUploadMode::Create) {
+            self.state.client.config.ensure_conditional_put_enabled()?;
+        }
+        self.mode = mode;
+        Ok(())
     }
 
-    async fn complete_create(&mut self) -> Result<PutResult> {
-        self.state.client.config.ensure_conditional_put_enabled()?;
+    async fn complete(&mut self) -> Result<PutResult> {
         let parts = self.state.parts.finish(self.part_idx)?;
         self.state
             .client
@@ -560,7 +558,7 @@ impl MultipartUpload for S3MultiPartUpload {
                 &self.state.location,
                 &self.state.upload_id,
                 parts,
-                CompleteMultipartMode::Create,
+                self.mode,
             )
             .await
     }
@@ -724,7 +722,7 @@ impl MultipartStore for AmazonS3 {
         parts: Vec<PartId>,
     ) -> Result<PutResult> {
         self.client
-            .complete_multipart(path, id, parts, CompleteMultipartMode::Overwrite)
+            .complete_multipart(path, id, parts, MultipartUploadMode::Overwrite)
             .await
     }
 
@@ -736,7 +734,7 @@ impl MultipartStore for AmazonS3 {
     ) -> Result<PutResult> {
         self.client.config.ensure_conditional_put_enabled()?;
         self.client
-            .complete_multipart(path, id, parts, CompleteMultipartMode::Create)
+            .complete_multipart(path, id, parts, MultipartUploadMode::Create)
             .await
     }
 
@@ -764,7 +762,6 @@ impl PaginatedListStore for AmazonS3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ClientOptions;
     use crate::ObjectStoreExt;
     #[cfg(feature = "reqwest")]
     use crate::client::SpawnedReqwestConnector;
@@ -778,6 +775,7 @@ mod tests {
     };
     use crate::integration::*;
     use crate::tests::*;
+    use crate::{ClientOptions, UpdateVersion};
     use base64::Engine;
     use base64::prelude::BASE64_STANDARD;
     use http::HeaderMap;
@@ -946,7 +944,15 @@ mod tests {
             });
             let mut upload = store.put_multipart(&path).await.unwrap();
             upload.put_part("payload".into()).await.unwrap();
-            let result = upload.complete_create().await;
+            upload.put_mode(PutMode::Create).unwrap();
+            assert!(matches!(
+                upload.put_mode(PutMode::Update(UpdateVersion {
+                    e_tag: None,
+                    version: None,
+                })),
+                Err(Error::NotSupported { .. })
+            ));
+            let result = upload.complete().await;
             if status.is_success() {
                 assert_eq!(result.unwrap().e_tag.as_deref(), Some("object"));
             } else if status == StatusCode::CONFLICT {
