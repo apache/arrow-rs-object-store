@@ -43,7 +43,7 @@ use crate::aws::client::{CompleteMultipartMode, PutPartPayload, RequestError, S3
 use crate::client::CredentialProvider;
 use crate::client::get::GetClientExt;
 use crate::client::list::{ListClient, ListClientExt};
-use crate::multipart::{MultipartStore, PartId};
+use crate::multipart::{CompleteMultipartOptions, MultipartStore, PartId};
 use crate::retry::{MultipartRetry, RetryPolicy};
 use crate::signer::{SignedUrlOptions, Signer};
 use crate::util::{STRICT_ENCODE_SET, validate_signed_url_extras};
@@ -258,18 +258,8 @@ impl ObjectStore for AmazonS3 {
                 implementer: self.to_string(),
             }),
             (PutMode::Create, S3ConditionalPut::ETagMatch) => {
-                match request.header(&IF_NONE_MATCH, "*").do_put().await {
-                    // Technically If-None-Match should return NotModified but some stores,
-                    // such as R2, instead return PreconditionFailed
-                    // https://developers.cloudflare.com/r2/api/s3/extensions/#conditional-operations-in-putobject
-                    Err(e @ Error::NotModified { .. } | e @ Error::Precondition { .. }) => {
-                        Err(Error::AlreadyExists {
-                            path: location.to_string(),
-                            source: Box::new(e),
-                        })
-                    }
-                    r => r,
-                }
+                let result = request.header(&IF_NONE_MATCH, "*").do_put().await;
+                map_create_error(location.to_string(), result)
             }
             (PutMode::Update(v), put) => {
                 let etag = v.e_tag.ok_or_else(|| Error::Generic {
@@ -486,6 +476,23 @@ impl ObjectStore for AmazonS3 {
                 }
             }
         }
+    }
+}
+
+/// Maps errors from a conditional create completion to `AlreadyExists`.
+///
+/// Technically If-None-Match should return NotModified but some stores,
+/// such as R2, instead return PreconditionFailed.
+/// See: <https://developers.cloudflare.com/r2/api/s3/extensions/#conditional-operations-in-putobject>
+fn map_create_error(path: String, result: Result<PutResult>) -> Result<PutResult> {
+    match result {
+        Err(e @ Error::NotModified { .. } | e @ Error::Precondition { .. }) => {
+            Err(Error::AlreadyExists {
+                path,
+                source: Box::new(e),
+            })
+        }
+        r => r,
     }
 }
 
@@ -709,6 +716,45 @@ impl MultipartStore for AmazonS3 {
         self.client
             .complete_multipart(path, id, parts, CompleteMultipartMode::Overwrite)
             .await
+    }
+
+    /// Completes a multipart upload with the given options.
+    ///
+    /// [`PutMode::Create`] sends `If-None-Match: *` and requires
+    /// [`S3ConditionalPut::ETagMatch`]. This store does not retry such a completion
+    /// automatically.
+    async fn complete_multipart_opts(
+        &self,
+        path: &Path,
+        id: &MultipartId,
+        parts: Vec<PartId>,
+        opts: CompleteMultipartOptions,
+    ) -> Result<PutResult> {
+        let CompleteMultipartOptions {
+            mode,
+            extensions: _,
+        } = opts;
+
+        match (mode, &self.client.config.conditional_put) {
+            (PutMode::Overwrite, _) => self.complete_multipart(path, id, parts).await,
+            (PutMode::Create, S3ConditionalPut::ETagMatch) => {
+                let result = self
+                    .client
+                    .complete_multipart(path, id, parts, CompleteMultipartMode::Create)
+                    .await;
+                map_create_error(path.to_string(), result)
+            }
+            (PutMode::Create, S3ConditionalPut::Disabled) => Err(Error::NotImplemented {
+                operation: "`complete_multipart_opts` with mode `PutMode::Create` when conditional put is disabled".into(),
+                implementer: self.to_string(),
+            }),
+            // S3 also accepts If-Match on CompleteMultipartUpload, but CompleteMultipartMode
+            // has no variant for it yet.
+            (PutMode::Update(_), _) => Err(Error::NotImplemented {
+                operation: "`complete_multipart_opts` with mode `PutMode::Update`".into(),
+                implementer: self.to_string(),
+            }),
+        }
     }
 
     async fn abort_multipart(&self, path: &Path, id: &MultipartId) -> Result<()> {
@@ -1583,6 +1629,7 @@ mod tests {
         }
         if test_conditional_put {
             put_opts(&integration, true).await;
+            multipart_complete_create(&integration, &integration).await;
         }
 
         // run integration test with unsigned payload enabled

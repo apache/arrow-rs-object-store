@@ -1089,6 +1089,35 @@ pub async fn multipart_with_opts(storage: &dyn ObjectStore, multipart: &dyn Mult
     }
 }
 
+/// Tests [`MultipartStore::complete_multipart_opts`] with [`PutMode::Create`]
+pub async fn multipart_complete_create(storage: &dyn ObjectStore, multipart: &dyn MultipartStore) {
+    let path = Path::from("test_multipart_complete_create");
+    let _ = storage.delete(&path).await;
+
+    // No object exists yet, so the completion creates one
+    let id = multipart.create_multipart(&path).await.unwrap();
+    let part = multipart.put_part(&path, &id, 0, "a".into()).await.unwrap();
+    multipart
+        .complete_multipart_opts(&path, &id, vec![part], PutMode::Create.into())
+        .await
+        .unwrap();
+
+    // The object exists now, so the completion fails and leaves the upload to abort
+    let id = multipart.create_multipart(&path).await.unwrap();
+    let part = multipart.put_part(&path, &id, 0, "b".into()).await.unwrap();
+    let err = multipart
+        .complete_multipart_opts(&path, &id, vec![part], PutMode::Create.into())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::AlreadyExists { .. }), "{err}");
+    multipart.abort_multipart(&path, &id).await.unwrap();
+
+    let bytes = storage.get(&path).await.unwrap().bytes().await.unwrap();
+    assert_eq!(bytes.as_ref(), b"a");
+
+    storage.delete(&path).await.unwrap();
+}
+
 /// Tests that [`MultipartStore::put_part`] may be invoked with non-sequential part indices.
 pub async fn multipart_put_part_out_of_order(
     storage: &dyn ObjectStore,

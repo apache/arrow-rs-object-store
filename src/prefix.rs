@@ -20,7 +20,7 @@ use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream::BoxStream};
 use std::ops::Range;
 
-use crate::multipart::{MultipartStore, PartId};
+use crate::multipart::{CompleteMultipartOptions, MultipartStore, PartId};
 use crate::path::Path;
 #[cfg(feature = "cloud-base")]
 use crate::signer::Signer;
@@ -240,6 +240,19 @@ impl<T: MultipartStore> MultipartStore for PrefixStore<T> {
         self.inner.complete_multipart(&full_path, id, parts).await
     }
 
+    async fn complete_multipart_opts(
+        &self,
+        path: &Path,
+        id: &MultipartId,
+        parts: Vec<PartId>,
+        opts: CompleteMultipartOptions,
+    ) -> Result<PutResult> {
+        let full_path = self.full_path(path);
+        self.inner
+            .complete_multipart_opts(&full_path, id, parts, opts)
+            .await
+    }
+
     async fn abort_multipart(&self, path: &Path, id: &MultipartId) -> Result<()> {
         let full_path = self.full_path(path);
         self.inner.abort_multipart(&full_path, id).await
@@ -414,6 +427,7 @@ mod tests {
 
         multipart(&store, &store).await;
         multipart_with_opts(&store, &store).await;
+        multipart_complete_create(&store, &store).await;
         multipart_put_part_out_of_order(&store, &store).await;
         multipart_out_of_order(&store).await;
         multipart_race_condition(&store, true).await;

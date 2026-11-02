@@ -26,7 +26,7 @@ use chrono::{DateTime, Utc};
 use futures_util::{StreamExt, stream::BoxStream};
 use parking_lot::RwLock;
 
-use crate::multipart::{MultipartStore, PartId};
+use crate::multipart::{CompleteMultipartOptions, MultipartStore, PartId};
 use crate::util::InvalidGetRange;
 use crate::{
     Attributes, GetRange, GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload,
@@ -465,9 +465,39 @@ impl MultipartStore for InMemory {
         &self,
         path: &Path,
         id: &MultipartId,
-        _parts: Vec<PartId>,
+        parts: Vec<PartId>,
     ) -> Result<PutResult> {
+        self.complete_multipart_opts(path, id, parts, CompleteMultipartOptions::default())
+            .await
+    }
+
+    async fn complete_multipart_opts(
+        &self,
+        path: &Path,
+        id: &MultipartId,
+        _parts: Vec<PartId>,
+        opts: CompleteMultipartOptions,
+    ) -> Result<PutResult> {
+        let CompleteMultipartOptions {
+            mode,
+            extensions: _,
+        } = opts;
+        if let PutMode::Update(_) = mode {
+            return Err(crate::Error::NotImplemented {
+                operation: "`complete_multipart_opts` with mode `PutMode::Update`".into(),
+                implementer: self.to_string(),
+            });
+        }
+
         let mut storage = self.storage.write();
+        // Check before the upload is removed, so that a failed create leaves the upload to
+        // abort. The write lock makes this check and the insert below one atomic step.
+        if mode == PutMode::Create && storage.map.contains_key(path) {
+            return Err(Error::AlreadyExists {
+                path: path.to_string(),
+            }
+            .into());
+        }
         let upload = storage.remove_upload(id)?;
 
         let mut cap = 0;
@@ -579,6 +609,7 @@ mod tests {
         put_opts(&integration, true).await;
         multipart(&integration, &integration).await;
         multipart_with_opts(&integration, &integration).await;
+        multipart_complete_create(&integration, &integration).await;
         put_get_attributes(&integration).await;
         multipart_put_part_out_of_order(&integration, &integration).await;
     }

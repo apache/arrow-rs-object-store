@@ -20,7 +20,7 @@ use parking_lot::Mutex;
 use std::ops::Range;
 use std::{convert::TryInto, sync::Arc};
 
-use crate::multipart::{MultipartStore, PartId};
+use crate::multipart::{CompleteMultipartOptions, MultipartStore, PartId};
 use crate::{CopyOptions, GetOptions, RenameOptions, UploadPart};
 use crate::{
     GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
@@ -338,6 +338,18 @@ impl<T: MultipartStore> MultipartStore for ThrottledStore<T> {
         self.inner.complete_multipart(path, id, parts).await
     }
 
+    async fn complete_multipart_opts(
+        &self,
+        path: &Path,
+        id: &MultipartId,
+        parts: Vec<PartId>,
+        opts: CompleteMultipartOptions,
+    ) -> Result<PutResult> {
+        self.inner
+            .complete_multipart_opts(path, id, parts, opts)
+            .await
+    }
+
     async fn abort_multipart(&self, path: &Path, id: &MultipartId) -> Result<()> {
         self.inner.abort_multipart(path, id).await
     }
@@ -409,6 +421,7 @@ mod tests {
         stream_get(&store).await;
         multipart(&store, &store).await;
         multipart_with_opts(&store, &store).await;
+        multipart_complete_create(&store, &store).await;
         multipart_put_part_out_of_order(&store, &store).await;
     }
 

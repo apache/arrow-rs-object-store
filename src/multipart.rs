@@ -24,13 +24,57 @@
 use async_trait::async_trait;
 
 use crate::path::Path;
-use crate::{Error, MultipartId, PutMultipartOptions, PutPayload, PutResult, Result};
+use crate::{
+    Error, Extensions, MultipartId, PutMode, PutMultipartOptions, PutPayload, PutResult, Result,
+};
 
 /// Represents a part of a file that has been successfully uploaded in a multipart upload process.
 #[derive(Debug, Clone)]
 pub struct PartId {
     /// Id of this part
     pub content_id: String,
+}
+
+/// Options for [`MultipartStore::complete_multipart_opts`]
+#[derive(Debug, Clone, Default)]
+pub struct CompleteMultipartOptions {
+    /// Configure the [`PutMode`] for this completion
+    ///
+    /// [`PutMode::Create`] fails with [`Error::AlreadyExists`] if an object already
+    /// exists at the path.
+    pub mode: PutMode,
+    /// Implementation-specific extensions. Intended for use by [`MultipartStore`] implementations
+    /// that need to pass context-specific information (like tracing spans) via trait methods.
+    ///
+    /// These extensions are ignored entirely by backends offered through this crate.
+    ///
+    /// They are also excluded from [`PartialEq`] and [`Eq`].
+    pub extensions: Extensions,
+}
+
+impl PartialEq<Self> for CompleteMultipartOptions {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            mode,
+            extensions: _,
+        } = self;
+        let Self {
+            mode: other_mode,
+            extensions: _,
+        } = other;
+        mode == other_mode
+    }
+}
+
+impl Eq for CompleteMultipartOptions {}
+
+impl From<PutMode> for CompleteMultipartOptions {
+    fn from(mode: PutMode) -> Self {
+        Self {
+            mode,
+            ..Default::default()
+        }
+    }
 }
 
 /// A low-level interface for interacting with multipart upload APIs
@@ -107,12 +151,48 @@ pub trait MultipartStore: Send + Sync + 'static {
     /// with a `part_idx` of `i`, and the same `path` and `id` as provided to this method. Calling
     /// this method with out of sequence or repeated [`PartId`], or [`PartId`] returned for other
     /// values of `path` or `id`, will result in implementation-defined behaviour
+    ///
+    /// This overwrites any object at `path`. See [`Self::complete_multipart_opts`] to complete
+    /// the upload only if no object exists.
     async fn complete_multipart(
         &self,
         path: &Path,
         id: &MultipartId,
         parts: Vec<PartId>,
     ) -> Result<PutResult>;
+
+    /// Completes a multipart upload with the given options
+    ///
+    /// The same requirements on `parts` apply as for [`Self::complete_multipart`].
+    ///
+    /// With [`PutMode::Create`], the completion fails with [`Error::AlreadyExists`] if an
+    /// object already exists at `path`. The check and the write are one atomic operation. If
+    /// the request fails without a response, the object may or may not have been created.
+    ///
+    /// Implementations that cannot enforce `opts.mode` return an error. The default
+    /// implementation supports only [`PutMode::Overwrite`], and returns
+    /// [`Error::NotSupported`] for any other mode.
+    async fn complete_multipart_opts(
+        &self,
+        path: &Path,
+        id: &MultipartId,
+        parts: Vec<PartId>,
+        opts: CompleteMultipartOptions,
+    ) -> Result<PutResult> {
+        let CompleteMultipartOptions {
+            mode,
+            extensions: _,
+        } = opts;
+
+        // An implementation that does not override this method cannot check for an existing
+        // object, so it must not fall back to an unconditional completion.
+        match mode {
+            PutMode::Overwrite => self.complete_multipart(path, id, parts).await,
+            PutMode::Create | PutMode::Update(_) => Err(Error::NotSupported {
+                source: "complete_multipart_opts with a mode other than PutMode::Overwrite".into(),
+            }),
+        }
+    }
 
     /// Aborts a multipart upload
     async fn abort_multipart(&self, path: &Path, id: &MultipartId) -> Result<()>;
@@ -121,7 +201,6 @@ pub trait MultipartStore: Send + Sync + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Extensions;
 
     struct TestMultipartStore;
 
@@ -147,12 +226,48 @@ mod tests {
             _id: &MultipartId,
             _parts: Vec<PartId>,
         ) -> Result<PutResult> {
-            unreachable!()
+            Ok(PutResult {
+                e_tag: Some("test".into()),
+                version: None,
+                extensions: Default::default(),
+            })
         }
 
         async fn abort_multipart(&self, _path: &Path, _id: &MultipartId) -> Result<()> {
             unreachable!()
         }
+    }
+
+    #[tokio::test]
+    async fn default_complete_multipart_opts_overwrites() {
+        let result = TestMultipartStore
+            .complete_multipart_opts(
+                &Path::from("test"),
+                &"test".into(),
+                vec![],
+                PutMode::Overwrite.into(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.e_tag.as_deref(), Some("test"));
+    }
+
+    #[tokio::test]
+    async fn default_complete_multipart_opts_rejects_create() {
+        // The default must fail closed: an implementation that cannot check for an
+        // existing object must not fall back to an overwrite.
+        let err = TestMultipartStore
+            .complete_multipart_opts(
+                &Path::from("test"),
+                &"test".into(),
+                vec![],
+                PutMode::Create.into(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, Error::NotSupported { .. }), "{err}");
     }
 
     #[tokio::test]

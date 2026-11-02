@@ -868,9 +868,13 @@ impl S3Client {
             CompleteMultipartMode::Create => request.header("If-None-Match", "*"),
         };
 
+        // A Create completion isn't idempotent: if it succeeds but the response
+        // is lost, a retry fails its If-None-Match and reports AlreadyExists
+        let idempotent = matches!(mode, CompleteMultipartMode::Overwrite);
+
         let response = request
             .retryable(&self.config.retry_config)
-            .idempotent(true)
+            .idempotent(idempotent)
             .retry_error_body(true)
             .send()
             .await
