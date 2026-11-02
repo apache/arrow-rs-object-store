@@ -986,6 +986,55 @@ mod tests {
     }
 
     #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn multipart_create_disabled_preserves_overwrite() {
+        let mock = MockServer::new().await;
+        let store = AmazonS3Builder::new()
+            .with_bucket_name("test")
+            .with_region("us-east-1")
+            .with_endpoint(mock.url())
+            .with_allow_http(true)
+            .with_skip_signature(true)
+            .with_conditional_put(S3ConditionalPut::Disabled)
+            .with_retry(crate::RetryConfig {
+                max_retries: 0,
+                ..Default::default()
+            })
+            .build()
+            .unwrap();
+        mock.push(Response::new("<InitiateMultipartUploadResult><UploadId>upload</UploadId></InitiateMultipartUploadResult>".to_owned()));
+        let path = Path::from("object");
+        let mut upload = store.put_multipart(&path).await.unwrap();
+        assert!(matches!(
+            upload.set_put_mode(PutMode::Create),
+            Err(Error::NotSupported { .. })
+        ));
+        assert!(matches!(
+            store
+                .complete_multipart_create(&path, &"upload".into(), vec![])
+                .await,
+            Err(Error::NotSupported { .. })
+        ));
+        mock.push(
+            Response::builder()
+                .header(ETAG, "part")
+                .body(String::new())
+                .unwrap(),
+        );
+        upload.put_part("payload".into()).await.unwrap();
+        mock.push_fn(|request| {
+            assert_eq!(request.method(), Method::POST);
+            assert!(!request.headers().contains_key(IF_NONE_MATCH));
+            Response::new("<CompleteMultipartUploadResult><ETag>overwrite</ETag></CompleteMultipartUploadResult>".to_owned())
+        });
+        assert_eq!(
+            upload.complete().await.unwrap().e_tag.as_deref(),
+            Some("overwrite")
+        );
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
     #[derive(Clone, Copy, Debug)]
     enum CompletionFailure {
         Timeout,
