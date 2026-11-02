@@ -150,6 +150,7 @@ impl Default for PutPartPayload<'_> {
     }
 }
 
+#[derive(Clone, Copy)]
 pub(crate) enum CompleteMultipartMode {
     Overwrite,
     Create,
@@ -858,10 +859,7 @@ impl S3Client {
             builder = builder.headers(headers.clone());
         }
 
-        let request = builder
-            .query(&[("uploadId", upload_id)])
-            .body(body)
-            .with_aws_sigv4(authorizer, None)?;
+        let request = builder.query(&[("uploadId", upload_id)]).body(body);
 
         let request = match mode {
             CompleteMultipartMode::Overwrite => request,
@@ -869,14 +867,24 @@ impl S3Client {
         };
 
         let response = request
+            .with_aws_sigv4(authorizer, None)?
             .retryable(&self.config.retry_config)
             .idempotent(true)
             .retry_error_body(true)
             .send()
             .await
-            .map_err(|source| Error::CompleteMultipartRequest {
-                source,
-                path: location.as_ref().to_string(),
+            .map_err(|source| {
+                let error = crate::Error::from(Error::CompleteMultipartRequest {
+                    source,
+                    path: location.as_ref().to_string(),
+                });
+                match (mode, error) {
+                    (
+                        CompleteMultipartMode::Create,
+                        crate::Error::Precondition { path, source },
+                    ) => crate::Error::AlreadyExists { path, source },
+                    (_, error) => error,
+                }
             })?;
 
         let (parts, body) = response.into_parts();

@@ -233,6 +233,11 @@ impl MultipartUpload for LimitUpload {
         self.upload.complete().await
     }
 
+    async fn complete_create(&mut self) -> Result<PutResult> {
+        let _permit = self.semaphore.acquire().await.unwrap();
+        self.upload.complete_create().await
+    }
+
     async fn abort(&mut self) -> Result<()> {
         let _permit = self.semaphore.acquire().await.unwrap();
         self.upload.abort().await
@@ -255,6 +260,8 @@ mod tests {
         let max_requests = 10;
         let memory = InMemory::new();
         let integration = LimitStore::new(memory, max_requests);
+
+        multipart_create(&integration).await;
 
         put_get_delete_list(&integration).await;
         get_opts(&integration).await;

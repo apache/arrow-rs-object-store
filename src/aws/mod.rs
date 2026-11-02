@@ -548,6 +548,24 @@ impl MultipartUpload for S3MultiPartUpload {
             .await
     }
 
+    async fn complete_create(&mut self) -> Result<PutResult> {
+        if self.state.client.config.conditional_put == S3ConditionalPut::Disabled {
+            return Err(Error::NotSupported {
+                source: "conditional S3 writes are disabled".into(),
+            });
+        }
+        let parts = self.state.parts.finish(self.part_idx)?;
+        self.state
+            .client
+            .complete_multipart(
+                &self.state.location,
+                &self.state.upload_id,
+                parts,
+                CompleteMultipartMode::Create,
+            )
+            .await
+    }
+
     async fn abort(&mut self) -> Result<()> {
         self.state
             .client
@@ -711,6 +729,22 @@ impl MultipartStore for AmazonS3 {
             .await
     }
 
+    async fn complete_multipart_create(
+        &self,
+        path: &Path,
+        id: &MultipartId,
+        parts: Vec<PartId>,
+    ) -> Result<PutResult> {
+        if self.client.config.conditional_put == S3ConditionalPut::Disabled {
+            return Err(Error::NotSupported {
+                source: "conditional S3 writes are disabled".into(),
+            });
+        }
+        self.client
+            .complete_multipart(path, id, parts, CompleteMultipartMode::Create)
+            .await
+    }
+
     async fn abort_multipart(&self, path: &Path, id: &MultipartId) -> Result<()> {
         self.client
             .request(Method::DELETE, path)
@@ -752,7 +786,7 @@ mod tests {
     #[cfg(feature = "reqwest")]
     use http::Response;
     #[cfg(feature = "reqwest")]
-    use http::header::ETAG;
+    use http::header::{AUTHORIZATION, ETAG};
     #[cfg(feature = "reqwest")]
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -862,6 +896,84 @@ mod tests {
         upload.put_part(PutPayload::from("data")).await.unwrap();
 
         assert_eq!(policy.0.load(Ordering::SeqCst), 1);
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn multipart_create_signs_condition_and_reports_conflicts() {
+        let mock = MockServer::new().await;
+        let store = AmazonS3Builder::new()
+            .with_bucket_name("test")
+            .with_region("us-east-1")
+            .with_endpoint(mock.url())
+            .with_allow_http(true)
+            .with_access_key_id("key")
+            .with_secret_access_key("secret")
+            .with_retry(crate::RetryConfig {
+                max_retries: 0,
+                ..Default::default()
+            })
+            .build()
+            .unwrap();
+        let path = Path::from("object");
+        for low_level in [false, true] {
+            for status in [StatusCode::OK, StatusCode::PRECONDITION_FAILED] {
+                mock.push(Response::new("<InitiateMultipartUploadResult><UploadId>upload</UploadId></InitiateMultipartUploadResult>".to_owned()));
+                mock.push(
+                    Response::builder()
+                        .header("ETag", "part")
+                        .body(String::new())
+                        .unwrap(),
+                );
+                mock.push_fn(move |request| {
+                    assert_eq!(request.method(), Method::POST);
+                    assert_eq!(request.uri().query(), Some("uploadId=upload"));
+                    assert_eq!(request.headers()[IF_NONE_MATCH], "*");
+                    let authorization = request.headers()[AUTHORIZATION].to_str().unwrap();
+                    let signed = authorization.split("SignedHeaders=").nth(1).unwrap()
+                        .split(',').next().unwrap();
+                    assert!(signed.split(';').any(|name| name == "if-none-match"));
+                    Response::builder().status(status).body(match status {
+                        StatusCode::OK => "<CompleteMultipartUploadResult><ETag>object</ETag></CompleteMultipartUploadResult>",
+                        _ => "<Error><Code>PreconditionFailed</Code></Error>",
+                    }.to_owned()).unwrap()
+                });
+                let result = if low_level {
+                    let id = store.create_multipart(&path).await.unwrap();
+                    let part = store
+                        .put_part(&path, &id, 0, "payload".into())
+                        .await
+                        .unwrap();
+                    store
+                        .complete_multipart_create(&path, &id, vec![part])
+                        .await
+                } else {
+                    let mut upload = store.put_multipart(&path).await.unwrap();
+                    upload.put_part("payload".into()).await.unwrap();
+                    upload.complete_create().await
+                };
+                if status.is_success() {
+                    assert_eq!(result.unwrap().e_tag.as_deref(), Some("object"));
+                } else {
+                    assert!(matches!(result, Err(Error::AlreadyExists { .. })));
+                }
+            }
+        }
+        mock.push_fn(|request| {
+            assert!(!request.headers().contains_key(IF_NONE_MATCH));
+            Response::new("<CompleteMultipartUploadResult><ETag>overwrite</ETag></CompleteMultipartUploadResult>".to_owned())
+        });
+        store
+            .complete_multipart(
+                &path,
+                &"upload".into(),
+                vec![PartId {
+                    content_id: "part".into(),
+                }],
+            )
+            .await
+            .unwrap();
         mock.shutdown().await;
     }
 

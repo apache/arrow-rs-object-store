@@ -1169,6 +1169,29 @@ impl MultipartUpload for LocalUpload {
         .await
     }
 
+    async fn complete_create(&mut self) -> Result<PutResult> {
+        let src = self.src.clone().ok_or(Error::Aborted)?;
+        let s = Arc::clone(&self.state);
+        let fsync = self.fsync;
+        let result = maybe_spawn_blocking(move || {
+            let mut guard = s.file.lock();
+            let file = guard.take().ok_or(Error::Aborted)?;
+            let metadata = file.metadata().map_err(|e| Error::Metadata {
+                source: e.into(),
+                path: src.to_string_lossy().to_string(),
+            })?;
+            finish_staged_hard_link(file, &src, &s.dest, fsync)?;
+            Ok(PutResult {
+                e_tag: Some(get_etag(&metadata)),
+                version: None,
+                extensions: Default::default(),
+            })
+        })
+        .await?;
+        self.src = None;
+        Ok(result)
+    }
+
     async fn abort(&mut self) -> Result<()> {
         let src = self.src.take().ok_or(Error::Aborted)?;
         maybe_spawn_blocking(move || {
@@ -1541,6 +1564,8 @@ mod tests {
     async fn file_test() {
         let root = TempDir::new().unwrap();
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+
+        multipart_create(&integration).await;
 
         put_get_delete_list(&integration).await;
         list_with_offset_exclusivity(&integration).await;

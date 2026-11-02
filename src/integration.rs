@@ -585,7 +585,58 @@ pub async fn get_opts(storage: &dyn ObjectStore) {
     }
 }
 
-/// Tests conditional writes
+/// Tests that competing multipart creates cannot overwrite the winner.
+pub async fn multipart_create(storage: &dyn ObjectStore) {
+    let path = Path::from("multipart-create");
+    let mut first = storage.put_multipart(&path).await.unwrap();
+    let mut second = storage.put_multipart(&path).await.unwrap();
+    first.put_part("first".into()).await.unwrap();
+    second.put_part("second".into()).await.unwrap();
+    first.complete_create().await.unwrap();
+    assert!(matches!(
+        second.complete_create().await,
+        Err(crate::Error::AlreadyExists { .. })
+    ));
+    second.abort().await.unwrap();
+    assert_eq!(
+        storage.get(&path).await.unwrap().bytes().await.unwrap(),
+        "first"
+    );
+    storage.delete(&path).await.unwrap();
+}
+
+/// Tests conditional completion through the low-level multipart interface.
+pub async fn multipart_store_create(storage: &dyn ObjectStore, multipart: &dyn MultipartStore) {
+    let path = Path::from("multipart-store-create");
+    let first = multipart.create_multipart(&path).await.unwrap();
+    let second = multipart.create_multipart(&path).await.unwrap();
+    let first_part = multipart
+        .put_part(&path, &first, 0, "first".into())
+        .await
+        .unwrap();
+    let second_part = multipart
+        .put_part(&path, &second, 0, "second".into())
+        .await
+        .unwrap();
+    multipart
+        .complete_multipart_create(&path, &first, vec![first_part])
+        .await
+        .unwrap();
+    assert!(matches!(
+        multipart
+            .complete_multipart_create(&path, &second, vec![second_part])
+            .await,
+        Err(crate::Error::AlreadyExists { .. })
+    ));
+    multipart.abort_multipart(&path, &second).await.unwrap();
+    assert_eq!(
+        storage.get(&path).await.unwrap().bytes().await.unwrap(),
+        "first"
+    );
+    storage.delete(&path).await.unwrap();
+}
+
+/// Tests conditional writes.
 pub async fn put_opts(storage: &dyn ObjectStore, supports_update: bool) {
     delete_fixtures(storage).await;
     let path = Path::from("put_opts");

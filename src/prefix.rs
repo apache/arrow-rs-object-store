@@ -244,6 +244,17 @@ impl<T: MultipartStore> MultipartStore for PrefixStore<T> {
         let full_path = self.full_path(path);
         self.inner.abort_multipart(&full_path, id).await
     }
+
+    async fn complete_multipart_create(
+        &self,
+        path: &Path,
+        id: &MultipartId,
+        parts: Vec<PartId>,
+    ) -> Result<PutResult> {
+        self.inner
+            .complete_multipart_create(&self.full_path(path), id, parts)
+            .await
+    }
 }
 
 #[cfg(feature = "cloud-base")]
@@ -305,6 +316,8 @@ mod tests {
         let root = TempDir::new().unwrap();
         let inner = LocalFileSystem::new_with_prefix(root.path()).unwrap();
         let integration = PrefixStore::new(inner, "prefix");
+
+        multipart_create(&integration).await;
 
         put_get_delete_list(&integration).await;
         get_opts(&integration).await;
@@ -412,6 +425,7 @@ mod tests {
     async fn prefix_multipart() {
         let store = PrefixStore::new(InMemory::new(), "prefix");
 
+        multipart_store_create(&store, &store).await;
         multipart(&store, &store).await;
         multipart_with_opts(&store, &store).await;
         multipart_put_part_out_of_order(&store, &store).await;

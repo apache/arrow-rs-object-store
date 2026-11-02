@@ -467,23 +467,16 @@ impl MultipartStore for InMemory {
         id: &MultipartId,
         _parts: Vec<PartId>,
     ) -> Result<PutResult> {
-        let mut storage = self.storage.write();
-        let upload = storage.remove_upload(id)?;
+        self.complete_upload(path, id, PutMode::Overwrite)
+    }
 
-        let mut cap = 0;
-        for (part, x) in upload.parts.iter().enumerate() {
-            cap += x.as_ref().ok_or(Error::MissingPart { part })?.len();
-        }
-        let mut buf = Vec::with_capacity(cap);
-        for x in &upload.parts {
-            buf.extend_from_slice(x.as_ref().unwrap())
-        }
-        let etag = storage.insert(path, buf.into(), upload.attributes);
-        Ok(PutResult {
-            e_tag: Some(format!("\"{}\"", etag)),
-            version: None,
-            extensions: Default::default(),
-        })
+    async fn complete_multipart_create(
+        &self,
+        path: &Path,
+        id: &MultipartId,
+        _parts: Vec<PartId>,
+    ) -> Result<PutResult> {
+        self.complete_upload(path, id, PutMode::Create)
     }
 
     async fn abort_multipart(&self, _path: &Path, id: &MultipartId) -> Result<()> {
@@ -493,6 +486,34 @@ impl MultipartStore for InMemory {
 }
 
 impl InMemory {
+    fn complete_upload(&self, path: &Path, id: &MultipartId, mode: PutMode) -> Result<PutResult> {
+        let mut storage = self.storage.write();
+        let upload = storage.upload_mut(id)?;
+        let mut cap = 0;
+        for (part, data) in upload.parts.iter().enumerate() {
+            cap += data.as_ref().ok_or(Error::MissingPart { part })?.len();
+        }
+        let mut buf = Vec::with_capacity(cap);
+        for data in &upload.parts {
+            buf.extend_from_slice(data.as_ref().unwrap());
+        }
+        let attributes = upload.attributes.clone();
+        let etag = storage.next_etag;
+        let entry = Entry::new(buf.into(), Utc::now(), etag, attributes);
+        match mode {
+            PutMode::Overwrite => storage.overwrite(path, entry),
+            PutMode::Create => storage.create(path, entry)?,
+            PutMode::Update(version) => storage.update(path, version, entry)?,
+        }
+        storage.remove_upload(id)?;
+        storage.next_etag += 1;
+        Ok(PutResult {
+            e_tag: Some(format!("\"{}\"", etag)),
+            version: None,
+            extensions: Default::default(),
+        })
+    }
+
     /// Create new in-memory storage.
     pub fn new() -> Self {
         Self::default()
@@ -553,6 +574,23 @@ impl MultipartUpload for InMemoryUpload {
         })
     }
 
+    async fn complete_create(&mut self) -> Result<PutResult> {
+        let payload = self.parts.iter().flatten().cloned().collect::<PutPayload>();
+        InMemory {
+            storage: Arc::clone(&self.storage),
+        }
+        .put_opts(
+            &self.location,
+            payload,
+            PutOptions {
+                mode: PutMode::Create,
+                attributes: self.attributes.clone(),
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
     async fn abort(&mut self) -> Result<()> {
         Ok(())
     }
@@ -567,6 +605,9 @@ mod tests {
     #[tokio::test]
     async fn in_memory_test() {
         let integration = InMemory::new();
+
+        multipart_create(&integration).await;
+        multipart_store_create(&integration, &integration).await;
 
         put_get_delete_list(&integration).await;
         list_with_offset_exclusivity(&integration).await;

@@ -116,6 +116,23 @@ pub trait MultipartStore: Send + Sync + 'static {
 
     /// Aborts a multipart upload
     async fn abort_multipart(&self, path: &Path, id: &MultipartId) -> Result<()>;
+
+    /// Complete an upload atomically only if no object exists at `path`.
+    ///
+    /// The same part ordering requirements as [`Self::complete_multipart`] apply.
+    /// Unsupported backends return an error instead of overwriting an object.
+    /// Returns [`crate::Error::AlreadyExists`] if the destination exists.
+    /// Supported by the S3 and in-memory backends.
+    async fn complete_multipart_create(
+        &self,
+        _path: &Path,
+        _id: &MultipartId,
+        _parts: Vec<PartId>,
+    ) -> Result<PutResult> {
+        Err(crate::Error::NotSupported {
+            source: "create-only multipart completion is not supported".into(),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -124,6 +141,16 @@ mod tests {
     use crate::Extensions;
 
     struct TestMultipartStore;
+
+    #[tokio::test]
+    async fn unsupported_create_does_not_overwrite() {
+        assert!(matches!(
+            TestMultipartStore
+                .complete_multipart_create(&Path::from("test"), &"upload".into(), vec![])
+                .await,
+            Err(Error::NotSupported { .. })
+        ));
+    }
 
     #[async_trait]
     impl MultipartStore for TestMultipartStore {
