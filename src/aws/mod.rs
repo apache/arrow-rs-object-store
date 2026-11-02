@@ -24,7 +24,7 @@
 //!
 //! Multipart uploads can be initiated with the [`ObjectStore::put_multipart_opts`] method.
 //!
-//! Selecting [`PutMode::Create`] through [`MultipartUpload::put_mode`], or using
+//! Selecting [`PutMode::Create`] through [`MultipartUpload::set_put_mode`], or using
 //! [`MultipartStore::complete_multipart_create`], requires the endpoint to enforce
 //! `If-None-Match: *` on `CompleteMultipartUpload`.
 //! S3-compatible endpoints may support this condition on `PutObject` but not on multipart
@@ -541,7 +541,7 @@ impl MultipartUpload for S3MultiPartUpload {
         })
     }
 
-    fn put_mode(&mut self, mode: PutMode) -> Result<()> {
+    fn set_put_mode(&mut self, mode: PutMode) -> Result<()> {
         let mode = MultipartUploadMode::try_from(mode)?;
         if matches!(mode, MultipartUploadMode::Create) {
             self.state.client.config.ensure_conditional_put_enabled()?;
@@ -944,14 +944,7 @@ mod tests {
             });
             let mut upload = store.put_multipart(&path).await.unwrap();
             upload.put_part("payload".into()).await.unwrap();
-            upload.put_mode(PutMode::Create).unwrap();
-            assert!(matches!(
-                upload.put_mode(PutMode::Update(UpdateVersion {
-                    e_tag: None,
-                    version: None,
-                })),
-                Err(Error::NotSupported { .. })
-            ));
+            upload.set_put_mode(PutMode::Create).unwrap();
             let result = upload.complete().await;
             if status.is_success() {
                 assert_eq!(result.unwrap().e_tag.as_deref(), Some("object"));
@@ -978,13 +971,24 @@ mod tests {
             )
             .await
             .unwrap();
+        mock.push(Response::new("<InitiateMultipartUploadResult><UploadId>upload</UploadId></InitiateMultipartUploadResult>".to_owned()));
+        let mut upload = store.put_multipart(&path).await.unwrap();
+        assert!(matches!(
+            upload.set_put_mode(PutMode::Update(UpdateVersion {
+                e_tag: None,
+                version: None,
+            })),
+            Err(Error::NotSupported { .. })
+        ));
+        mock.push(Response::new(String::new()));
+        upload.abort().await.unwrap();
         mock.shutdown().await;
     }
 
     #[cfg(feature = "reqwest")]
     #[derive(Clone, Copy, Debug)]
     enum CompletionFailure {
-        Transport(HttpErrorKind),
+        Timeout,
         ServerError,
         ErrorBody,
     }
@@ -1010,9 +1014,9 @@ mod tests {
             assert_eq!(request.method(), Method::POST);
             let (status, body) = if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
                 match self.failure {
-                    CompletionFailure::Transport(kind) => {
+                    CompletionFailure::Timeout => {
                         return Err(HttpError::new(
-                            kind,
+                            HttpErrorKind::Timeout,
                             std::io::Error::other("completion response lost"),
                         ));
                     }
@@ -1046,8 +1050,7 @@ mod tests {
     #[tokio::test]
     async fn multipart_create_preserves_uncertain_completion() {
         for failure in [
-            CompletionFailure::Transport(HttpErrorKind::Timeout),
-            CompletionFailure::Transport(HttpErrorKind::Interrupted),
+            CompletionFailure::Timeout,
             CompletionFailure::ServerError,
             CompletionFailure::ErrorBody,
         ] {

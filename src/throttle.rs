@@ -373,8 +373,8 @@ impl MultipartUpload for ThrottledUpload {
         self.upload.complete().await
     }
 
-    fn put_mode(&mut self, mode: PutMode) -> Result<()> {
-        self.upload.put_mode(mode)
+    fn set_put_mode(&mut self, mode: PutMode) -> Result<()> {
+        self.upload.set_put_mode(mode)
     }
 
     async fn abort(&mut self) -> Result<()> {

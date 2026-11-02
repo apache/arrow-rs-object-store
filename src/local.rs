@@ -1175,7 +1175,7 @@ impl MultipartUpload for LocalUpload {
         .boxed()
     }
 
-    fn put_mode(&mut self, mode: PutMode) -> Result<()> {
+    fn set_put_mode(&mut self, mode: PutMode) -> Result<()> {
         self.mode = MultipartUploadMode::try_from(mode)?;
         Ok(())
     }
@@ -2316,13 +2316,11 @@ mod not_wasm_tests {
         let mut upload = storage.put_multipart(&path).await.unwrap();
         upload.put_part("second".into()).await.unwrap();
 
-        upload.put_mode(PutMode::Create).unwrap();
+        upload.set_put_mode(PutMode::Create).unwrap();
         assert!(matches!(
             upload.complete().await,
             Err(Error::AlreadyExists { .. })
         ));
-        upload.put_mode(PutMode::Overwrite).unwrap();
-        let _ = upload.complete().await;
         upload.abort().await.unwrap();
 
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);

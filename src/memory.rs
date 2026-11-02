@@ -558,7 +558,7 @@ impl MultipartUpload for InMemoryUpload {
         Box::pin(futures_util::future::ready(Ok(())))
     }
 
-    fn put_mode(&mut self, mode: PutMode) -> Result<()> {
+    fn set_put_mode(&mut self, mode: PutMode) -> Result<()> {
         self.mode = MultipartUploadMode::try_from(mode)?;
         Ok(())
     }

@@ -114,11 +114,11 @@ pub trait MultipartUpload: Send + std::fmt::Debug {
     /// let store = InMemory::new();
     /// let mut upload = store.put_multipart(&"new-object".into()).await?;
     /// upload.put_part("data".into()).await?;
-    /// upload.put_mode(PutMode::Create)?;
+    /// upload.set_put_mode(PutMode::Create)?;
     /// upload.complete().await?;
     /// # Ok(()) }) }
     /// ```
-    fn put_mode(&mut self, mode: PutMode) -> Result<()> {
+    fn set_put_mode(&mut self, mode: PutMode) -> Result<()> {
         match mode {
             PutMode::Overwrite => Ok(()),
             _ => Err(Error::NotSupported {
@@ -127,7 +127,7 @@ pub trait MultipartUpload: Send + std::fmt::Debug {
         }
     }
 
-    /// Complete the multipart upload using the selected [`Self::put_mode`].
+    /// Complete the multipart upload using the selected [`Self::set_put_mode`].
     ///
     /// With [`PutMode::Create`], returns [`Error::AlreadyExists`] if the destination
     /// exists. A failed upload can still be cleaned up with [`Self::abort`].
@@ -168,8 +168,8 @@ impl<W: MultipartUpload + ?Sized> MultipartUpload for Box<W> {
         (**self).complete().await
     }
 
-    fn put_mode(&mut self, mode: PutMode) -> Result<()> {
-        (**self).put_mode(mode)
+    fn set_put_mode(&mut self, mode: PutMode) -> Result<()> {
+        (**self).set_put_mode(mode)
     }
 
     async fn abort(&mut self) -> Result<()> {
@@ -217,9 +217,9 @@ impl WriteMultipart {
 
     /// Select the mode used by [`Self::finish`].
     ///
-    /// See [`MultipartUpload::put_mode`] for supported modes and error handling.
-    pub fn put_mode(&mut self, mode: PutMode) -> Result<()> {
-        self.upload.put_mode(mode)
+    /// See [`MultipartUpload::set_put_mode`] for supported modes and error handling.
+    pub fn set_put_mode(&mut self, mode: PutMode) -> Result<()> {
+        self.upload.set_put_mode(mode)
     }
 
     /// Polls for there to be less than `max_concurrency` [`UploadPart`] in progress
@@ -364,9 +364,9 @@ mod tests {
     #[test]
     fn unsupported_create_does_not_overwrite() {
         let mut upload = InstrumentedUpload::default();
-        upload.put_mode(PutMode::Overwrite).unwrap();
+        upload.set_put_mode(PutMode::Overwrite).unwrap();
         assert!(matches!(
-            upload.put_mode(PutMode::Create),
+            upload.set_put_mode(PutMode::Create),
             Err(Error::NotSupported { .. })
         ));
     }
