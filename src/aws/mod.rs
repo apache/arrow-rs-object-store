@@ -48,9 +48,9 @@ use crate::retry::{MultipartRetry, RetryPolicy};
 use crate::signer::{SignedUrlOptions, Signer};
 use crate::util::{STRICT_ENCODE_SET, validate_signed_url_extras};
 use crate::{
-    CopyMode, CopyOptions, Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, Path, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult,
-    Result, UploadPart,
+    CopyMode, CopyOptions, DeleteOptions, Error, GetOptions, GetResult, ListResult, MultipartId,
+    MultipartUpload, ObjectMeta, ObjectStore, Path, PutMode, PutMultipartOptions, PutOptions,
+    PutPayload, PutResult, Result, UploadPart,
 };
 
 static TAGS_HEADER: HeaderName = HeaderName::from_static("x-amz-tagging");
@@ -374,6 +374,64 @@ impl ObjectStore for AmazonS3 {
             .buffered(20)
             .try_flatten()
             .boxed()
+    }
+
+    async fn delete_opts(&self, location: &Path, options: DeleteOptions) -> Result<()> {
+        let DeleteOptions {
+            precondition,
+            extensions,
+        } = options;
+
+        let Some(v) = precondition else {
+            // Preserve the existing single-object delete behavior (bulk delete by
+            // default, or a plain `DELETE` when bulk delete is disabled)
+            return crate::delete_stream_single(self, location.clone()).await;
+        };
+
+        // S3 conditional deletes use `If-Match` with the object's ETag, and are
+        // only evaluated against the current version of the object
+        // <https://docs.aws.amazon.com/AmazonS3/latest/userguide/conditional-deletes.html>
+        let e_tag = v.e_tag.ok_or_else(|| Error::Generic {
+            store: STORE,
+            source: "ETag required for conditional delete".to_string().into(),
+        })?;
+
+        match self.client.config.conditional_put {
+            S3ConditionalPut::Disabled => Err(Error::NotImplemented {
+                operation: "`delete_opts` with a precondition when conditional operations are \
+                            disabled"
+                    .into(),
+                implementer: self.to_string(),
+            }),
+            S3ConditionalPut::ETagMatch => {
+                let result = self
+                    .client
+                    .request(Method::DELETE, location)
+                    .header(&IF_MATCH, e_tag.as_str())
+                    .with_extensions(extensions)
+                    .send()
+                    .await;
+
+                match result {
+                    Ok(_) => Ok(()),
+                    // Some S3-compatible stores do not implement `If-Match` on
+                    // `DeleteObject` and respond with `501 Not Implemented`. Report
+                    // these as `NotSupported` rather than an opaque error, so callers
+                    // can distinguish an unsupported backend from other failures
+                    Err(RequestError::Retry { source, path })
+                        if source.status() == Some(StatusCode::NOT_IMPLEMENTED) =>
+                    {
+                        Err(Error::NotSupported {
+                            source: format!(
+                                "conditional delete is not supported by this S3 endpoint: {path}"
+                            )
+                            .into(),
+                        })
+                    }
+                    Err(e) => Err(e.into()),
+                }
+            }
+        }
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
@@ -1583,6 +1641,7 @@ mod tests {
         }
         if test_conditional_put {
             put_opts(&integration, true).await;
+            conditional_delete(&integration).await;
         }
 
         // run integration test with unsigned payload enabled
@@ -1853,5 +1912,112 @@ mod tests {
         // shutdown the io runtime and thread
         shutdown_tx.send(()).ok();
         thread_handle.join().expect("runtime thread panicked");
+    }
+
+    #[cfg(feature = "reqwest")]
+    fn delete_test_store(server: &MockServer) -> AmazonS3 {
+        AmazonS3Builder::new()
+            .with_bucket_name("test-bucket")
+            .with_endpoint(server.url())
+            .with_allow_http(true)
+            .with_access_key_id("AKIAIOSFODNN7EXAMPLE")
+            .with_secret_access_key("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+            .build()
+            .unwrap()
+    }
+
+    #[cfg(feature = "reqwest")]
+    fn delete_options() -> DeleteOptions {
+        DeleteOptions::new().with_precondition(Some(crate::UpdateVersion {
+            e_tag: Some("\"etag\"".to_string()),
+            version: None,
+        }))
+    }
+
+    /// A conditional delete must be exactly one `DELETE` request carrying `If-Match`
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_delete_opts_conditional_is_single_request() {
+        let server = MockServer::new().await;
+        let store = delete_test_store(&server);
+
+        server.push_fn(|req| {
+            assert_eq!(req.method(), http::Method::DELETE);
+            assert_eq!(req.headers().get("if-match").unwrap(), "\"etag\"");
+            Response::builder().status(204).body(String::new()).unwrap()
+        });
+
+        store
+            .delete_opts(&Path::from("test"), delete_options())
+            .await
+            .unwrap();
+
+        server.shutdown().await;
+    }
+
+    /// A failed `If-Match` precondition surfaces as [`crate::Error::Precondition`]
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_delete_opts_conditional_precondition_failed() {
+        let server = MockServer::new().await;
+        let store = delete_test_store(&server);
+
+        server.push_fn(|req| {
+            assert_eq!(req.method(), http::Method::DELETE);
+            assert!(req.headers().get("if-match").is_some());
+            Response::builder().status(412).body(String::new()).unwrap()
+        });
+
+        let err = store
+            .delete_opts(&Path::from("test"), delete_options())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, crate::Error::Precondition { .. }), "{err}");
+        server.shutdown().await;
+    }
+
+    /// Conditional deletes honor [`S3ConditionalPut::Disabled`]
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_delete_opts_conditional_disabled() {
+        let server = MockServer::new().await;
+        let store = AmazonS3Builder::new()
+            .with_bucket_name("test-bucket")
+            .with_endpoint(server.url())
+            .with_allow_http(true)
+            .with_conditional_put(S3ConditionalPut::Disabled)
+            .build()
+            .unwrap();
+
+        let err = store
+            .delete_opts(&Path::from("test"), delete_options())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, crate::Error::NotImplemented { .. }), "{err}");
+        server.shutdown().await;
+    }
+
+    /// An unconditional delete must be unaffected: the bulk `DeleteObjects` API
+    /// continues to be used for single-object deletes
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_delete_opts_unconditional_uses_bulk_delete() {
+        let server = MockServer::new().await;
+        let store = delete_test_store(&server);
+
+        server.push_fn(|req| {
+            assert_eq!(req.method(), http::Method::POST);
+            assert_eq!(req.uri().query().unwrap(), "delete");
+            assert!(req.headers().get("if-match").is_none());
+            Response::builder()
+                .status(200)
+                .body("<DeleteResult><Deleted><Key>test</Key></Deleted></DeleteResult>".to_string())
+                .unwrap()
+        });
+
+        store.delete(&Path::from("test")).await.unwrap();
+        server.shutdown().await;
     }
 }

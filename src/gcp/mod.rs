@@ -47,9 +47,9 @@ use crate::retry::{MultipartRetry, RetryPolicy};
 use crate::signer::{SignedUrlOptions, Signer};
 use crate::util::validate_signed_url_extras;
 use crate::{
-    GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart, multipart::PartId,
-    path::Path,
+    DeleteOptions, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
+    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, UploadPart,
+    multipart::PartId, path::Path,
 };
 use async_trait::async_trait;
 use client::GoogleCloudStorageClient;
@@ -208,12 +208,21 @@ impl ObjectStore for GoogleCloudStorage {
                 let client = Arc::clone(&client);
                 async move {
                     let location = location?;
-                    client.delete_request(&location).await?;
+                    client
+                        .delete_request(&location, DeleteOptions::default())
+                        .await?;
                     Ok(location)
                 }
             })
             .buffered(10)
             .boxed()
+    }
+
+    async fn delete_opts(&self, location: &Path, options: DeleteOptions) -> Result<()> {
+        // If a precondition is supplied, GCS evaluates it as part of the delete
+        // request itself (`x-goog-if-generation-match`), so the check is atomic
+        // with the deletion and no additional round trip is required.
+        self.client.delete_request(location, options).await
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
@@ -451,6 +460,8 @@ mod test {
             // Fake GCS server doesn't currently honor preconditions
             get_opts(&integration).await;
             put_opts(&integration, true).await;
+            // Fake GCS server ignores ifGenerationMatch on delete
+            conditional_delete(&integration).await;
             // Fake GCS server doesn't currently support attributes
             put_get_attributes(&integration).await;
         }
@@ -458,6 +469,204 @@ mod test {
         // Fake GCS server does not yet implement XML Multipart uploads
         let test_multipart = integration.client.config().base_url == DEFAULT_GCS_BASE_URL;
         response_extensions(&integration, test_multipart).await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    fn delete_test_store(server: &crate::client::mock_server::MockServer) -> GoogleCloudStorage {
+        GoogleCloudStorageBuilder::new()
+            .with_bucket_name("test-bucket")
+            .with_base_url(server.url())
+            .with_bearer_token("token")
+            .build()
+            .unwrap()
+    }
+
+    #[cfg(feature = "reqwest")]
+    fn delete_options() -> DeleteOptions {
+        DeleteOptions::new().with_precondition(Some(crate::UpdateVersion {
+            e_tag: Some("\"etag\"".to_string()),
+            version: Some("1234".to_string()),
+        }))
+    }
+
+    /// A conditional delete must be exactly one `DELETE` request carrying
+    /// `x-goog-if-generation-match`, with no preceding metadata read
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn gcs_delete_opts_conditional_is_single_request() {
+        use crate::client::mock_server::MockServer;
+
+        let server = MockServer::new().await;
+        let store = delete_test_store(&server);
+
+        server.push_fn(|req| {
+            assert_eq!(req.method(), http::Method::DELETE);
+            assert_eq!(
+                req.headers().get("x-goog-if-generation-match").unwrap(),
+                "1234"
+            );
+            http::Response::builder()
+                .status(204)
+                .body(String::new())
+                .unwrap()
+        });
+        // A second request would consume this handler and fail the test
+        server.push_fn(|_| -> http::Response<String> {
+            panic!("conditional delete must be a single request")
+        });
+
+        store
+            .delete_opts(&Path::from("test"), delete_options())
+            .await
+            .unwrap();
+
+        server.shutdown().await;
+    }
+
+    /// A failed `ifGenerationMatch` precondition surfaces as
+    /// [`crate::Error::Precondition`]
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn gcs_delete_opts_conditional_precondition_failed() {
+        use crate::client::mock_server::MockServer;
+
+        let server = MockServer::new().await;
+        let store = delete_test_store(&server);
+
+        server.push_fn(|req| {
+            assert_eq!(req.method(), http::Method::DELETE);
+            assert!(req.headers().get("x-goog-if-generation-match").is_some());
+            http::Response::builder()
+                .status(412)
+                .body(String::new())
+                .unwrap()
+        });
+        server.push_fn(|_| -> http::Response<String> {
+            panic!("conditional delete must be a single request")
+        });
+
+        let err = store
+            .delete_opts(&Path::from("test"), delete_options())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, crate::Error::Precondition { .. }), "{err}");
+        server.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    type GcsDeleteHandler = Box<
+        dyn FnOnce(
+                hyper::Request<hyper::body::Incoming>,
+            )
+                -> std::pin::Pin<Box<dyn Future<Output = http::Response<String>> + Send>>
+            + Send,
+    >;
+
+    /// A stub for a GCS-compatible backend that evaluates `ifGenerationMatch`
+    /// atomically with the delete: it returns `412` unless the requested
+    /// generation matches the current one, and clears the object on success
+    #[cfg(feature = "reqwest")]
+    fn gcs_delete_handler(
+        generation: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) -> GcsDeleteHandler {
+        Box::new(move |req| {
+            let requested: usize = req
+                .headers()
+                .get("x-goog-if-generation-match")
+                .expect("conditional delete must send ifGenerationMatch")
+                .to_str()
+                .unwrap()
+                .parse()
+                .unwrap();
+            Box::pin(async move {
+                use std::sync::atomic::Ordering;
+                if requested == generation.load(Ordering::SeqCst) {
+                    generation.store(0, Ordering::SeqCst);
+                    http::Response::builder()
+                        .status(204)
+                        .body(String::new())
+                        .unwrap()
+                } else {
+                    http::Response::builder()
+                        .status(412)
+                        .body(String::new())
+                        .unwrap()
+                }
+            })
+        })
+    }
+
+    /// A stale conditional delete must not delete a newer version of the object
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn gcs_delete_opts_stale_generation_cannot_delete_newer_object() {
+        use crate::client::mock_server::MockServer;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let server = MockServer::new().await;
+        let store = delete_test_store(&server);
+
+        // The object was overwritten, so its generation is now 2
+        let generation = Arc::new(AtomicUsize::new(2));
+
+        // A caller still holding generation 1 must not be able to delete it
+        server.push_async_fn(gcs_delete_handler(Arc::clone(&generation)));
+        let stale = DeleteOptions::new().with_precondition(Some(crate::UpdateVersion {
+            e_tag: None,
+            version: Some("1".to_string()),
+        }));
+        let err = store
+            .delete_opts(&Path::from("test"), stale)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, crate::Error::Precondition { .. }), "{err}");
+        assert_eq!(
+            generation.load(Ordering::SeqCst),
+            2,
+            "the newer generation must remain"
+        );
+
+        // The current generation deletes successfully
+        server.push_async_fn(gcs_delete_handler(Arc::clone(&generation)));
+        let current = DeleteOptions::new().with_precondition(Some(crate::UpdateVersion {
+            e_tag: None,
+            version: Some("2".to_string()),
+        }));
+        store
+            .delete_opts(&Path::from("test"), current)
+            .await
+            .unwrap();
+        assert_eq!(
+            generation.load(Ordering::SeqCst),
+            0,
+            "the object must have been deleted"
+        );
+
+        server.shutdown().await;
+    }
+
+    /// An unconditional delete must not send a precondition
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn gcs_delete_unconditional_has_no_precondition() {
+        use crate::client::mock_server::MockServer;
+
+        let server = MockServer::new().await;
+        let store = delete_test_store(&server);
+
+        server.push_fn(|req| {
+            assert_eq!(req.method(), http::Method::DELETE);
+            assert!(req.headers().get("x-goog-if-generation-match").is_none());
+            http::Response::builder()
+                .status(204)
+                .body(String::new())
+                .unwrap()
+        });
+
+        store.delete(&Path::from("test")).await.unwrap();
+        server.shutdown().await;
     }
 
     #[cfg(feature = "reqwest")]

@@ -28,9 +28,9 @@ use crate::list::{PaginatedListOptions, PaginatedListStore};
 use crate::multipart::MultipartStore;
 use crate::path::Path;
 use crate::{
-    Attribute, Attributes, DynObjectStore, Error, GetOptions, GetRange, MultipartUpload,
-    ObjectStore, ObjectStoreExt, PutMode, PutMultipartOptions, PutPayload, UpdateVersion,
-    WriteMultipart,
+    Attribute, Attributes, DeleteOptions, DynObjectStore, Error, GetOptions, GetRange,
+    MultipartUpload, ObjectStore, ObjectStoreExt, PutMode, PutMultipartOptions, PutPayload,
+    UpdateVersion, WriteMultipart,
 };
 use bytes::Bytes;
 use futures_util::stream::FuturesUnordered;
@@ -452,6 +452,63 @@ pub async fn put_get_delete_list(storage: &DynObjectStore) {
     assert_eq!(data.len(), 0);
 
     storage.delete(&path).await.unwrap();
+}
+
+/// Tests conditional (compare-and-swap) deletes
+///
+/// This test also verifies that unconditional deletes continue to work on
+/// backends that do not support conditional deletes.
+pub async fn conditional_delete(storage: &DynObjectStore) {
+    let path = Path::from("conditional_delete");
+    let data1 = Bytes::from("v1");
+    let data2 = Bytes::from("v2");
+
+    // Unconditional delete is unaffected
+    storage.put(&path, data1.clone().into()).await.unwrap();
+    storage.delete(&path).await.unwrap();
+    assert!(matches!(
+        storage.head(&path).await,
+        Err(Error::NotFound { .. })
+    ));
+
+    // Read version 1
+    storage.put(&path, data1.clone().into()).await.unwrap();
+    let v1 = UpdateVersion::from(storage.head(&path).await.unwrap());
+
+    // Overwrite with version 2
+    storage.put(&path, data2.clone().into()).await.unwrap();
+    let v2 = UpdateVersion::from(storage.head(&path).await.unwrap());
+
+    // Conditional delete of the stale version must fail
+    let stale = DeleteOptions::new().with_precondition(Some(v1));
+    match storage.delete_opts(&path, stale).await {
+        Ok(()) => panic!("conditional delete of a stale version unexpectedly succeeded"),
+        Err(e @ (Error::NotSupported { .. } | Error::NotImplemented { .. })) => {
+            // This backend does not support conditional deletes: the object must
+            // be untouched and ordinary deletes must continue to work
+            eprintln!("conditional delete is not supported, skipping: {e}");
+            let got = storage.get(&path).await.unwrap().bytes().await.unwrap();
+            assert_eq!(got, data2);
+            storage.delete(&path).await.unwrap();
+            return;
+        }
+        Err(e @ Error::Precondition { .. }) => {
+            eprintln!("conditional delete of a stale version failed as expected: {e}")
+        }
+        Err(e) => panic!("unexpected error: {e}"),
+    }
+
+    // The newer version must not have been deleted
+    let got = storage.get(&path).await.unwrap().bytes().await.unwrap();
+    assert_eq!(got, data2);
+
+    // Conditional delete of the current version must succeed
+    let current = DeleteOptions::new().with_precondition(Some(v2));
+    storage.delete_opts(&path, current).await.unwrap();
+    assert!(matches!(
+        storage.head(&path).await,
+        Err(Error::NotFound { .. })
+    ));
 }
 
 /// Tests the ability to read and write [`Attributes`]

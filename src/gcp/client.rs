@@ -32,8 +32,9 @@ use crate::multipart::PartId;
 use crate::path::Path;
 use crate::util::hex_encode;
 use crate::{
-    Attribute, Attributes, ClientOptions, CopyMode, GetOptions, ListResult, MultipartId, PutMode,
-    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, RetryConfig,
+    Attribute, Attributes, ClientOptions, CopyMode, DeleteOptions, GetOptions, ListResult,
+    MultipartId, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
+    RetryConfig,
 };
 use async_trait::async_trait;
 use base64::Engine;
@@ -566,8 +567,31 @@ impl GoogleCloudStorageClient {
     }
 
     /// Perform a delete request <https://cloud.google.com/storage/docs/xml-api/delete-object>
-    pub(crate) async fn delete_request(&self, path: &Path) -> Result<()> {
-        self.request(Method::DELETE, path).send().await?;
+    ///
+    /// If `options` contains a precondition, the request includes an
+    /// `x-goog-if-generation-match` header, so the deletion is only performed if
+    /// the object's current generation matches. This is evaluated atomically by
+    /// the server, as part of the same request.
+    pub(crate) async fn delete_request(&self, path: &Path, options: DeleteOptions) -> Result<()> {
+        let DeleteOptions {
+            precondition,
+            extensions,
+        } = options;
+
+        let builder = self
+            .request(Method::DELETE, path)
+            .with_extensions(extensions);
+
+        let builder = match precondition {
+            None => builder,
+            Some(v) => {
+                // GCS identifies object versions by generation
+                let generation = v.version.ok_or(Error::MissingVersion)?;
+                builder.header(&VERSION_MATCH, &generation)
+            }
+        };
+
+        builder.send().await?;
         Ok(())
     }
 

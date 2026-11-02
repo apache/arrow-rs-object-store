@@ -25,8 +25,9 @@ use crate::path::Path;
 #[cfg(feature = "cloud-base")]
 use crate::signer::Signer;
 use crate::{
-    CopyOptions, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result,
+    CopyOptions, DeleteOptions, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
+    ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
+    Result,
 };
 
 /// Store wrapper that applies a constant prefix to all paths handled by the store.
@@ -149,6 +150,11 @@ impl<T: ObjectStore> ObjectStore for PrefixStore<T> {
             .delete_stream(locations)
             .map(move |location| location.map(|loc| strip_prefix(&prefix, loc)))
             .boxed()
+    }
+
+    async fn delete_opts(&self, location: &Path, options: DeleteOptions) -> Result<()> {
+        let full_path = self.full_path(location);
+        self.inner.delete_opts(&full_path, options).await
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {

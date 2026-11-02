@@ -1252,6 +1252,81 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
         locations: BoxStream<'static, Result<Path>>,
     ) -> BoxStream<'static, Result<Path>>;
 
+    /// Delete the object at the specified location, with options
+    ///
+    /// If [`DeleteOptions::precondition`] is `None`, this is equivalent to
+    /// [`ObjectStoreExt::delete`]: the object is deleted unconditionally. If the
+    /// object did not exist, the result may be an error or a success, depending
+    /// on the behavior of the underlying store (see [`ObjectStore::delete_stream`]).
+    ///
+    /// # Conditional delete
+    ///
+    /// If [`DeleteOptions::precondition`] is `Some`, the object is deleted only if
+    /// its current version matches the supplied [`UpdateVersion`]:
+    ///
+    /// ```text
+    /// read object metadata
+    ///         ↓
+    /// obtain version identity V
+    ///         ↓
+    /// delete_opts(path, DeleteOptions::new().with_precondition(V))
+    ///         ↓
+    /// DELETE succeeds only if current version == V
+    /// ```
+    ///
+    /// This provides optimistic concurrency control: the caller reads
+    /// [`ObjectMeta`], supplies the resulting identity, and the delete then succeeds
+    /// only if the object has not been modified in the meantime. If the current
+    /// version does not match, [`Error::Precondition`] is returned and the object is
+    /// left untouched.
+    ///
+    /// As for an unconditional delete, if the object does not exist the result
+    /// depends on the backend: some return [`Error::NotFound`], others
+    /// [`Error::Precondition`].
+    ///
+    /// A backend that supports the supplied precondition MUST perform the check
+    /// atomically with the deletion, as part of a single conditional request.
+    /// Implementations MUST NOT emulate this operation using a separate metadata
+    /// read (e.g. a `HEAD` request) followed by an unconditional delete, as that
+    /// is not atomic.
+    ///
+    /// Not all [`ObjectStore`] implementations support conditional deletion. An
+    /// implementation that does not support the supplied precondition returns
+    /// [`Error::NotSupported`] without deleting anything. Implementations that do
+    /// support it use the backend's native version identity, which differs between
+    /// backends, and may therefore require either [`ObjectMeta::e_tag`] or
+    /// [`ObjectMeta::version`] to be set; if the supplied identity lacks the field
+    /// the backend requires, an error is returned without deleting.
+    ///
+    /// ## Example
+    ///
+    /// ```ignore-wasm32
+    /// # use object_store::memory::InMemory;
+    /// # use object_store::path::Path;
+    /// # use object_store::{DeleteOptions, ObjectStore, ObjectStoreExt, UpdateVersion};
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let store = InMemory::new();
+    /// let location = Path::from("foo");
+    /// store.put(&location, "v1".into()).await?;
+    /// let meta = store.head(&location).await?;
+    ///
+    /// // Delete only if the object is still the version we just read
+    /// let options = DeleteOptions::new().with_precondition(Some(UpdateVersion::from(meta)));
+    /// store.delete_opts(&location, options).await?;
+    /// # Ok(())
+    /// # }
+    /// # let rt = tokio::runtime::Builder::new_current_thread().build().unwrap();
+    /// # rt.block_on(example()).unwrap();
+    /// ```
+    async fn delete_opts(&self, location: &Path, options: DeleteOptions) -> Result<()> {
+        if options.precondition.is_some() {
+            return Err(Error::NotSupported {
+                source: "conditional delete is not supported by this ObjectStore".into(),
+            });
+        }
+        delete_stream_single(self, location.clone()).await
+    }
+
     /// List all the objects with the given prefix.
     ///
     /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar` is a prefix of `foo/bar/x` but not of
@@ -1317,6 +1392,30 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     }
 }
 
+/// Delete a single object by driving [`ObjectStore::delete_stream`] with exactly one location
+///
+/// Used to implement the default [`ObjectStore::delete_opts`] as well as the
+/// unconditional path of backends that override `delete_opts`.
+pub(crate) async fn delete_stream_single<S>(store: &S, location: Path) -> Result<()>
+where
+    S: ObjectStore + ?Sized,
+{
+    let mut stream =
+        store.delete_stream(futures_util::stream::once(async move { Ok(location) }).boxed());
+    let _path = stream.try_next().await?.ok_or_else(|| Error::Generic {
+        store: "ext",
+        source: "`delete_stream` with one location should yield once but didn't".into(),
+    })?;
+    if stream.next().await.is_some() {
+        Err(Error::Generic {
+            store: "ext",
+            source: "`delete_stream` with one location expected to yield exactly once, but yielded more than once".into(),
+        })
+    } else {
+        Ok(())
+    }
+}
+
 macro_rules! as_ref_impl {
     ($type:ty) => {
         #[async_trait]
@@ -1356,6 +1455,10 @@ macro_rules! as_ref_impl {
                 locations: BoxStream<'static, Result<Path>>,
             ) -> BoxStream<'static, Result<Path>> {
                 self.as_ref().delete_stream(locations)
+            }
+
+            async fn delete_opts(&self, location: &Path, options: DeleteOptions) -> Result<()> {
+                self.as_ref().delete_opts(location, options).await
             }
 
             fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, Result<ObjectMeta>> {
@@ -1496,6 +1599,10 @@ pub trait ObjectStoreExt: ObjectStore {
     fn head(&self, location: &Path) -> impl Future<Output = Result<ObjectMeta>>;
 
     /// Delete the object at the specified location.
+    ///
+    /// This is equivalent to [`ObjectStore::delete_opts`] with default options.
+    /// To delete an object only if it is still a particular version, use
+    /// [`ObjectStore::delete_opts`] with a [`DeleteOptions::precondition`].
     fn delete(&self, location: &Path) -> impl Future<Output = Result<()>>;
 
     /// Copy an object from one path to another in the same object store.
@@ -1555,21 +1662,7 @@ where
     }
 
     async fn delete(&self, location: &Path) -> Result<()> {
-        let location = location.clone();
-        let mut stream =
-            self.delete_stream(futures_util::stream::once(async move { Ok(location) }).boxed());
-        let _path = stream.try_next().await?.ok_or_else(|| Error::Generic {
-            store: "ext",
-            source: "`delete_stream` with one location should yield once but didn't".into(),
-        })?;
-        if stream.next().await.is_some() {
-            Err(Error::Generic {
-                store: "ext",
-                source: "`delete_stream` with one location expected to yield exactly once, but yielded more than once".into(),
-            })
-        } else {
-            Ok(())
-        }
+        self.delete_opts(location, DeleteOptions::default()).await
     }
 
     async fn copy(&self, from: &Path, to: &Path) -> Result<()> {
@@ -1937,6 +2030,15 @@ impl From<PutResult> for UpdateVersion {
     }
 }
 
+impl From<ObjectMeta> for UpdateVersion {
+    fn from(value: ObjectMeta) -> Self {
+        Self {
+            e_tag: value.e_tag,
+            version: value.version,
+        }
+    }
+}
+
 /// Options for a put request
 #[derive(Debug, Clone, Default)]
 pub struct PutOptions {
@@ -2104,6 +2206,74 @@ impl PartialEq<Self> for PutResult {
 }
 
 impl Eq for PutResult {}
+
+/// Options for a delete request
+///
+/// See [`ObjectStore::delete_opts`] for details.
+#[derive(Debug, Clone, Default)]
+pub struct DeleteOptions {
+    /// If set, the object is deleted only if its current version matches the
+    /// supplied [`UpdateVersion`], otherwise returning [`Error::Precondition`]
+    /// and leaving the object untouched
+    ///
+    /// This provides optimistic concurrency control for deletes: the caller reads
+    /// [`ObjectMeta`], supplies the resulting version identity, and the delete
+    /// then succeeds only if the object has not been modified since.
+    ///
+    /// Not all [`ObjectStore`] implementations support conditional deletion, and
+    /// those that do may require a specific field of [`UpdateVersion`] to be set.
+    /// See [`ObjectStore::delete_opts`] for details.
+    pub precondition: Option<UpdateVersion>,
+    /// Implementation-specific extensions. Intended for use by [`ObjectStore`] implementations
+    /// that need to pass context-specific information (like tracing spans) via trait methods.
+    ///
+    /// These extensions are ignored entirely by backends offered through this crate.
+    ///
+    /// They are also excluded from [`PartialEq`] and [`Eq`].
+    pub extensions: Extensions,
+}
+
+impl DeleteOptions {
+    /// Create a new [`DeleteOptions`]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the `precondition`.
+    ///
+    /// See [`DeleteOptions::precondition`].
+    #[must_use]
+    pub fn with_precondition(mut self, precondition: Option<UpdateVersion>) -> Self {
+        self.precondition = precondition;
+        self
+    }
+
+    /// Sets the `extensions`.
+    ///
+    /// See [`DeleteOptions::extensions`].
+    #[must_use]
+    pub fn with_extensions(mut self, extensions: Extensions) -> Self {
+        self.extensions = extensions;
+        self
+    }
+}
+
+impl PartialEq<Self> for DeleteOptions {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            precondition,
+            extensions: _,
+        } = self;
+        let Self {
+            precondition: other_precondition,
+            extensions: _,
+        } = other;
+
+        precondition == other_precondition
+    }
+}
+
+impl Eq for DeleteOptions {}
 
 /// Configure preconditions for the copy operation
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
