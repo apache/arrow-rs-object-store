@@ -951,8 +951,8 @@ fn create_parent_dirs(path: &std::path::Path, source: io::Error, fsync: bool) ->
 /// Renames `from` to `to`, then — when `fsync` is enabled — fsyncs the destination's parent
 /// directory (and the source's too, if it differs) so the moved directory entries are durable.
 ///
-/// The directory fsync is bundled in deliberately: every durable rename goes through here, so the
-/// post-rename fsync can never be forgotten at an individual call site.
+/// Callers that own a reusable staging name must disarm its cleanup immediately after rename,
+/// before the fallible directory sync, as multipart publication does.
 fn rename(from: &std::path::Path, to: &std::path::Path, fsync: bool) -> io::Result<()> {
     std::fs::rename(from, to)?;
     if fsync {
@@ -1253,6 +1253,14 @@ impl MultipartUpload for LocalUpload {
 
 impl Drop for LocalUpload {
     fn drop(&mut self) {
+        if self
+            .state
+            .file
+            .try_lock()
+            .is_some_and(|file| file.is_none())
+        {
+            return;
+        }
         let state = Arc::clone(&self.state);
         match tokio::runtime::Handle::try_current() {
             Ok(runtime) => drop(runtime.spawn_blocking(move || state.abort())),
@@ -2386,28 +2394,34 @@ mod not_wasm_tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_cleanup_after_directory_sync_failure_preserves_reused_path() {
-        let root = TempDir::new().unwrap();
-        let dest = root.path().join("object");
-        let (file, src) = new_staged_upload(&dest, false).unwrap();
-        let mut upload = LocalUpload::new(src.clone(), dest.clone(), file, true);
-        upload.put_part("first".into()).await.unwrap();
-        assert!(
-            upload
-                .publish(|_| Err(io::Error::other("directory sync failed")))
-                .await
-                .is_err()
-        );
-        assert_eq!(std::fs::read(&dest).unwrap(), b"first");
+    #[test]
+    fn test_cleanup_after_directory_sync_failure_preserves_reused_path() {
+        futures_executor::block_on(async {
+            for mode in [PutMode::Overwrite, PutMode::Create] {
+                let root = TempDir::new().unwrap();
+                let dest = root.path().join("object");
+                let (file, src) = new_staged_upload(&dest, false).unwrap();
+                let mut upload = LocalUpload::new(src.clone(), dest.clone(), file, true);
+                upload.set_put_mode(mode).unwrap();
+                upload.put_part("first".into()).await.unwrap();
+                assert!(
+                    upload
+                        .publish(|_| Err(io::Error::other("directory sync failed")))
+                        .await
+                        .is_err()
+                );
+                assert_eq!(std::fs::read(&dest).unwrap(), b"first");
 
-        let (file, reused) = new_staged_upload(&dest, false).unwrap();
-        assert_eq!(reused, src);
-        let mut next = LocalUpload::new(reused, dest.clone(), file, false);
-        next.put_part("second".into()).await.unwrap();
-        upload.abort().await.unwrap();
-        next.complete().await.unwrap();
-        assert_eq!(std::fs::read(&dest).unwrap(), b"second");
+                let (file, reused) = new_staged_upload(&dest, false).unwrap();
+                assert_eq!(reused, src);
+                let mut next = LocalUpload::new(reused, dest.clone(), file, false);
+                next.put_part("second".into()).await.unwrap();
+                // Outside Tokio, Drop completes cleanup synchronously.
+                drop(upload);
+                next.complete().await.unwrap();
+                assert_eq!(std::fs::read(&dest).unwrap(), b"second");
+            }
+        });
     }
 
     #[tokio::test]
