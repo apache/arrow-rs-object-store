@@ -28,8 +28,8 @@
 //!
 use crate::{
     CopyMode, CopyOptions, Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
-    UploadPart,
+    ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    Result, UploadPart,
     multipart::{MultipartStore, PartId},
     path::Path,
     signer::Signer,
@@ -107,6 +107,13 @@ impl ObjectStore for MicrosoftAzure {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
+        if opts.mode != PutMode::Overwrite {
+            return Err(crate::Error::NotImplemented {
+                operation: "`put_multipart_opts` with a `mode` other than `PutMode::Overwrite`"
+                    .into(),
+                implementer: self.to_string(),
+            });
+        }
         let retry_policy = opts.retry_policy();
         Ok(Box::new(AzureMultiPartUpload {
             part_idx: 0,
@@ -391,12 +398,13 @@ impl MultipartStore for MicrosoftAzure {
         opts: PutMultipartOptions,
     ) -> Result<MultipartId> {
         let PutMultipartOptions {
+            mode,
             tags,
             attributes,
             extensions: _,
         } = opts;
 
-        if !tags.is_empty() || !attributes.is_empty() {
+        if mode != PutMode::Overwrite || !tags.is_empty() || !attributes.is_empty() {
             return Err(Error::NotSupported {
                 source: "`create_multipart_opts` with non-default options is not supported by MicrosoftAzure".into(),
             });
@@ -497,6 +505,7 @@ mod tests {
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;
         put_opts(&integration, true).await;
+        put_multipart_opts_create(&integration, false).await;
         multipart(&integration, &integration).await;
         multipart_put_part_out_of_order(&integration, &integration).await;
         multipart_race_condition(&integration, false).await;

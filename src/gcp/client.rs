@@ -452,6 +452,7 @@ impl GoogleCloudStorageClient {
         opts: PutMultipartOptions,
     ) -> Result<MultipartId> {
         let PutMultipartOptions {
+            mode: _,
             // not supported by GCP
             tags: _,
             attributes,

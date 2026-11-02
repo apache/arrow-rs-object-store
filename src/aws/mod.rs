@@ -258,18 +258,8 @@ impl ObjectStore for AmazonS3 {
                 implementer: self.to_string(),
             }),
             (PutMode::Create, S3ConditionalPut::ETagMatch) => {
-                match request.header(&IF_NONE_MATCH, "*").do_put().await {
-                    // Technically If-None-Match should return NotModified but some stores,
-                    // such as R2, instead return PreconditionFailed
-                    // https://developers.cloudflare.com/r2/api/s3/extensions/#conditional-operations-in-putobject
-                    Err(e @ Error::NotModified { .. } | e @ Error::Precondition { .. }) => {
-                        Err(Error::AlreadyExists {
-                            path: location.to_string(),
-                            source: Box::new(e),
-                        })
-                    }
-                    r => r,
-                }
+                let result = request.header(&IF_NONE_MATCH, "*").do_put().await;
+                map_create_error(location.to_string(), result)
             }
             (PutMode::Update(v), put) => {
                 let etag = v.e_tag.ok_or_else(|| Error::Generic {
@@ -314,6 +304,22 @@ impl ObjectStore for AmazonS3 {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
+        let complete_mode = match (&opts.mode, &self.client.config.conditional_put) {
+            (PutMode::Overwrite, _) => CompleteMultipartMode::Overwrite,
+            (PutMode::Create, S3ConditionalPut::ETagMatch) => CompleteMultipartMode::Create,
+            (PutMode::Create, S3ConditionalPut::Disabled) => {
+                return Err(Error::NotImplemented {
+                    operation: "`put_multipart_opts` with mode `PutMode::Create` when conditional put is disabled".into(),
+                    implementer: self.to_string(),
+                });
+            }
+            (PutMode::Update(_), _) => {
+                return Err(Error::NotImplemented {
+                    operation: "`put_multipart_opts` with mode `PutMode::Update`".into(),
+                    implementer: self.to_string(),
+                });
+            }
+        };
         let retry_policy = opts.retry_policy();
         let upload_id = self.client.create_multipart(location, opts).await?;
 
@@ -325,6 +331,7 @@ impl ObjectStore for AmazonS3 {
                 upload_id: upload_id.clone(),
                 parts: Default::default(),
                 retry_policy,
+                complete_mode,
             }),
         }))
     }
@@ -489,6 +496,23 @@ impl ObjectStore for AmazonS3 {
     }
 }
 
+/// Maps errors from a conditional create completion to `AlreadyExists`.
+///
+/// Technically If-None-Match should return NotModified but some stores,
+/// such as R2, instead return PreconditionFailed.
+/// See: <https://developers.cloudflare.com/r2/api/s3/extensions/#conditional-operations-in-putobject>
+fn map_create_error(path: String, result: Result<PutResult>) -> Result<PutResult> {
+    match result {
+        Err(e @ Error::NotModified { .. } | e @ Error::Precondition { .. }) => {
+            Err(Error::AlreadyExists {
+                path,
+                source: Box::new(e),
+            })
+        }
+        r => r,
+    }
+}
+
 #[derive(Debug)]
 struct S3MultiPartUpload {
     part_idx: usize,
@@ -502,6 +526,7 @@ struct UploadState {
     upload_id: String,
     client: Arc<S3Client>,
     retry_policy: Option<Arc<dyn RetryPolicy>>,
+    complete_mode: CompleteMultipartMode,
 }
 
 #[async_trait]
@@ -537,15 +562,23 @@ impl MultipartUpload for S3MultiPartUpload {
     async fn complete(&mut self) -> Result<PutResult> {
         let parts = self.state.parts.finish(self.part_idx)?;
 
-        self.state
+        let result = self
+            .state
             .client
             .complete_multipart(
                 &self.state.location,
                 &self.state.upload_id,
                 parts,
-                CompleteMultipartMode::Overwrite,
+                self.state.complete_mode,
             )
-            .await
+            .await;
+
+        match self.state.complete_mode {
+            CompleteMultipartMode::Create => {
+                map_create_error(self.state.location.to_string(), result)
+            }
+            CompleteMultipartMode::Overwrite => result,
+        }
     }
 
     async fn abort(&mut self) -> Result<()> {
@@ -685,6 +718,11 @@ impl MultipartStore for AmazonS3 {
         path: &Path,
         opts: PutMultipartOptions,
     ) -> Result<MultipartId> {
+        if opts.mode != PutMode::Overwrite {
+            return Err(crate::Error::NotSupported {
+                source: "`create_multipart_opts` with a `mode` other than `PutMode::Overwrite` is not supported by AmazonS3".into(),
+            });
+        }
         self.client.create_multipart(path, opts).await
     }
 
@@ -1584,6 +1622,7 @@ mod tests {
         if test_conditional_put {
             put_opts(&integration, true).await;
         }
+        put_multipart_opts_create(&integration, test_conditional_put).await;
 
         // run integration test with unsigned payload enabled
         let builder = AmazonS3Builder::from_env().with_unsigned_payload(true);

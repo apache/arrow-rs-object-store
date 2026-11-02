@@ -228,8 +228,15 @@ impl ObjectStore for InMemory {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
+        if matches!(opts.mode, PutMode::Update(_)) {
+            return Err(crate::Error::NotImplemented {
+                operation: "`put_multipart_opts` with mode `PutMode::Update`".into(),
+                implementer: self.to_string(),
+            });
+        }
         Ok(Box::new(InMemoryUpload {
             location: location.clone(),
+            mode: opts.mode,
             attributes: opts.attributes,
             parts: vec![],
             storage: Arc::clone(&self.storage),
@@ -430,6 +437,11 @@ impl MultipartStore for InMemory {
         _path: &Path,
         opts: PutMultipartOptions,
     ) -> Result<MultipartId> {
+        if opts.mode != PutMode::Overwrite {
+            return Err(crate::Error::NotSupported {
+                source: "`create_multipart_opts` with a `mode` other than `PutMode::Overwrite` is not supported by InMemory".into(),
+            });
+        }
         let mut storage = self.storage.write();
         let etag = storage.next_etag;
         storage.next_etag += 1;
@@ -523,6 +535,7 @@ impl InMemory {
 #[derive(Debug)]
 struct InMemoryUpload {
     location: Path,
+    mode: PutMode,
     attributes: Attributes,
     parts: Vec<PutPayload>,
     storage: Arc<RwLock<Storage>>,
@@ -540,11 +553,19 @@ impl MultipartUpload for InMemoryUpload {
         let mut buf = Vec::with_capacity(cap);
         let parts = self.parts.iter().flatten();
         parts.for_each(|x| buf.extend_from_slice(x));
-        let etag = self.storage.write().insert(
-            &self.location,
-            buf.into(),
-            std::mem::take(&mut self.attributes),
-        );
+        let attributes = std::mem::take(&mut self.attributes);
+        let etag = if self.mode == PutMode::Create {
+            let mut storage = self.storage.write();
+            let etag = storage.next_etag;
+            let entry = Entry::new(buf.into(), Utc::now(), etag, attributes);
+            storage.create(&self.location, entry)?;
+            storage.next_etag += 1;
+            etag
+        } else {
+            self.storage
+                .write()
+                .insert(&self.location, buf.into(), attributes)
+        };
 
         Ok(PutResult {
             e_tag: Some(format!("\"{}\"", etag)),
@@ -565,6 +586,40 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn multipart_create_fails_when_the_object_exists() {
+        let store = InMemory::new();
+        let path = Path::from("existing");
+        store.put(&path, "first".into()).await.unwrap();
+
+        let opts = PutMultipartOptions {
+            mode: PutMode::Create,
+            ..Default::default()
+        };
+        let mut upload = store.put_multipart_opts(&path, opts).await.unwrap();
+        upload.put_part("second".into()).await.unwrap();
+        let err = upload.complete().await.unwrap_err();
+
+        assert!(matches!(err, crate::Error::AlreadyExists { .. }));
+        let stored = store.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(stored.as_ref(), b"first");
+    }
+
+    #[tokio::test]
+    async fn multipart_store_rejects_non_overwrite_mode() {
+        let store = InMemory::new();
+        let opts = PutMultipartOptions {
+            mode: PutMode::Create,
+            ..Default::default()
+        };
+        let err = store
+            .create_multipart_opts(&Path::from("path"), opts)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, crate::Error::NotSupported { .. }));
+    }
+
+    #[tokio::test]
     async fn in_memory_test() {
         let integration = InMemory::new();
 
@@ -577,6 +632,7 @@ mod tests {
         copy_if_not_exists(&integration).await;
         stream_get(&integration).await;
         put_opts(&integration, true).await;
+        put_multipart_opts_create(&integration, true).await;
         multipart(&integration, &integration).await;
         multipart_with_opts(&integration, &integration).await;
         put_get_attributes(&integration).await;
