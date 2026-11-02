@@ -740,7 +740,8 @@ pub mod client;
 #[cfg(feature = "cloud-base")]
 pub use client::{
     ClientConfigKey, ClientOptions, CredentialProvider, StaticCredentialProvider,
-    backoff::BackoffConfig, retry::RetryConfig,
+    backoff::BackoffConfig,
+    retry::{RetryConfig, RetryStatusPolicy},
 };
 
 #[cfg(all(

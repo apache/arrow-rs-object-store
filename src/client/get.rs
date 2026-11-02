@@ -598,6 +598,7 @@ mod http_tests {
             backoff: Default::default(),
             max_retries: 3,
             retry_timeout: Duration::from_secs(1000),
+            retry_status_policy: None,
         };
 
         let options = ClientOptions::new().with_allow_http(true);
@@ -824,6 +825,7 @@ mod http_tests {
             backoff: Default::default(),
             max_retries: 3,
             retry_timeout: Duration::from_secs(1000),
+            retry_status_policy: None,
         };
 
         let options = ClientOptions::new().with_allow_http(true);
