@@ -81,10 +81,14 @@ pub trait MultipartUpload: Send + std::fmt::Debug {
     /// The existence check and publication must be atomic. Implementations without
     /// conditional completion return an error; they must not fall back to overwrite.
     /// A failed upload can still be cleaned up with [`Self::abort`].
+    /// An I/O error may leave the publication outcome uncertain; aborting does not
+    /// remove an object that was already published. Verify the destination's contents
+    /// before starting another upload, and do not assume completion can be retried.
     ///
     /// Returns [`crate::Error::AlreadyExists`] if the destination exists, or
     /// [`crate::Error::NotSupported`] if the backend cannot enforce this condition.
     /// Supported by the S3, in-memory and local filesystem backends.
+    /// S3-compatible endpoints must enforce the condition on multipart completion.
     async fn complete_create(&mut self) -> Result<PutResult> {
         Err(crate::Error::NotSupported {
             source: "create-only multipart completion is not supported".into(),

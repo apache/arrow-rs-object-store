@@ -603,6 +603,11 @@ pub async fn multipart_create(storage: &dyn ObjectStore) {
         "first"
     );
     storage.delete(&path).await.unwrap();
+
+    let mut empty = storage.put_multipart(&path).await.unwrap();
+    empty.complete_create().await.unwrap();
+    assert_eq!(storage.head(&path).await.unwrap().size, 0);
+    storage.delete(&path).await.unwrap();
 }
 
 /// Tests conditional completion through the low-level multipart interface.

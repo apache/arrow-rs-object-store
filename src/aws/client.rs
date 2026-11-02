@@ -50,7 +50,7 @@ use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH,
     CONTENT_TYPE,
 };
-use http::{HeaderMap, HeaderName, Method};
+use http::{HeaderMap, HeaderName, Method, StatusCode};
 use itertools::Itertools;
 use md5::{Digest, Md5};
 use percent_encoding::{PercentEncode, utf8_percent_encode};
@@ -107,6 +107,12 @@ pub(crate) enum Error {
 
     #[error("Error performing complete multipart request: {}: {}", path, source)]
     CompleteMultipartRequest {
+        source: crate::client::retry::RetryError,
+        path: String,
+    },
+
+    #[error("Conditional multipart conflict at {path}; start a new multipart upload: {source}")]
+    ConditionalMultipartConflict {
         source: crate::client::retry::RetryError,
         path: String,
     },
@@ -866,14 +872,29 @@ impl S3Client {
             CompleteMultipartMode::Create => request.header("If-None-Match", "*"),
         };
 
+        let mut retry_config = self.config.retry_config.clone();
+        if matches!(mode, CompleteMultipartMode::Create) {
+            // A retry after an ambiguous failure can report our own successful write as a conflict.
+            retry_config.max_retries = 0;
+        }
+
         let response = request
             .with_aws_sigv4(authorizer, None)?
-            .retryable(&self.config.retry_config)
-            .idempotent(true)
+            .retryable(&retry_config)
+            .idempotent(matches!(mode, CompleteMultipartMode::Overwrite))
             .retry_error_body(true)
             .send()
             .await
             .map_err(|source| {
+                if matches!(mode, CompleteMultipartMode::Create)
+                    && source.status() == Some(StatusCode::CONFLICT)
+                {
+                    return Error::ConditionalMultipartConflict {
+                        source,
+                        path: location.to_string(),
+                    }
+                    .into();
+                }
                 let error = crate::Error::from(Error::CompleteMultipartRequest {
                     source,
                     path: location.as_ref().to_string(),
@@ -881,7 +902,8 @@ impl S3Client {
                 match (mode, error) {
                     (
                         CompleteMultipartMode::Create,
-                        crate::Error::Precondition { path, source },
+                        crate::Error::Precondition { path, source }
+                        | crate::Error::NotModified { path, source },
                     ) => crate::Error::AlreadyExists { path, source },
                     (_, error) => error,
                 }

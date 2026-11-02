@@ -123,6 +123,9 @@ pub trait MultipartStore: Send + Sync + 'static {
     /// Unsupported backends return an error instead of overwriting an object.
     /// Returns [`crate::Error::AlreadyExists`] if the destination exists.
     /// Supported by the S3 and in-memory backends.
+    /// S3-compatible endpoints must enforce the condition on multipart completion.
+    /// An I/O error may leave the publication outcome uncertain; verify the destination's
+    /// contents before starting another upload. Aborting does not remove a published object.
     async fn complete_multipart_create(
         &self,
         _path: &Path,

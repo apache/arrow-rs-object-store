@@ -1142,10 +1142,10 @@ impl MultipartUpload for LocalUpload {
     }
 
     async fn complete(&mut self) -> Result<PutResult> {
-        let src = self.src.take().ok_or(Error::Aborted)?;
+        let src = self.src.clone().ok_or(Error::Aborted)?;
         let s = Arc::clone(&self.state);
         let fsync = self.fsync;
-        maybe_spawn_blocking(move || {
+        let result = maybe_spawn_blocking(move || {
             // Ensure no inflight writes
             let mut guard = s.file.lock();
             let file = guard.take().ok_or(Error::Aborted)?;
@@ -1166,7 +1166,9 @@ impl MultipartUpload for LocalUpload {
                 extensions: Default::default(),
             })
         })
-        .await
+        .await?;
+        self.src = None;
+        Ok(result)
     }
 
     async fn complete_create(&mut self) -> Result<PutResult> {
@@ -1589,6 +1591,8 @@ mod tests {
         let integration = LocalFileSystem::new_with_prefix(root.path())
             .unwrap()
             .with_fsync(true);
+
+        multipart_create(&integration).await;
 
         put_get_delete_list(&integration).await;
         list_with_offset_exclusivity(&integration).await;
@@ -2308,7 +2312,30 @@ mod not_wasm_tests {
     use tempfile::TempDir;
 
     use crate::local::LocalFileSystem;
-    use crate::{ObjectStoreExt, Path, PutPayload};
+    use crate::{Error, ObjectStoreExt, Path, PutPayload};
+
+    #[tokio::test]
+    async fn test_abort_after_failed_create_completion() {
+        let root = TempDir::new().unwrap();
+        let storage = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        let path = Path::from("object");
+        storage.put(&path, "first".into()).await.unwrap();
+        let mut upload = storage.put_multipart(&path).await.unwrap();
+        upload.put_part("second".into()).await.unwrap();
+
+        assert!(matches!(
+            upload.complete_create().await,
+            Err(Error::AlreadyExists { .. })
+        ));
+        assert!(upload.complete().await.is_err());
+        upload.abort().await.unwrap();
+
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+        assert_eq!(
+            storage.get(&path).await.unwrap().bytes().await.unwrap(),
+            "first"
+        );
+    }
 
     #[tokio::test]
     async fn test_cleanup_intermediate_files() {

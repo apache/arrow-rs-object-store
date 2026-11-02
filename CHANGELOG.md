@@ -19,6 +19,15 @@
 
 # Changelog
 
+## Unreleased
+
+- Add atomic create-only multipart completion for S3, in-memory and local filesystem stores.
+- S3 conditional multipart completion, including multipart copy-if-not-exists, signs
+  `If-None-Match`, makes no automatic completion retries, and reports HTTP 409 as
+  `Generic` rather than `AlreadyExists`. HTTP 412 and 304 report `AlreadyExists`.
+- Retain incomplete in-memory uploads and failed local multipart staging files so
+  callers can abort them after completion fails.
+
 ## [v0.14.2](https://github.com/apache/arrow-rs-object-store/tree/v0.14.2) (2026-09-11)
 
 [Full Changelog](https://github.com/apache/arrow-rs-object-store/compare/v0.14.1...v0.14.2)
