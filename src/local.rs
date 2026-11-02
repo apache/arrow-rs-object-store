@@ -414,39 +414,24 @@ impl ObjectStore for LocalFileSystem {
         let fsync = self.fsync;
         maybe_spawn_blocking(move || {
             let (mut file, staging_path) = new_staged_upload(&path, fsync)?;
-            let mut e_tag = None;
-
-            let err = match payload.iter().try_for_each(|x| file.write_all(x)) {
-                Ok(_) => {
-                    let metadata = file.metadata().map_err(|e| Error::Metadata {
-                        source: e.into(),
-                        path: path.to_string_lossy().to_string(),
-                    })?;
-                    e_tag = Some(get_etag(&metadata));
-                    // Atomically publish the staged file. When fsync is enabled the publish
-                    // helpers flush the file's contents and the destination's parent directory to
-                    // disk first, so a successful return is durable; the fsync calls are bundled
-                    // into the helpers so a file-system modification can never be left unsynced.
-                    match opts.mode {
-                        PutMode::Overwrite => {
-                            finish_staged_rename(file, &staging_path, &path, fsync).err()
-                        }
-                        PutMode::Create => {
-                            finish_staged_hard_link(file, &staging_path, &path, fsync).err()
-                        }
-                        PutMode::Update(_) => unreachable!(),
-                    }
-                }
-                Err(source) => Some(Error::UnableToCopyDataToFile { source }.into()),
+            if let Err(source) = payload.iter().try_for_each(|x| file.write_all(x)) {
+                drop(file);
+                let _ = std::fs::remove_file(&staging_path); // Attempt to cleanup
+                return Err(Error::UnableToCopyDataToFile { source }.into());
+            }
+            // Atomically publish the staged file. When fsync is enabled the publish helpers flush
+            // the file's contents and the destination's parent directory to disk first, so a
+            // successful return is durable; the fsync calls are bundled into the helpers so a
+            // file-system modification can never be left unsynced. The helpers clean up the
+            // staging file on failure.
+            let metadata = match opts.mode {
+                PutMode::Overwrite => finish_staged_rename(file, &staging_path, &path, fsync)?,
+                PutMode::Create => finish_staged_hard_link(file, &staging_path, &path, fsync)?,
+                PutMode::Update(_) => unreachable!(),
             };
 
-            if let Some(err) = err {
-                let _ = std::fs::remove_file(&staging_path); // Attempt to cleanup
-                return Err(err);
-            }
-
             Ok(PutResult {
-                e_tag,
+                e_tag: Some(get_etag(&metadata)),
                 version: None,
                 extensions: Default::default(),
             })
@@ -654,7 +639,11 @@ impl ObjectStore for LocalFileSystem {
                             Ok(_) => match rename(&staged, &to, fsync) {
                                 Ok(_) => return Ok(()),
                                 Err(source) => {
-                                    let _ = std::fs::remove_file(&staged); // Attempt to clean up
+                                    // Once renamed, `staged` may already be a new upload's file.
+                                    if let RenameError::Rename(_) = source {
+                                        let _ = std::fs::remove_file(&staged); // Attempt to clean up
+                                    }
+                                    let source = source.into();
                                     return Err(Error::UnableToCopyFile { from, to, source }.into());
                                 }
                             },
@@ -726,7 +715,7 @@ impl ObjectStore for LocalFileSystem {
                         // `sync_all` here: `from` is an existing, already-durable object and a
                         // rename only mutates directory entries. `rename` bundles in the fsync of
                         // both affected directories (destination, and source if it differs).
-                        match rename(&from, &to, fsync) {
+                        match rename(&from, &to, fsync).map_err(io::Error::from) {
                             Ok(_) => return Ok(()),
                             Err(source) => match source.kind() {
                                 ErrorKind::NotFound => match from.exists() {
@@ -951,16 +940,30 @@ fn create_parent_dirs(path: &std::path::Path, source: io::Error, fsync: bool) ->
 ///
 /// The directory fsync is bundled in deliberately: every durable rename goes through here, so the
 /// post-rename fsync can never be forgotten at an individual call site.
-fn rename(from: &std::path::Path, to: &std::path::Path, fsync: bool) -> io::Result<()> {
-    std::fs::rename(from, to)?;
+fn rename(from: &std::path::Path, to: &std::path::Path, fsync: bool) -> Result<(), RenameError> {
+    std::fs::rename(from, to).map_err(RenameError::Rename)?;
     if fsync {
-        fsync_parent_dir(to)?;
+        fsync_parent_dir(to).map_err(RenameError::Fsync)?;
         // A cross-directory move also removes an entry from the source directory.
         if from.parent() != to.parent() {
-            fsync_parent_dir(from)?;
+            fsync_parent_dir(from).map_err(RenameError::Fsync)?;
         }
     }
     Ok(())
+}
+
+/// Where [`rename`] failed: after `Fsync`, `from` has been moved to `to`.
+enum RenameError {
+    Rename(io::Error),
+    Fsync(io::Error),
+}
+
+impl From<RenameError> for io::Error {
+    fn from(e: RenameError) -> Self {
+        match e {
+            RenameError::Rename(e) | RenameError::Fsync(e) => e,
+        }
+    }
 }
 
 /// Hard-links `original` to `link`, then — when `fsync` is enabled — fsyncs `link`'s parent
@@ -982,41 +985,66 @@ fn hard_link(original: &std::path::Path, link: &std::path::Path, fsync: bool) ->
 /// directory after — the rename, so a successful return is durable. The file is always closed
 /// before the rename (checking for close errors): required for NFS error detection and for some
 /// FUSE filesystems (e.g. Blobfuse) that only commit the data on close.
+///
+/// Returns the file's metadata. A failure before the rename succeeds removes the staging file.
+/// After a successful rename its path may already belong to a new upload, so it is left alone.
 fn finish_staged_rename(
     file: File,
     src: &std::path::Path,
     dest: &std::path::Path,
     fsync: bool,
-) -> Result<()> {
-    sync_and_close(file, src, fsync)?;
-    rename(src, dest, fsync).map_err(|source| Error::UnableToRenameFile { source })?;
-    Ok(())
+) -> Result<Metadata> {
+    let closed = staged_metadata(&file, src).and_then(|metadata| {
+        sync_and_close(file, src, fsync)?;
+        Ok(metadata)
+    });
+    let err = match closed {
+        Ok(metadata) => match rename(src, dest, fsync) {
+            Ok(()) => return Ok(metadata),
+            Err(RenameError::Fsync(source)) => {
+                return Err(Error::UnableToRenameFile { source }.into());
+            }
+            Err(RenameError::Rename(source)) => Error::UnableToRenameFile { source }.into(),
+        },
+        Err(e) => e,
+    };
+    let _ = std::fs::remove_file(src); // Attempt to cleanup
+    Err(err)
 }
 
 /// Like [`finish_staged_rename`] but publishes via a hard link (`PutMode::Create` semantics): the
-/// staging file is linked to `dest` and then removed. Returns [`Error::AlreadyExists`] if `dest`
-/// already exists.
+/// staging file is linked to `dest` and then removed, whether or not linking succeeds. Returns
+/// [`Error::AlreadyExists`] if `dest` already exists.
 fn finish_staged_hard_link(
     file: File,
     src: &std::path::Path,
     dest: &std::path::Path,
     fsync: bool,
-) -> Result<()> {
-    sync_and_close(file, src, fsync)?;
-    match hard_link(src, dest, fsync) {
-        Ok(()) => {
-            let _ = std::fs::remove_file(src); // Attempt to cleanup
-            Ok(())
-        }
-        Err(source) => match source.kind() {
-            ErrorKind::AlreadyExists => Err(Error::AlreadyExists {
+) -> Result<Metadata> {
+    let linked = staged_metadata(&file, src).and_then(|metadata| {
+        sync_and_close(file, src, fsync)?;
+        hard_link(src, dest, fsync).map_err(|source| match source.kind() {
+            ErrorKind::AlreadyExists => Error::AlreadyExists {
                 path: dest.to_str().unwrap().to_string(),
                 source,
-            }
-            .into()),
-            _ => Err(Error::UnableToRenameFile { source }.into()),
-        },
-    }
+            },
+            _ => Error::UnableToRenameFile { source },
+        })?;
+        Ok(metadata)
+    });
+    let _ = std::fs::remove_file(src); // Attempt to cleanup
+    linked
+}
+
+/// The metadata of the staging `file` at `src`.
+fn staged_metadata(file: &File, src: &std::path::Path) -> Result<Metadata> {
+    file.metadata().map_err(|e| {
+        Error::Metadata {
+            source: e.into(),
+            path: src.to_string_lossy().to_string(),
+        }
+        .into()
+    })
 }
 
 /// Flushes the freshly-written `file`'s contents to disk (when `fsync` is enabled) and then
@@ -1150,15 +1178,10 @@ impl MultipartUpload for LocalUpload {
             let mut guard = s.file.lock();
             let file = guard.take().ok_or(Error::Aborted)?;
 
-            let metadata = file.metadata().map_err(|e| Error::Metadata {
-                source: e.into(),
-                path: src.to_string_lossy().to_string(),
-            })?;
-
             // Durably publish the freshly-written staging file: flush its contents, close it, then
             // rename it into place and fsync the destination's parent directory (the fsync calls
             // are bundled into the helper and only run when fsync is enabled).
-            finish_staged_rename(file, &src, &s.dest, fsync)?;
+            let metadata = finish_staged_rename(file, &src, &s.dest, fsync)?;
 
             Ok(PutResult {
                 e_tag: Some(get_etag(&metadata)),
@@ -2069,6 +2092,54 @@ mod tests {
                 .len(),
             0
         );
+    }
+
+    #[tokio::test]
+    async fn multipart_complete_failure_removes_staging_file() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        let location = Path::from("some_file");
+        let dest = integration.path_to_filesystem(&location).unwrap();
+        let staging = staged_upload_path(&dest, "1");
+
+        let mut upload = integration.put_multipart(&location).await.unwrap();
+        upload
+            .put_part(PutPayload::from("arbitrary data"))
+            .await
+            .unwrap();
+        assert!(staging.exists());
+
+        // The rename fails: the destination is now a non-empty directory.
+        fs::create_dir_all(dest.join("child")).unwrap();
+        upload.complete().await.unwrap_err();
+        assert!(!staging.exists());
+    }
+
+    #[tokio::test]
+    async fn put_failure_removes_staging_file() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        let payload = PutPayload::from("arbitrary data");
+
+        // Overwrite: the rename fails on a non-empty directory.
+        let location = Path::from("dir");
+        let dest = integration.path_to_filesystem(&location).unwrap();
+        fs::create_dir_all(dest.join("child")).unwrap();
+        integration
+            .put(&location, payload.clone())
+            .await
+            .unwrap_err();
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+
+        // Create: the hard link fails on an existing file.
+        let location = Path::from("file");
+        integration.put(&location, payload.clone()).await.unwrap();
+        let err = integration
+            .put_opts(&location, payload, PutMode::Create.into())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, crate::Error::AlreadyExists { .. }), "{err}");
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 2);
     }
 
     #[tokio::test]
