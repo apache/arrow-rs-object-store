@@ -234,10 +234,10 @@ impl Request<'_> {
     }
 
     async fn send(self) -> Result<HttpResponse> {
-        let credential = self.config.credentials.get_credential().await?;
+        let credential = self.config.get_credential().await?;
         let resp = self
             .builder
-            .bearer_auth(&credential.bearer)
+            .with_bearer_auth(credential.as_deref())
             .retryable(&self.config.retry_config)
             .idempotent(self.idempotent)
             .payload(self.payload)
