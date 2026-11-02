@@ -122,7 +122,8 @@ impl ObjectStoreScheme {
                 {
                     (Self::MicrosoftAzure, strip_bucket().unwrap_or_default())
                 } else if host.ends_with("amazonaws.com") {
-                    match host.starts_with("s3") {
+                    // Virtual-hosted URLs have a bucket name before the S3 service label.
+                    match host.starts_with("s3") && !host.contains(".s3") {
                         true => (Self::AmazonS3, strip_bucket().unwrap_or_default()),
                         false => (Self::AmazonS3, url.path()),
                     }
@@ -401,6 +402,38 @@ mod tests {
             (
                 "https://account.blob.fabric.microsoft.com/container/path",
                 (ObjectStoreScheme::MicrosoftAzure, "path"),
+            ),
+            // Regression: bucket names starting with "s3" must not cause virtual-hosted
+            // URLs to lose the first object-key segment.
+            // Path-style URLs must still strip the bucket segment from the path.
+            (
+                "https://s3.us-east-1.amazonaws.com/s3bucket/table/file.parquet",
+                (ObjectStoreScheme::AmazonS3, "table/file.parquet"),
+            ),
+            // Virtual-hosted URLs must retain every object-key segment.
+            (
+                "https://s3bucket.s3.us-east-1.amazonaws.com/table/file.parquet",
+                (ObjectStoreScheme::AmazonS3, "table/file.parquet"),
+            ),
+            (
+                "https://s3bucket.s3.amazonaws.com/table/file.parquet",
+                (ObjectStoreScheme::AmazonS3, "table/file.parquet"),
+            ),
+            (
+                "https://s3-bucket.s3.us-east-1.amazonaws.com/table/file.parquet",
+                (ObjectStoreScheme::AmazonS3, "table/file.parquet"),
+            ),
+            (
+                "https://s3-bucket.s3.amazonaws.com/table/file.parquet",
+                (ObjectStoreScheme::AmazonS3, "table/file.parquet"),
+            ),
+            (
+                "https://s3bucket.s3.dualstack.us-east-1.amazonaws.com/table/file.parquet",
+                (ObjectStoreScheme::AmazonS3, "table/file.parquet"),
+            ),
+            (
+                "https://s3bucket.s3.us-east-1.amazonaws.com/file.parquet",
+                (ObjectStoreScheme::AmazonS3, "file.parquet"),
             ),
         ];
 
