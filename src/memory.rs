@@ -30,9 +30,9 @@ use crate::multipart::{MultipartStore, PartId};
 use crate::upload::MultipartUploadMode;
 use crate::util::InvalidGetRange;
 use crate::{
-    Attributes, GetRange, GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutResult, Result,
-    UpdateVersion, UploadPart, path::Path,
+    Attributes, CompleteMultipartOptions, GetRange, GetResult, GetResultPayload, ListResult,
+    MultipartId, MultipartUpload, ObjectMeta, ObjectStore, PutMode, PutMultipartOptions,
+    PutOptions, PutResult, Result, UpdateVersion, UploadPart, path::Path,
 };
 use crate::{CopyMode, CopyOptions, GetOptions, PutPayload};
 
@@ -459,18 +459,21 @@ impl MultipartStore for InMemory {
         &self,
         path: &Path,
         id: &MultipartId,
-        _parts: Vec<PartId>,
+        parts: Vec<PartId>,
     ) -> Result<PutResult> {
-        self.complete_upload(path, id, PutMode::Overwrite)
+        self.complete_multipart_opts(path, id, parts, CompleteMultipartOptions::default())
+            .await
     }
 
-    async fn complete_multipart_create(
+    async fn complete_multipart_opts(
         &self,
         path: &Path,
         id: &MultipartId,
         _parts: Vec<PartId>,
+        opts: CompleteMultipartOptions,
     ) -> Result<PutResult> {
-        self.complete_upload(path, id, PutMode::Create)
+        let mode = MultipartUploadMode::try_from(opts.mode)?;
+        self.complete_upload(path, id, mode.into())
     }
 
     async fn abort_multipart(&self, _path: &Path, id: &MultipartId) -> Result<()> {
@@ -583,7 +586,7 @@ mod tests {
         let integration = InMemory::new();
 
         multipart_create(&integration).await;
-        multipart_store_create(&integration, &integration).await;
+        multipart_complete_create(&integration, &integration).await;
 
         put_get_delete_list(&integration).await;
         list_with_offset_exclusivity(&integration).await;

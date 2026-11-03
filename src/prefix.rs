@@ -25,8 +25,9 @@ use crate::path::Path;
 #[cfg(feature = "cloud-base")]
 use crate::signer::Signer;
 use crate::{
-    CopyOptions, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions, Result,
+    CompleteMultipartOptions, CopyOptions, GetOptions, GetResult, ListResult, MultipartId,
+    MultipartUpload, ObjectMeta, ObjectStore, PutMultipartOptions, PutOptions, PutPayload,
+    PutResult, RenameOptions, Result,
 };
 
 /// Store wrapper that applies a constant prefix to all paths handled by the store.
@@ -240,20 +241,22 @@ impl<T: MultipartStore> MultipartStore for PrefixStore<T> {
         self.inner.complete_multipart(&full_path, id, parts).await
     }
 
-    async fn abort_multipart(&self, path: &Path, id: &MultipartId) -> Result<()> {
-        let full_path = self.full_path(path);
-        self.inner.abort_multipart(&full_path, id).await
-    }
-
-    async fn complete_multipart_create(
+    async fn complete_multipart_opts(
         &self,
         path: &Path,
         id: &MultipartId,
         parts: Vec<PartId>,
+        opts: CompleteMultipartOptions,
     ) -> Result<PutResult> {
+        let full_path = self.full_path(path);
         self.inner
-            .complete_multipart_create(&self.full_path(path), id, parts)
+            .complete_multipart_opts(&full_path, id, parts, opts)
             .await
+    }
+
+    async fn abort_multipart(&self, path: &Path, id: &MultipartId) -> Result<()> {
+        let full_path = self.full_path(path);
+        self.inner.abort_multipart(&full_path, id).await
     }
 }
 
@@ -425,7 +428,7 @@ mod tests {
     async fn prefix_multipart() {
         let store = PrefixStore::new(InMemory::new(), "prefix");
 
-        multipart_store_create(&store, &store).await;
+        multipart_complete_create(&store, &store).await;
         multipart(&store, &store).await;
         multipart_with_opts(&store, &store).await;
         multipart_put_part_out_of_order(&store, &store).await;

@@ -24,7 +24,10 @@
 use async_trait::async_trait;
 
 use crate::path::Path;
-use crate::{Error, MultipartId, PutMultipartOptions, PutPayload, PutResult, Result};
+use crate::{
+    CompleteMultipartOptions, Error, MultipartId, PutMode, PutMultipartOptions, PutPayload,
+    PutResult, Result,
+};
 
 /// Represents a part of a file that has been successfully uploaded in a multipart upload process.
 #[derive(Debug, Clone)]
@@ -107,6 +110,9 @@ pub trait MultipartStore: Send + Sync + 'static {
     /// with a `part_idx` of `i`, and the same `path` and `id` as provided to this method. Calling
     /// this method with out of sequence or repeated [`PartId`], or [`PartId`] returned for other
     /// values of `path` or `id`, will result in implementation-defined behaviour
+    ///
+    /// This overwrites any object at `path`. See [`Self::complete_multipart_opts`] to complete
+    /// the upload only if no object exists.
     async fn complete_multipart(
         &self,
         path: &Path,
@@ -114,26 +120,41 @@ pub trait MultipartStore: Send + Sync + 'static {
         parts: Vec<PartId>,
     ) -> Result<PutResult>;
 
+    /// Completes a multipart upload with the given options
+    ///
+    /// The same requirements on `parts` apply as for [`Self::complete_multipart`].
+    ///
+    /// With [`PutMode::Create`], the completion fails with [`Error::AlreadyExists`] if an
+    /// object already exists at `path`. The check and the write are one atomic operation. If
+    /// the request fails without a response, the object may or may not have been created.
+    ///
+    /// Implementations that cannot enforce `opts.mode` return an error. The default
+    /// implementation supports only [`PutMode::Overwrite`], and returns
+    /// [`Error::NotSupported`] for any other mode.
+    async fn complete_multipart_opts(
+        &self,
+        path: &Path,
+        id: &MultipartId,
+        parts: Vec<PartId>,
+        opts: CompleteMultipartOptions,
+    ) -> Result<PutResult> {
+        let CompleteMultipartOptions {
+            mode,
+            extensions: _,
+        } = opts;
+
+        // An implementation that does not override this method cannot check for an existing
+        // object, so it must not fall back to an unconditional completion.
+        match mode {
+            PutMode::Overwrite => self.complete_multipart(path, id, parts).await,
+            PutMode::Create | PutMode::Update(_) => Err(Error::NotSupported {
+                source: "complete_multipart_opts with a mode other than PutMode::Overwrite".into(),
+            }),
+        }
+    }
+
     /// Aborts a multipart upload
     async fn abort_multipart(&self, path: &Path, id: &MultipartId) -> Result<()>;
-
-    /// Complete an upload atomically only if no object exists at `path`.
-    ///
-    /// The same part ordering requirements as [`Self::complete_multipart`] apply.
-    /// Returns [`Error::AlreadyExists`] if the destination exists, or
-    /// [`Error::NotSupported`] if conditional completion is unsupported.
-    /// See [`MultipartUpload::complete`](crate::MultipartUpload::complete) for uncertain
-    /// publication outcomes and cleanup.
-    async fn complete_multipart_create(
-        &self,
-        _path: &Path,
-        _id: &MultipartId,
-        _parts: Vec<PartId>,
-    ) -> Result<PutResult> {
-        Err(crate::Error::NotSupported {
-            source: "create-only multipart completion is not supported".into(),
-        })
-    }
 }
 
 #[cfg(test)]
@@ -142,16 +163,6 @@ mod tests {
     use crate::Extensions;
 
     struct TestMultipartStore;
-
-    #[tokio::test]
-    async fn unsupported_create_does_not_overwrite() {
-        assert!(matches!(
-            TestMultipartStore
-                .complete_multipart_create(&Path::from("test"), &"upload".into(), vec![])
-                .await,
-            Err(Error::NotSupported { .. })
-        ));
-    }
 
     #[async_trait]
     impl MultipartStore for TestMultipartStore {
@@ -175,12 +186,48 @@ mod tests {
             _id: &MultipartId,
             _parts: Vec<PartId>,
         ) -> Result<PutResult> {
-            unreachable!()
+            Ok(PutResult {
+                e_tag: Some("test".into()),
+                version: None,
+                extensions: Default::default(),
+            })
         }
 
         async fn abort_multipart(&self, _path: &Path, _id: &MultipartId) -> Result<()> {
             unreachable!()
         }
+    }
+
+    #[tokio::test]
+    async fn default_complete_multipart_opts_overwrites() {
+        let result = TestMultipartStore
+            .complete_multipart_opts(
+                &Path::from("test"),
+                &"test".into(),
+                vec![],
+                PutMode::Overwrite.into(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.e_tag.as_deref(), Some("test"));
+    }
+
+    #[tokio::test]
+    async fn default_complete_multipart_opts_rejects_create() {
+        // The default must fail closed: an implementation that cannot check for an
+        // existing object must not fall back to an overwrite.
+        let err = TestMultipartStore
+            .complete_multipart_opts(
+                &Path::from("test"),
+                &"test".into(),
+                vec![],
+                PutMode::Create.into(),
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, Error::NotSupported { .. }), "{err}");
     }
 
     #[tokio::test]

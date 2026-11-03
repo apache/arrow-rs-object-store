@@ -904,10 +904,14 @@ impl S3Client {
             ),
         };
 
+        // A Create completion isn't idempotent: if it succeeds but the response
+        // is lost, a retry fails its If-None-Match and reports AlreadyExists
+        let idempotent = matches!(mode, MultipartUploadMode::Overwrite);
+
         let response = request
             .with_aws_sigv4(authorizer, None)?
             .retryable(&retry_config)
-            .idempotent(true)
+            .idempotent(idempotent)
             .retry_error_body(true)
             .send()
             .await

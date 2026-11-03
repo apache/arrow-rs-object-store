@@ -2068,6 +2068,52 @@ impl From<Attributes> for PutMultipartOptions {
     }
 }
 
+/// Options for [`MultipartStore::complete_multipart_opts`]
+///
+/// [`MultipartStore::complete_multipart_opts`]: crate::multipart::MultipartStore::complete_multipart_opts
+#[derive(Debug, Clone, Default)]
+pub struct CompleteMultipartOptions {
+    /// Configure the [`PutMode`] for this completion
+    ///
+    /// [`PutMode::Create`] fails with [`Error::AlreadyExists`] if an object already
+    /// exists at the path.
+    pub mode: PutMode,
+    /// Implementation-specific extensions. Intended for use by [`MultipartStore`] implementations
+    /// that need to pass context-specific information (like tracing spans) via trait methods.
+    ///
+    /// These extensions are ignored entirely by backends offered through this crate.
+    ///
+    /// They are also excluded from [`PartialEq`] and [`Eq`].
+    ///
+    /// [`MultipartStore`]: crate::multipart::MultipartStore
+    pub extensions: Extensions,
+}
+
+impl PartialEq<Self> for CompleteMultipartOptions {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            mode,
+            extensions: _,
+        } = self;
+        let Self {
+            mode: other_mode,
+            extensions: _,
+        } = other;
+        mode == other_mode
+    }
+}
+
+impl Eq for CompleteMultipartOptions {}
+
+impl From<PutMode> for CompleteMultipartOptions {
+    fn from(mode: PutMode) -> Self {
+        Self {
+            mode,
+            ..Default::default()
+        }
+    }
+}
+
 /// Result for a put request
 #[derive(Debug, Clone)]
 pub struct PutResult {

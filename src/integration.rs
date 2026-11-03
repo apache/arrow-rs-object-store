@@ -634,7 +634,7 @@ pub async fn multipart_create(storage: &dyn ObjectStore) {
 }
 
 /// Tests conditional completion through the low-level multipart interface.
-pub async fn multipart_store_create(storage: &dyn ObjectStore, multipart: &dyn MultipartStore) {
+pub async fn multipart_complete_create(storage: &dyn ObjectStore, multipart: &dyn MultipartStore) {
     let path = Path::from("multipart-store-create");
     let first = multipart.create_multipart(&path).await.unwrap();
     let second = multipart.create_multipart(&path).await.unwrap();
@@ -647,12 +647,12 @@ pub async fn multipart_store_create(storage: &dyn ObjectStore, multipart: &dyn M
         .await
         .unwrap();
     multipart
-        .complete_multipart_create(&path, &first, vec![first_part])
+        .complete_multipart_opts(&path, &first, vec![first_part], PutMode::Create.into())
         .await
         .unwrap();
     assert!(matches!(
         multipart
-            .complete_multipart_create(&path, &second, vec![second_part])
+            .complete_multipart_opts(&path, &second, vec![second_part], PutMode::Create.into())
             .await,
         Err(crate::Error::AlreadyExists { .. })
     ));

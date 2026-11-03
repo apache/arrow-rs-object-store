@@ -25,7 +25,7 @@
 //! Multipart uploads can be initiated with the [`ObjectStore::put_multipart_opts`] method.
 //!
 //! Selecting [`PutMode::Create`] through [`MultipartUpload::set_put_mode`], or using
-//! [`MultipartStore::complete_multipart_create`], requires the endpoint to enforce
+//! [`MultipartStore::complete_multipart_opts`], requires the endpoint to enforce
 //! `If-None-Match: *` on `CompleteMultipartUpload`.
 //! S3-compatible endpoints may support this condition on `PutObject` but not on multipart
 //! completion; enable conditional writes only when the endpoint supports both operations.
@@ -61,9 +61,9 @@ use crate::signer::{SignedUrlOptions, Signer};
 use crate::upload::MultipartUploadMode;
 use crate::util::{STRICT_ENCODE_SET, validate_signed_url_extras};
 use crate::{
-    CopyMode, CopyOptions, Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, Path, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult,
-    Result, UploadPart,
+    CompleteMultipartOptions, CopyMode, CopyOptions, Error, GetOptions, GetResult, ListResult,
+    MultipartId, MultipartUpload, ObjectMeta, ObjectStore, Path, PutMode, PutMultipartOptions,
+    PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 
 static TAGS_HEADER: HeaderName = HeaderName::from_static("x-amz-tagging");
@@ -271,18 +271,8 @@ impl ObjectStore for AmazonS3 {
                 implementer: self.to_string(),
             }),
             (PutMode::Create, S3ConditionalPut::ETagMatch) => {
-                match request.header(&IF_NONE_MATCH, "*").do_put().await {
-                    // Technically If-None-Match should return NotModified but some stores,
-                    // such as R2, instead return PreconditionFailed
-                    // https://developers.cloudflare.com/r2/api/s3/extensions/#conditional-operations-in-putobject
-                    Err(e @ Error::NotModified { .. } | e @ Error::Precondition { .. }) => {
-                        Err(Error::AlreadyExists {
-                            path: location.to_string(),
-                            source: Box::new(e),
-                        })
-                    }
-                    r => r,
-                }
+                let result = request.header(&IF_NONE_MATCH, "*").do_put().await;
+                map_create_error(location.to_string(), result)
             }
             (PutMode::Update(v), put) => {
                 let etag = v.e_tag.ok_or_else(|| Error::Generic {
@@ -492,6 +482,19 @@ impl ObjectStore for AmazonS3 {
                 }
             }
         }
+    }
+}
+
+/// Maps conditional PUT failures to `AlreadyExists`.
+fn map_create_error(path: String, result: Result<PutResult>) -> Result<PutResult> {
+    match result {
+        Err(e @ Error::NotModified { .. } | e @ Error::Precondition { .. }) => {
+            Err(Error::AlreadyExists {
+                path,
+                source: Box::new(e),
+            })
+        }
+        r => r,
     }
 }
 
@@ -726,16 +729,23 @@ impl MultipartStore for AmazonS3 {
             .await
     }
 
-    async fn complete_multipart_create(
+    /// Completes a multipart upload with the given options.
+    ///
+    /// [`PutMode::Create`] sends `If-None-Match: *` and requires
+    /// [`S3ConditionalPut::ETagMatch`]. This store does not retry such a completion
+    /// automatically.
+    async fn complete_multipart_opts(
         &self,
         path: &Path,
         id: &MultipartId,
         parts: Vec<PartId>,
+        opts: CompleteMultipartOptions,
     ) -> Result<PutResult> {
-        self.client.config.ensure_conditional_put_enabled()?;
-        self.client
-            .complete_multipart(path, id, parts, MultipartUploadMode::Create)
-            .await
+        let mode = MultipartUploadMode::try_from(opts.mode)?;
+        if matches!(mode, MultipartUploadMode::Create) {
+            self.client.config.ensure_conditional_put_enabled()?;
+        }
+        self.client.complete_multipart(path, id, parts, mode).await
     }
 
     async fn abort_multipart(&self, path: &Path, id: &MultipartId) -> Result<()> {
@@ -1011,7 +1021,7 @@ mod tests {
         ));
         assert!(matches!(
             store
-                .complete_multipart_create(&path, &"upload".into(), vec![])
+                .complete_multipart_opts(&path, &"upload".into(), vec![], PutMode::Create.into())
                 .await,
             Err(Error::NotSupported { .. })
         ));
@@ -1125,7 +1135,9 @@ mod tests {
                     content_id: "part".into(),
                 }];
                 let result = if create {
-                    store.complete_multipart_create(&path, &id, parts).await
+                    store
+                        .complete_multipart_opts(&path, &id, parts, PutMode::Create.into())
+                        .await
                 } else {
                     store.complete_multipart(&path, &id, parts).await
                 };
@@ -1862,7 +1874,7 @@ mod tests {
         if test_conditional_put {
             put_opts(&integration, true).await;
             multipart_create(&integration).await;
-            multipart_store_create(&integration, &integration).await;
+            multipart_complete_create(&integration, &integration).await;
         }
 
         // run integration test with unsigned payload enabled
