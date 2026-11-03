@@ -257,8 +257,10 @@ jobs:
       # TEST_S3_SIGNATURE_ENFORCEMENT (skipped against LocalStack elsewhere). Run them against
       # RustFS. `env -u` drops the job-wide SSE-KMS settings, whose LocalStack key RustFS does not
       # have; the tests only need a plain authenticated round trip.
-      - name: Run presigned-URL signature-enforcement tests (RustFS)
-        run: env -u AWS_SERVER_SIDE_ENCRYPTION -u AWS_SSE_KMS_KEY_ID cargo test --lib --features=aws aws::tests::signed_url
+      - name: Run S3 integration and signature-enforcement tests (RustFS)
+        run: |
+          env -u AWS_SERVER_SIDE_ENCRYPTION -u AWS_SSE_KMS_KEY_ID cargo test --lib --features=aws aws::tests::signed_url
+          env -u AWS_SERVER_SIDE_ENCRYPTION -u AWS_SSE_KMS_KEY_ID cargo test --lib --features=aws aws::tests::s3_test -- --exact
         env:
           TEST_S3_SIGNATURE_ENFORCEMENT: 1
           AWS_ENDPOINT: http://localhost:9000

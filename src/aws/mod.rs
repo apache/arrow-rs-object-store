@@ -24,6 +24,22 @@
 //!
 //! Multipart uploads can be initiated with the [`ObjectStore::put_multipart_opts`] method.
 //!
+//! Selecting [`PutMode::Create`] through [`PutMultipartOptions`] or
+//! [`MultipartStore::complete_multipart_opts`] requires the endpoint to enforce
+//! `If-None-Match: *` on `CompleteMultipartUpload`. [`PutMode::Update`] requires an
+//! ETag and sends `If-Match` instead; a mismatched ETag returns [`Error::Precondition`].
+//! Only the ETag is compared; the S3 version ID is not checked.
+//! S3-compatible endpoints may support this condition on `PutObject` but not on multipart
+//! completion; enable conditional writes only when the endpoint supports both operations.
+//!
+//! Conditional completion, including multipart copy-if-not-exists, is sent once without
+//! automatic retries; see [`MultipartUpload::complete`] for uncertain outcomes.
+//! A `409 ConditionalRequestConflict` is returned as [`Error::Generic`] and requires a new
+//! upload with all parts.
+//! With [`PutMode::Create`], an existing destination (`412`, or `304` on compatible
+//! endpoints) returns [`Error::AlreadyExists`]. With [`PutMode::Update`], `NoSuchKey`
+//! also returns [`Error::Precondition`]; `NoSuchUpload` remains [`Error::NotFound`].
+//!
 //! If the writer fails for any reason, you may have parts uploaded to AWS but not
 //! used that you will be charged for. [`MultipartUpload::abort`] may be invoked to drop
 //! these unneeded parts, however, it is recommended that you consider implementing
@@ -39,7 +55,7 @@ use http::{Method, StatusCode};
 use std::{sync::Arc, time::Duration};
 use url::Url;
 
-use crate::aws::client::{CompleteMultipartMode, PutPartPayload, RequestError, S3Client};
+use crate::aws::client::{PutPartPayload, RequestError, S3Client};
 use crate::client::CredentialProvider;
 use crate::client::get::GetClientExt;
 use crate::client::list::{ListClient, ListClientExt};
@@ -48,9 +64,9 @@ use crate::retry::{MultipartRetry, RetryPolicy};
 use crate::signer::{SignedUrlOptions, Signer};
 use crate::util::{STRICT_ENCODE_SET, validate_signed_url_extras};
 use crate::{
-    CopyMode, CopyOptions, Error, GetOptions, GetResult, ListResult, MultipartId, MultipartUpload,
-    ObjectMeta, ObjectStore, Path, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult,
-    Result, UploadPart,
+    CompleteMultipartOptions, CopyMode, CopyOptions, Error, GetOptions, GetResult, ListResult,
+    MultipartId, MultipartUpload, ObjectMeta, ObjectStore, Path, PutMode, PutMultipartOptions,
+    PutOptions, PutPayload, PutResult, Result, UploadPart,
 };
 
 static TAGS_HEADER: HeaderName = HeaderName::from_static("x-amz-tagging");
@@ -258,18 +274,8 @@ impl ObjectStore for AmazonS3 {
                 implementer: self.to_string(),
             }),
             (PutMode::Create, S3ConditionalPut::ETagMatch) => {
-                match request.header(&IF_NONE_MATCH, "*").do_put().await {
-                    // Technically If-None-Match should return NotModified but some stores,
-                    // such as R2, instead return PreconditionFailed
-                    // https://developers.cloudflare.com/r2/api/s3/extensions/#conditional-operations-in-putobject
-                    Err(e @ Error::NotModified { .. } | e @ Error::Precondition { .. }) => {
-                        Err(Error::AlreadyExists {
-                            path: location.to_string(),
-                            source: Box::new(e),
-                        })
-                    }
-                    r => r,
-                }
+                let result = request.header(&IF_NONE_MATCH, "*").do_put().await;
+                map_create_error(location.to_string(), result)
             }
             (PutMode::Update(v), put) => {
                 let etag = v.e_tag.ok_or_else(|| Error::Generic {
@@ -314,10 +320,13 @@ impl ObjectStore for AmazonS3 {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
+        self.client.config.validate_multipart_mode(&opts.mode)?;
+        let mode = opts.mode.clone();
         let retry_policy = opts.retry_policy();
         let upload_id = self.client.create_multipart(location, opts).await?;
 
         Ok(Box::new(S3MultiPartUpload {
+            mode,
             part_idx: 0,
             state: Arc::new(UploadState {
                 client: Arc::clone(&self.client),
@@ -434,23 +443,10 @@ impl ObjectStore for AmazonS3 {
                                 .client
                                 .put_part(to, &upload_id, 0, PutPartPayload::Copy(from))
                                 .await?;
-                            match self
-                                .client
-                                .complete_multipart(
-                                    to,
-                                    &upload_id,
-                                    vec![part_id],
-                                    CompleteMultipartMode::Create,
-                                )
+                            self.client
+                                .complete_multipart(to, &upload_id, vec![part_id], &PutMode::Create)
                                 .await
-                            {
-                                Err(e @ Error::Precondition { .. }) => Err(Error::AlreadyExists {
-                                    path: to.to_string(),
-                                    source: Box::new(e),
-                                }),
-                                Ok(_) => Ok(()),
-                                Err(e) => Err(e),
-                            }
+                                .map(|_| ())
                         }
                         .await;
 
@@ -489,8 +485,22 @@ impl ObjectStore for AmazonS3 {
     }
 }
 
+/// Maps conditional PUT failures to `AlreadyExists`.
+fn map_create_error(path: String, result: Result<PutResult>) -> Result<PutResult> {
+    match result {
+        Err(e @ Error::NotModified { .. } | e @ Error::Precondition { .. }) => {
+            Err(Error::AlreadyExists {
+                path,
+                source: Box::new(e),
+            })
+        }
+        r => r,
+    }
+}
+
 #[derive(Debug)]
 struct S3MultiPartUpload {
+    mode: PutMode,
     part_idx: usize,
     state: Arc<UploadState>,
 }
@@ -536,14 +546,13 @@ impl MultipartUpload for S3MultiPartUpload {
 
     async fn complete(&mut self) -> Result<PutResult> {
         let parts = self.state.parts.finish(self.part_idx)?;
-
         self.state
             .client
             .complete_multipart(
                 &self.state.location,
                 &self.state.upload_id,
                 parts,
-                CompleteMultipartMode::Overwrite,
+                &self.mode,
             )
             .await
     }
@@ -685,6 +694,7 @@ impl MultipartStore for AmazonS3 {
         path: &Path,
         opts: PutMultipartOptions,
     ) -> Result<MultipartId> {
+        opts.require_overwrite()?;
         self.client.create_multipart(path, opts).await
     }
 
@@ -707,7 +717,25 @@ impl MultipartStore for AmazonS3 {
         parts: Vec<PartId>,
     ) -> Result<PutResult> {
         self.client
-            .complete_multipart(path, id, parts, CompleteMultipartMode::Overwrite)
+            .complete_multipart(path, id, parts, &PutMode::Overwrite)
+            .await
+    }
+
+    /// Completes a multipart upload with the given options.
+    ///
+    /// [`PutMode::Create`] sends `If-None-Match: *`; [`PutMode::Update`] sends
+    /// `If-Match` with the supplied ETag. Both require [`S3ConditionalPut::ETagMatch`]
+    /// and are sent without automatic retries.
+    async fn complete_multipart_opts(
+        &self,
+        path: &Path,
+        id: &MultipartId,
+        parts: Vec<PartId>,
+        opts: CompleteMultipartOptions,
+    ) -> Result<PutResult> {
+        self.client.config.validate_multipart_mode(&opts.mode)?;
+        self.client
+            .complete_multipart(path, id, parts, &opts.mode)
             .await
     }
 
@@ -735,7 +763,6 @@ impl PaginatedListStore for AmazonS3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ClientOptions;
     use crate::ObjectStoreExt;
     #[cfg(feature = "reqwest")]
     use crate::client::SpawnedReqwestConnector;
@@ -743,8 +770,13 @@ mod tests {
     #[cfg(feature = "reqwest")]
     use crate::client::mock_server::MockServer;
     use crate::client::retry::RetryContext;
+    #[cfg(feature = "reqwest")]
+    use crate::client::{
+        HttpClient, HttpConnector, HttpError, HttpErrorKind, HttpRequest, HttpResponse, HttpService,
+    };
     use crate::integration::*;
     use crate::tests::*;
+    use crate::{ClientOptions, UpdateVersion};
     use base64::Engine;
     use base64::prelude::BASE64_STANDARD;
     use http::HeaderMap;
@@ -752,7 +784,7 @@ mod tests {
     #[cfg(feature = "reqwest")]
     use http::Response;
     #[cfg(feature = "reqwest")]
-    use http::header::ETAG;
+    use http::header::{AUTHORIZATION, ETAG};
     #[cfg(feature = "reqwest")]
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -863,6 +895,382 @@ mod tests {
 
         assert_eq!(policy.0.load(Ordering::SeqCst), 1);
         mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn multipart_create_signs_condition_and_reports_conflicts() {
+        let mock = MockServer::new().await;
+        let store = AmazonS3Builder::new()
+            .with_bucket_name("test")
+            .with_region("us-east-1")
+            .with_endpoint(mock.url())
+            .with_allow_http(true)
+            .with_access_key_id("key")
+            .with_secret_access_key("secret")
+            .with_retry(crate::RetryConfig {
+                max_retries: 0,
+                ..Default::default()
+            })
+            .build()
+            .unwrap();
+        let path = Path::from("object");
+        for status in [
+            StatusCode::OK,
+            StatusCode::PRECONDITION_FAILED,
+            StatusCode::CONFLICT,
+            StatusCode::NOT_MODIFIED,
+        ] {
+            mock.push(Response::new("<InitiateMultipartUploadResult><UploadId>upload</UploadId></InitiateMultipartUploadResult>".to_owned()));
+            mock.push(
+                Response::builder()
+                    .header("ETag", "part")
+                    .body(String::new())
+                    .unwrap(),
+            );
+            mock.push_fn(move |request| {
+                assert_eq!(request.method(), Method::POST);
+                assert_eq!(request.uri().query(), Some("uploadId=upload"));
+                assert_eq!(request.headers()[IF_NONE_MATCH], "*");
+                let authorization = request.headers()[AUTHORIZATION].to_str().unwrap();
+                let signed = authorization.split("SignedHeaders=").nth(1).unwrap()
+                    .split(',').next().unwrap();
+                assert!(signed.split(';').any(|name| name == "if-none-match"));
+                Response::builder().status(status).body(match status {
+                    StatusCode::OK => "<CompleteMultipartUploadResult><ETag>object</ETag></CompleteMultipartUploadResult>",
+                    StatusCode::CONFLICT => "<Error><Code>ConditionalRequestConflict</Code></Error>",
+                    StatusCode::NOT_MODIFIED => "",
+                    _ => "<Error><Code>PreconditionFailed</Code></Error>",
+                }.to_owned()).unwrap()
+            });
+            let mut upload = store
+                .put_multipart_opts(&path, PutMode::Create.into())
+                .await
+                .unwrap();
+            upload.put_part("payload".into()).await.unwrap();
+            let result = upload.complete().await;
+            if status.is_success() {
+                assert_eq!(result.unwrap().e_tag.as_deref(), Some("object"));
+            } else if status == StatusCode::CONFLICT {
+                assert!(matches!(&result, Err(Error::Generic { .. })), "{result:?}");
+            } else {
+                assert!(
+                    matches!(&result, Err(Error::AlreadyExists { .. })),
+                    "{result:?}"
+                );
+            }
+        }
+        mock.push_fn(|request| {
+            assert!(!request.headers().contains_key(IF_NONE_MATCH));
+            Response::new("<CompleteMultipartUploadResult><ETag>overwrite</ETag></CompleteMultipartUploadResult>".to_owned())
+        });
+        store
+            .complete_multipart(
+                &path,
+                &"upload".into(),
+                vec![PartId {
+                    content_id: "part".into(),
+                }],
+            )
+            .await
+            .unwrap();
+        let update = PutMode::Update(UpdateVersion {
+            e_tag: Some("etag".into()),
+            version: None,
+        });
+        for mode in [PutMode::Create, update] {
+            assert!(matches!(
+                store.create_multipart_opts(&path, mode.into()).await,
+                Err(Error::NotSupported { .. })
+            ));
+        }
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn multipart_update_requires_etag_before_request() {
+        let mock = MockServer::new().await;
+        let store = AmazonS3Builder::new()
+            .with_bucket_name("test")
+            .with_region("us-east-1")
+            .with_endpoint(mock.url())
+            .with_allow_http(true)
+            .with_skip_signature(true)
+            .build()
+            .unwrap();
+        let path = Path::from("object");
+        let mode = PutMode::Update(UpdateVersion {
+            e_tag: None,
+            version: Some("version".into()),
+        });
+        let err = store
+            .put_multipart_opts(&path, mode.clone().into())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("ETag required"), "{err}");
+        let err = store
+            .complete_multipart_opts(&path, &"upload".into(), vec![], mode.into())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("ETag required"), "{err}");
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn multipart_update_signs_condition_and_reports_conflicts() {
+        let mock = MockServer::new().await;
+        let store = AmazonS3Builder::new()
+            .with_bucket_name("test")
+            .with_region("us-east-1")
+            .with_endpoint(mock.url())
+            .with_allow_http(true)
+            .with_access_key_id("key")
+            .with_secret_access_key("secret")
+            .build()
+            .unwrap();
+        let path = Path::from("object");
+        let mode = PutMode::Update(UpdateVersion {
+            e_tag: Some("\"original\"".into()),
+            version: None,
+        });
+        for (status, code) in [
+            (StatusCode::OK, ""),
+            (StatusCode::PRECONDITION_FAILED, "PreconditionFailed"),
+            (StatusCode::CONFLICT, "ConditionalRequestConflict"),
+            (StatusCode::NOT_FOUND, "NoSuchUpload"),
+            (StatusCode::NOT_FOUND, "NoSuchKey"),
+            (StatusCode::NOT_FOUND, "UnknownError"),
+        ] {
+            mock.push(Response::new("<InitiateMultipartUploadResult><UploadId>upload</UploadId></InitiateMultipartUploadResult>".to_owned()));
+            mock.push(
+                Response::builder()
+                    .header(ETAG, "part")
+                    .body(String::new())
+                    .unwrap(),
+            );
+            mock.push_fn(move |request| {
+                assert_eq!(request.method(), Method::POST);
+                assert_eq!(request.uri().query(), Some("uploadId=upload"));
+                assert_eq!(request.headers()[IF_MATCH], "\"original\"");
+                assert!(!request.headers().contains_key(IF_NONE_MATCH));
+                let authorization = request.headers()[AUTHORIZATION].to_str().unwrap();
+                let signed = authorization.split("SignedHeaders=").nth(1).unwrap().split(',').next().unwrap();
+                assert!(signed.split(';').any(|name| name == "if-match"));
+                let body = if status == StatusCode::OK {
+                    "<CompleteMultipartUploadResult><ETag>updated</ETag></CompleteMultipartUploadResult>".to_owned()
+                } else {
+                    format!("<Error><Code>{code}</Code></Error>")
+                };
+                Response::builder().status(status).body(body).unwrap()
+            });
+            let mut upload = store
+                .put_multipart_opts(&path, mode.clone().into())
+                .await
+                .unwrap();
+            upload.put_part("updated".into()).await.unwrap();
+            let result = upload.complete().await;
+            match status {
+                StatusCode::OK => assert_eq!(result.unwrap().e_tag.as_deref(), Some("updated")),
+                StatusCode::PRECONDITION_FAILED => assert!(
+                    matches!(result, Err(Error::Precondition { .. })),
+                    "{result:?}"
+                ),
+                StatusCode::CONFLICT => {
+                    assert!(matches!(result, Err(Error::Generic { .. })), "{result:?}");
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .to_string()
+                            .contains("start a new multipart upload")
+                    );
+                }
+                StatusCode::NOT_FOUND if code == "NoSuchKey" => assert!(
+                    matches!(result, Err(Error::Precondition { .. })),
+                    "{result:?}"
+                ),
+                StatusCode::NOT_FOUND => {
+                    assert!(matches!(result, Err(Error::NotFound { .. })), "{result:?}")
+                }
+                _ => unreachable!(),
+            }
+        }
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn multipart_conditional_disabled_preserves_overwrite() {
+        let mock = MockServer::new().await;
+        let store = AmazonS3Builder::new()
+            .with_bucket_name("test")
+            .with_region("us-east-1")
+            .with_endpoint(mock.url())
+            .with_allow_http(true)
+            .with_skip_signature(true)
+            .with_conditional_put(S3ConditionalPut::Disabled)
+            .with_retry(crate::RetryConfig {
+                max_retries: 0,
+                ..Default::default()
+            })
+            .build()
+            .unwrap();
+        let path = Path::from("object");
+        for mode in [
+            PutMode::Create,
+            PutMode::Update(UpdateVersion {
+                e_tag: Some("etag".into()),
+                version: None,
+            }),
+        ] {
+            assert!(matches!(
+                store.put_multipart_opts(&path, mode.clone().into()).await,
+                Err(Error::NotSupported { .. })
+            ));
+            assert!(matches!(
+                store
+                    .complete_multipart_opts(&path, &"upload".into(), vec![], mode.into())
+                    .await,
+                Err(Error::NotSupported { .. })
+            ));
+        }
+        mock.push(Response::new("<InitiateMultipartUploadResult><UploadId>upload</UploadId></InitiateMultipartUploadResult>".to_owned()));
+        let mut upload = store.put_multipart(&path).await.unwrap();
+        mock.push(
+            Response::builder()
+                .header(ETAG, "part")
+                .body(String::new())
+                .unwrap(),
+        );
+        upload.put_part("payload".into()).await.unwrap();
+        mock.push_fn(|request| {
+            assert_eq!(request.method(), Method::POST);
+            assert!(!request.headers().contains_key(IF_NONE_MATCH));
+            Response::new("<CompleteMultipartUploadResult><ETag>overwrite</ETag></CompleteMultipartUploadResult>".to_owned())
+        });
+        assert_eq!(
+            upload.complete().await.unwrap().e_tag.as_deref(),
+            Some("overwrite")
+        );
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[derive(Clone, Copy, Debug)]
+    enum CompletionFailure {
+        Timeout,
+        ServerError,
+        ErrorBody,
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[derive(Clone, Debug)]
+    struct CompletionService {
+        calls: Arc<AtomicUsize>,
+        failure: CompletionFailure,
+    }
+
+    #[cfg(feature = "reqwest")]
+    impl HttpConnector for CompletionService {
+        fn connect(&self, _: &ClientOptions) -> Result<HttpClient> {
+            Ok(HttpClient::new(self.clone()))
+        }
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[async_trait]
+    impl HttpService for CompletionService {
+        async fn call(&self, request: HttpRequest) -> std::result::Result<HttpResponse, HttpError> {
+            assert_eq!(request.method(), Method::POST);
+            let (status, body) = if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                match self.failure {
+                    CompletionFailure::Timeout => {
+                        return Err(HttpError::new(
+                            HttpErrorKind::Timeout,
+                            std::io::Error::other("completion response lost"),
+                        ));
+                    }
+                    CompletionFailure::ServerError => (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "<Error><Code>InternalError</Code></Error>",
+                    ),
+                    CompletionFailure::ErrorBody => {
+                        (StatusCode::OK, "<Error><Code>InternalError</Code></Error>")
+                    }
+                }
+            } else if request.headers().contains_key(IF_NONE_MATCH)
+                || request.headers().contains_key(IF_MATCH)
+            {
+                (
+                    StatusCode::PRECONDITION_FAILED,
+                    "<Error><Code>PreconditionFailed</Code></Error>",
+                )
+            } else {
+                (
+                    StatusCode::OK,
+                    "<CompleteMultipartUploadResult><ETag>object</ETag></CompleteMultipartUploadResult>",
+                )
+            };
+            Ok(Response::builder()
+                .status(status)
+                .body(body.to_owned().into())
+                .unwrap())
+        }
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn multipart_conditional_preserves_uncertain_completion() {
+        for failure in [
+            CompletionFailure::Timeout,
+            CompletionFailure::ServerError,
+            CompletionFailure::ErrorBody,
+        ] {
+            for mode in [
+                PutMode::Create,
+                PutMode::Update(UpdateVersion {
+                    e_tag: Some("etag".into()),
+                    version: None,
+                }),
+                PutMode::Overwrite,
+            ] {
+                let conditional = !matches!(mode, PutMode::Overwrite);
+                let calls = Arc::new(AtomicUsize::new(0));
+                let store = AmazonS3Builder::new()
+                    .with_bucket_name("test")
+                    .with_region("us-east-1")
+                    .with_skip_signature(true)
+                    .with_http_connector(CompletionService {
+                        calls: Arc::clone(&calls),
+                        failure,
+                    })
+                    .with_retry(crate::RetryConfig {
+                        max_retries: 1,
+                        ..Default::default()
+                    })
+                    .build()
+                    .unwrap();
+                let path = Path::from("object");
+                let id = "upload".into();
+                let parts = vec![PartId {
+                    content_id: "part".into(),
+                }];
+                let result = store
+                    .complete_multipart_opts(&path, &id, parts, mode.into())
+                    .await;
+                if conditional {
+                    assert!(
+                        matches!(&result, Err(Error::Generic { .. })),
+                        "{failure:?}: {result:?}"
+                    );
+                    assert_eq!(calls.load(Ordering::SeqCst), 1, "{failure:?}");
+                } else {
+                    assert!(result.is_ok(), "{failure:?}: {result:?}");
+                    assert_eq!(calls.load(Ordering::SeqCst), 2, "{failure:?}");
+                }
+            }
+        }
     }
 
     #[tokio::test]
@@ -1583,6 +1991,10 @@ mod tests {
         }
         if test_conditional_put {
             put_opts(&integration, true).await;
+            multipart_create(&integration).await;
+            multipart_complete_create(&integration, &integration).await;
+            multipart_update(&integration).await;
+            multipart_complete_update(&integration, &integration).await;
         }
 
         // run integration test with unsigned payload enabled

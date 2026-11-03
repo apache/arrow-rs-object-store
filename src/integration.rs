@@ -585,7 +585,190 @@ pub async fn get_opts(storage: &dyn ObjectStore) {
     }
 }
 
-/// Tests conditional writes
+/// Tests atomic multipart creation and streaming completion.
+pub async fn multipart_create(storage: &dyn ObjectStore) {
+    let path = Path::from("multipart-create");
+    let mut first = storage
+        .put_multipart_opts(&path, PutMode::Create.into())
+        .await
+        .unwrap();
+    let mut second = storage
+        .put_multipart_opts(&path, PutMode::Create.into())
+        .await
+        .unwrap();
+    first.put_part("first".into()).await.unwrap();
+    second.put_part("second".into()).await.unwrap();
+    first.complete().await.unwrap();
+    assert!(matches!(
+        second.complete().await,
+        Err(crate::Error::AlreadyExists { .. })
+    ));
+    second.abort().await.unwrap();
+    assert_eq!(
+        storage.get(&path).await.unwrap().bytes().await.unwrap(),
+        "first"
+    );
+    storage.delete(&path).await.unwrap();
+
+    let mut empty = storage
+        .put_multipart_opts(&path, PutMode::Create.into())
+        .await
+        .unwrap();
+    empty.complete().await.unwrap();
+    assert_eq!(storage.head(&path).await.unwrap().size, 0);
+    storage.delete(&path).await.unwrap();
+
+    let upload = storage
+        .put_multipart_opts(&path, PutMode::Create.into())
+        .await
+        .unwrap();
+    let mut writer = WriteMultipart::new(upload);
+    writer.write(b"streamed");
+    writer.finish().await.unwrap();
+
+    let upload = storage
+        .put_multipart_opts(&path, PutMode::Create.into())
+        .await
+        .unwrap();
+    let mut writer = WriteMultipart::new(upload);
+    writer.write(b"conflict");
+    assert!(matches!(
+        writer.finish().await,
+        Err(Error::AlreadyExists { .. })
+    ));
+    assert_eq!(
+        storage.get(&path).await.unwrap().bytes().await.unwrap(),
+        "streamed"
+    );
+    storage.delete(&path).await.unwrap();
+}
+
+/// Tests conditional completion through the low-level multipart interface.
+pub async fn multipart_complete_create(storage: &dyn ObjectStore, multipart: &dyn MultipartStore) {
+    let path = Path::from("multipart-store-create");
+    let first = multipart.create_multipart(&path).await.unwrap();
+    let second = multipart.create_multipart(&path).await.unwrap();
+    let first_part = multipart
+        .put_part(&path, &first, 0, "first".into())
+        .await
+        .unwrap();
+    let second_part = multipart
+        .put_part(&path, &second, 0, "second".into())
+        .await
+        .unwrap();
+    multipart
+        .complete_multipart_opts(&path, &first, vec![first_part], PutMode::Create.into())
+        .await
+        .unwrap();
+    assert!(matches!(
+        multipart
+            .complete_multipart_opts(&path, &second, vec![second_part], PutMode::Create.into())
+            .await,
+        Err(crate::Error::AlreadyExists { .. })
+    ));
+    multipart.abort_multipart(&path, &second).await.unwrap();
+    assert_eq!(
+        storage.get(&path).await.unwrap().bytes().await.unwrap(),
+        "first"
+    );
+    storage.delete(&path).await.unwrap();
+}
+
+/// Tests that competing uploads cannot update the same object version twice.
+pub async fn multipart_update(storage: &dyn ObjectStore) {
+    let path = Path::from("multipart-update");
+    let original = storage.put(&path, "original".into()).await.unwrap();
+    let mode = PutMode::Update(original.clone().into());
+    let mut first = storage
+        .put_multipart_opts(&path, mode.clone().into())
+        .await
+        .unwrap();
+    let mut second = storage
+        .put_multipart_opts(&path, mode.into())
+        .await
+        .unwrap();
+    first.put_part("first".into()).await.unwrap();
+    second.put_part("second".into()).await.unwrap();
+
+    let updated = first.complete().await.unwrap();
+    assert_ne!(updated.e_tag, original.e_tag);
+    let err = second.complete().await.unwrap_err();
+    assert!(matches!(err, Error::Precondition { .. }), "{err}");
+    second.abort().await.unwrap();
+    assert_eq!(
+        storage.get(&path).await.unwrap().bytes().await.unwrap(),
+        "first"
+    );
+    storage.delete(&path).await.unwrap();
+    let mut missing = storage
+        .put_multipart_opts(&path, PutMode::Update(updated.into()).into())
+        .await
+        .unwrap();
+    missing.put_part("missing".into()).await.unwrap();
+    let err = missing.complete().await.unwrap_err();
+    assert!(matches!(err, Error::Precondition { .. }), "{err}");
+    missing.abort().await.unwrap();
+    assert!(matches!(
+        storage.head(&path).await,
+        Err(Error::NotFound { .. })
+    ));
+}
+
+/// Tests version checks at completion through the ID-based multipart interface.
+pub async fn multipart_complete_update(storage: &dyn ObjectStore, multipart: &dyn MultipartStore) {
+    let path = Path::from("multipart-store-update");
+    let original = storage.put(&path, "original".into()).await.unwrap();
+    let first = multipart.create_multipart(&path).await.unwrap();
+    let second = multipart.create_multipart(&path).await.unwrap();
+    let first_part = multipart
+        .put_part(&path, &first, 0, "first".into())
+        .await
+        .unwrap();
+    let second_part = multipart
+        .put_part(&path, &second, 0, "second".into())
+        .await
+        .unwrap();
+    let mode = PutMode::Update(original.clone().into());
+
+    let updated = multipart
+        .complete_multipart_opts(&path, &first, vec![first_part], mode.clone().into())
+        .await
+        .unwrap();
+    assert_ne!(updated.e_tag, original.e_tag);
+    let err = multipart
+        .complete_multipart_opts(&path, &second, vec![second_part], mode.into())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Precondition { .. }), "{err}");
+    multipart.abort_multipart(&path, &second).await.unwrap();
+    assert_eq!(
+        storage.get(&path).await.unwrap().bytes().await.unwrap(),
+        "first"
+    );
+    storage.delete(&path).await.unwrap();
+    let missing = multipart.create_multipart(&path).await.unwrap();
+    let part = multipart
+        .put_part(&path, &missing, 0, "missing".into())
+        .await
+        .unwrap();
+    let err = multipart
+        .complete_multipart_opts(
+            &path,
+            &missing,
+            vec![part],
+            PutMode::Update(updated.into()).into(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::Precondition { .. }), "{err}");
+    multipart.abort_multipart(&path, &missing).await.unwrap();
+    assert!(matches!(
+        storage.head(&path).await,
+        Err(Error::NotFound { .. })
+    ));
+}
+
+/// Tests conditional writes.
 pub async fn put_opts(storage: &dyn ObjectStore, supports_update: bool) {
     delete_fixtures(storage).await;
     let path = Path::from("put_opts");
@@ -1065,6 +1248,19 @@ pub async fn multipart_with_opts(storage: &dyn ObjectStore, multipart: &dyn Mult
         attributes: attributes.clone(),
         ..Default::default()
     };
+
+    for mode in [
+        PutMode::Create,
+        PutMode::Update(UpdateVersion {
+            e_tag: Some("etag".into()),
+            version: None,
+        }),
+    ] {
+        assert!(matches!(
+            multipart.create_multipart_opts(&path, mode.into()).await,
+            Err(Error::NotSupported { .. })
+        ));
+    }
 
     let id = multipart.create_multipart_opts(&path, opts).await.unwrap();
 

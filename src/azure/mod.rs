@@ -107,6 +107,7 @@ impl ObjectStore for MicrosoftAzure {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
+        opts.require_overwrite()?;
         let retry_policy = opts.retry_policy();
         Ok(Box::new(AzureMultiPartUpload {
             part_idx: 0,
@@ -390,7 +391,9 @@ impl MultipartStore for MicrosoftAzure {
         path: &Path,
         opts: PutMultipartOptions,
     ) -> Result<MultipartId> {
+        opts.require_overwrite()?;
         let PutMultipartOptions {
+            mode: _,
             tags,
             attributes,
             extensions: _,
@@ -452,10 +455,39 @@ mod tests {
     use crate::integration::*;
     use crate::tests::*;
     use crate::{Attribute, Attributes};
+    #[cfg(feature = "reqwest")]
+    use crate::{PutMode, UpdateVersion};
     use base64::Engine;
     use base64::prelude::BASE64_STANDARD;
     use bytes::Bytes;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn multipart_rejects_conditional_modes_before_upload() {
+        let store = MicrosoftAzureBuilder::new()
+            .with_container_name("test")
+            .with_use_emulator(true)
+            .build()
+            .unwrap();
+        let path = Path::from("object");
+        for mode in [
+            PutMode::Create,
+            PutMode::Update(UpdateVersion {
+                e_tag: Some("etag".into()),
+                version: None,
+            }),
+        ] {
+            assert!(matches!(
+                store.put_multipart_opts(&path, mode.clone().into()).await,
+                Err(Error::NotSupported { .. })
+            ));
+            assert!(matches!(
+                store.create_multipart_opts(&path, mode.into()).await,
+                Err(Error::NotSupported { .. })
+            ));
+        }
+    }
 
     #[cfg(feature = "reqwest")]
     #[tokio::test]

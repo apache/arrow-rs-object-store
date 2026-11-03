@@ -256,6 +256,8 @@ mod tests {
         let memory = InMemory::new();
         let integration = LimitStore::new(memory, max_requests);
 
+        multipart_create(&integration).await;
+
         put_get_delete_list(&integration).await;
         get_opts(&integration).await;
         list_uses_directories_correctly(&integration).await;

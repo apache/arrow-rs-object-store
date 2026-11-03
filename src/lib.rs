@@ -943,6 +943,21 @@ pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
     /// automatically picks between a single and multipart upload based on the
     /// amount of data written.
     ///
+    /// The upload mode is selected through [`PutMultipartOptions::mode`] and cannot be changed
+    /// after the upload starts. Unsupported modes return an error before creating an upload.
+    ///
+    /// ```
+    /// # use object_store::{memory::InMemory, ObjectStore, PutMode};
+    /// # fn main() -> object_store::Result<()> { futures_executor::block_on(async {
+    /// let store = InMemory::new();
+    /// let mut upload = store
+    ///     .put_multipart_opts(&"new-object".into(), PutMode::Create.into())
+    ///     .await?;
+    /// upload.put_part("data".into()).await?;
+    /// upload.complete().await?;
+    /// # Ok(()) }) }
+    /// ```
+    ///
     /// For more advanced multipart uploads see [`MultipartStore`](multipart::MultipartStore)
     ///
     /// [`BufWriter`]: buffered::BufWriter
@@ -2014,6 +2029,18 @@ pub type PutMultipartOpts = PutMultipartOptions;
 /// Options for [`ObjectStore::put_multipart_opts`]
 #[derive(Debug, Clone, Default)]
 pub struct PutMultipartOptions {
+    /// Configure how the completed object is published. Defaults to [`PutMode::Overwrite`].
+    ///
+    /// With [`PutMode::Create`], completion atomically checks that the destination does not
+    /// exist and returns [`Error::AlreadyExists`] if it does. With [`PutMode::Update`],
+    /// completion atomically checks the supplied version, returning [`Error::Precondition`]
+    /// if it does not match. Implementations reject unsupported modes before starting an
+    /// upload; the condition is checked at completion.
+    ///
+    /// [`MultipartStore::create_multipart_opts`](crate::multipart::MultipartStore::create_multipart_opts)
+    /// requires [`PutMode::Overwrite`]. Its callers select the completion mode separately
+    /// through [`CompleteMultipartOptions`].
+    pub mode: PutMode,
     /// Provide a [`TagSet`] for this object
     ///
     /// Implementations that don't support object tagging should ignore this
@@ -2035,20 +2062,42 @@ pub struct PutMultipartOptions {
 impl PartialEq<Self> for PutMultipartOptions {
     fn eq(&self, other: &Self) -> bool {
         let Self {
+            mode,
             tags,
             attributes,
             extensions: _,
         } = self;
         let Self {
+            mode: other_mode,
             tags: other_tags,
             attributes: other_attributes,
             extensions: _,
         } = other;
-        (tags == other_tags) && (attributes == other_attributes)
+        (mode == other_mode) && (tags == other_tags) && (attributes == other_attributes)
     }
 }
 
 impl Eq for PutMultipartOptions {}
+
+impl PutMultipartOptions {
+    pub(crate) fn require_overwrite(&self) -> Result<()> {
+        match self.mode {
+            PutMode::Overwrite => Ok(()),
+            _ => Err(Error::NotSupported {
+                source: "this operation does not support a conditional multipart upload".into(),
+            }),
+        }
+    }
+}
+
+impl From<PutMode> for PutMultipartOptions {
+    fn from(mode: PutMode) -> Self {
+        Self {
+            mode,
+            ..Default::default()
+        }
+    }
+}
 
 impl From<TagSet> for PutMultipartOptions {
     fn from(tags: TagSet) -> Self {
@@ -2063,6 +2112,53 @@ impl From<Attributes> for PutMultipartOptions {
     fn from(attributes: Attributes) -> Self {
         Self {
             attributes,
+            ..Default::default()
+        }
+    }
+}
+
+/// Options for [`MultipartStore::complete_multipart_opts`]
+///
+/// [`MultipartStore::complete_multipart_opts`]: crate::multipart::MultipartStore::complete_multipart_opts
+#[derive(Debug, Clone, Default)]
+pub struct CompleteMultipartOptions {
+    /// Configure the [`PutMode`] for this completion
+    ///
+    /// [`PutMode::Create`] fails with [`Error::AlreadyExists`] if an object already
+    /// exists at the path. [`PutMode::Update`] fails with [`Error::Precondition`]
+    /// if the current version does not match the supplied version.
+    pub mode: PutMode,
+    /// Implementation-specific extensions. Intended for use by [`MultipartStore`] implementations
+    /// that need to pass context-specific information (like tracing spans) via trait methods.
+    ///
+    /// These extensions are ignored entirely by backends offered through this crate.
+    ///
+    /// They are also excluded from [`PartialEq`] and [`Eq`].
+    ///
+    /// [`MultipartStore`]: crate::multipart::MultipartStore
+    pub extensions: Extensions,
+}
+
+impl PartialEq<Self> for CompleteMultipartOptions {
+    fn eq(&self, other: &Self) -> bool {
+        let Self {
+            mode,
+            extensions: _,
+        } = self;
+        let Self {
+            mode: other_mode,
+            extensions: _,
+        } = other;
+        mode == other_mode
+    }
+}
+
+impl Eq for CompleteMultipartOptions {}
+
+impl From<PutMode> for CompleteMultipartOptions {
+    fn from(mode: PutMode) -> Self {
+        Self {
+            mode,
             ..Default::default()
         }
     }

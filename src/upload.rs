@@ -20,6 +20,8 @@ use std::task::{Context, Poll};
 
 #[cfg(feature = "tokio")]
 use crate::PutPayloadMut;
+#[cfg(doc)]
+use crate::{Error, PutMode};
 use crate::{PutPayload, PutResult, Result};
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
@@ -68,12 +70,18 @@ pub trait MultipartUpload: Send + std::fmt::Debug {
     /// [R2]: https://developers.cloudflare.com/r2/objects/multipart-objects/#limitations
     fn put_part(&mut self, data: PutPayload) -> UploadPart;
 
-    /// Complete the multipart upload
+    /// Complete the multipart upload using the mode selected in [`crate::PutMultipartOptions`].
+    ///
+    /// With [`PutMode::Create`], returns [`Error::AlreadyExists`] if the destination
+    /// exists. With [`PutMode::Update`], returns [`Error::Precondition`] if the current
+    /// version does not match. A failed upload can still be cleaned up with [`Self::abort`].
+    /// An I/O error may leave the publication outcome uncertain; aborting does not
+    /// remove an object that was already published. Verify the destination's contents
+    /// before starting another upload, and do not assume completion can be retried.
     ///
     /// It is implementation defined behaviour if this method is called before polling
-    /// all [`UploadPart`] returned by [`MultipartUpload::put_part`] to completion. Additionally,
-    /// it is implementation defined behaviour to call [`MultipartUpload::complete`]
-    /// on an already completed or aborted [`MultipartUpload`].
+    /// all [`UploadPart`] returned by [`Self::put_part`] to completion, or on an
+    /// already completed or aborted upload.
     async fn complete(&mut self) -> Result<PutResult>;
 
     /// Abort the multipart upload

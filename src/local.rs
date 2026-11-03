@@ -23,6 +23,7 @@ use std::ops::Range;
 use std::os::unix::fs::FileExt;
 #[cfg(target_family = "windows")]
 use std::os::windows::fs::FileExt;
+use std::path::Path as StdPath;
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::{collections::BTreeSet, io};
@@ -459,6 +460,7 @@ impl ObjectStore for LocalFileSystem {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
+        let mode = LocalUploadMode::try_from(opts.mode)?;
         if !opts.attributes.is_empty() {
             return Err(crate::Error::NotImplemented {
                 operation: "`put_multipart_opts` with `opts.attributes` specified".into(),
@@ -468,7 +470,9 @@ impl ObjectStore for LocalFileSystem {
 
         let dest = self.path_to_filesystem(location)?;
         let (file, src) = new_staged_upload(&dest, self.fsync)?;
-        Ok(Box::new(LocalUpload::new(src, dest, file, self.fsync)))
+        Ok(Box::new(LocalUpload::new(
+            src, dest, file, self.fsync, mode,
+        )))
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
@@ -949,8 +953,8 @@ fn create_parent_dirs(path: &std::path::Path, source: io::Error, fsync: bool) ->
 /// Renames `from` to `to`, then — when `fsync` is enabled — fsyncs the destination's parent
 /// directory (and the source's too, if it differs) so the moved directory entries are durable.
 ///
-/// The directory fsync is bundled in deliberately: every durable rename goes through here, so the
-/// post-rename fsync can never be forgotten at an individual call site.
+/// Callers that own a reusable staging name must disarm its cleanup immediately after rename,
+/// before the fallible directory sync, as multipart publication does.
 fn rename(from: &std::path::Path, to: &std::path::Path, fsync: bool) -> io::Result<()> {
     std::fs::rename(from, to)?;
     if fsync {
@@ -1085,12 +1089,32 @@ fn staged_upload_path(dest: &std::path::Path, suffix: &str) -> PathBuf {
     staging_path.into()
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+enum LocalUploadMode {
+    #[default]
+    Overwrite,
+    Create,
+}
+
+impl TryFrom<PutMode> for LocalUploadMode {
+    type Error = crate::Error;
+
+    fn try_from(mode: PutMode) -> Result<Self> {
+        match mode {
+            PutMode::Overwrite => Ok(Self::Overwrite),
+            PutMode::Create => Ok(Self::Create),
+            PutMode::Update(_) => Err(crate::Error::NotSupported {
+                source: "conditional multipart updates are not supported by LocalFileSystem".into(),
+            }),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct LocalUpload {
+    mode: LocalUploadMode,
     /// The upload state
     state: Arc<UploadState>,
-    /// The location of the temporary file
-    src: Option<PathBuf>,
     /// The next offset to write into the file
     offset: u64,
     /// Whether to fsync the file and its parent directory on completion
@@ -1100,20 +1124,117 @@ struct LocalUpload {
 #[derive(Debug)]
 struct UploadState {
     dest: PathBuf,
-    file: Mutex<Option<File>>,
+    file: Mutex<Option<StagedUpload>>,
+}
+
+#[derive(Debug)]
+struct StagedUpload {
+    file: Option<File>,
+    path: Option<PathBuf>,
+}
+
+impl StagedUpload {
+    fn abort(&mut self) -> Result<()> {
+        // Close before unlinking, including on platforms that cannot unlink open files.
+        drop(self.file.take());
+        if let Some(path) = &self.path {
+            std::fs::remove_file(path).map_err(|source| Error::UnableToDeleteFile {
+                source,
+                path: path.clone(),
+            })?;
+            self.path = None;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for StagedUpload {
+    fn drop(&mut self) {
+        let _ = self.abort();
+    }
+}
+
+impl UploadState {
+    fn abort(&self) -> Result<()> {
+        if let Some(mut staged) = self.file.lock().take() {
+            staged.abort()?;
+        }
+        Ok(())
+    }
 }
 
 impl LocalUpload {
-    pub(crate) fn new(src: PathBuf, dest: PathBuf, file: File, fsync: bool) -> Self {
+    pub(crate) fn new(
+        src: PathBuf,
+        dest: PathBuf,
+        file: File,
+        fsync: bool,
+        mode: LocalUploadMode,
+    ) -> Self {
         Self {
+            mode,
             state: Arc::new(UploadState {
                 dest,
-                file: Mutex::new(Some(file)),
+                file: Mutex::new(Some(StagedUpload {
+                    file: Some(file),
+                    path: Some(src),
+                })),
             }),
-            src: Some(src),
             offset: 0,
             fsync,
         }
+    }
+
+    async fn publish(
+        &mut self,
+        sync_parent: impl FnOnce(&StdPath) -> io::Result<()> + Send + 'static,
+    ) -> Result<PutResult> {
+        let s = Arc::clone(&self.state);
+        let fsync = self.fsync;
+        let mode = self.mode;
+        maybe_spawn_blocking(move || {
+            // The blocking operation owns cleanup even if its awaiting future is cancelled.
+            let mut guard = s.file.lock();
+            let mut staged = guard.take().ok_or(Error::Aborted)?;
+            let src = staged.path.as_ref().ok_or(Error::Aborted)?;
+            let metadata = staged
+                .file
+                .as_ref()
+                .ok_or(Error::Aborted)?
+                .metadata()
+                .map_err(|e| Error::Metadata {
+                    source: e.into(),
+                    path: src.to_string_lossy().to_string(),
+                })?;
+            sync_and_close(staged.file.take().ok_or(Error::Aborted)?, src, fsync)?;
+            match mode {
+                LocalUploadMode::Overwrite => {
+                    std::fs::rename(src, &s.dest)
+                        .map_err(|source| Error::UnableToRenameFile { source })?;
+                    // The staging name may be reused as soon as rename succeeds.
+                    staged.path = None;
+                }
+                LocalUploadMode::Create => {
+                    std::fs::hard_link(src, &s.dest).map_err(|source| match source.kind() {
+                        ErrorKind::AlreadyExists => Error::AlreadyExists {
+                            path: s.dest.to_string_lossy().into_owned(),
+                            source,
+                        },
+                        _ => Error::UnableToRenameFile { source },
+                    })?;
+                }
+            }
+            // Staging and destination are in the same directory.
+            if fsync {
+                sync_parent(&s.dest).map_err(|source| Error::UnableToRenameFile { source })?;
+            }
+            Ok(PutResult {
+                e_tag: Some(get_etag(&metadata)),
+                version: None,
+                extensions: Default::default(),
+            })
+        })
+        .await
     }
 }
 
@@ -1126,7 +1247,10 @@ impl MultipartUpload for LocalUpload {
         let s = Arc::clone(&self.state);
         maybe_spawn_blocking(move || {
             let mut guard = s.file.lock();
-            let file = guard.as_mut().ok_or(Error::Aborted)?;
+            let file = guard
+                .as_mut()
+                .and_then(|staged| staged.file.as_mut())
+                .ok_or(Error::Aborted)?;
             file.seek(SeekFrom::Start(offset)).map_err(|source| {
                 let path = s.dest.clone();
                 Error::Seek { source, path }
@@ -1142,52 +1266,31 @@ impl MultipartUpload for LocalUpload {
     }
 
     async fn complete(&mut self) -> Result<PutResult> {
-        let src = self.src.take().ok_or(Error::Aborted)?;
-        let s = Arc::clone(&self.state);
-        let fsync = self.fsync;
-        maybe_spawn_blocking(move || {
-            // Ensure no inflight writes
-            let mut guard = s.file.lock();
-            let file = guard.take().ok_or(Error::Aborted)?;
-
-            let metadata = file.metadata().map_err(|e| Error::Metadata {
-                source: e.into(),
-                path: src.to_string_lossy().to_string(),
-            })?;
-
-            // Durably publish the freshly-written staging file: flush its contents, close it, then
-            // rename it into place and fsync the destination's parent directory (the fsync calls
-            // are bundled into the helper and only run when fsync is enabled).
-            finish_staged_rename(file, &src, &s.dest, fsync)?;
-
-            Ok(PutResult {
-                e_tag: Some(get_etag(&metadata)),
-                version: None,
-                extensions: Default::default(),
-            })
-        })
-        .await
+        self.publish(fsync_parent_dir).await
     }
 
     async fn abort(&mut self) -> Result<()> {
-        let src = self.src.take().ok_or(Error::Aborted)?;
-        maybe_spawn_blocking(move || {
-            std::fs::remove_file(&src)
-                .map_err(|source| Error::UnableToDeleteFile { source, path: src })?;
-            Ok(())
-        })
-        .await
+        let state = Arc::clone(&self.state);
+        maybe_spawn_blocking(move || state.abort()).await
     }
 }
 
 impl Drop for LocalUpload {
     fn drop(&mut self) {
-        if let Some(src) = self.src.take() {
-            // Try to clean up intermediate file ignoring any error
-            match tokio::runtime::Handle::try_current() {
-                Ok(r) => drop(r.spawn_blocking(move || std::fs::remove_file(src))),
-                Err(_) => drop(std::fs::remove_file(src)),
-            };
+        if self
+            .state
+            .file
+            .try_lock()
+            .is_some_and(|file| file.is_none())
+        {
+            return;
+        }
+        let state = Arc::clone(&self.state);
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => drop(runtime.spawn_blocking(move || state.abort())),
+            Err(_) => {
+                let _ = state.abort();
+            }
         }
     }
 }
@@ -1542,6 +1645,8 @@ mod tests {
         let root = TempDir::new().unwrap();
         let integration = LocalFileSystem::new_with_prefix(root.path()).unwrap();
 
+        multipart_create(&integration).await;
+
         put_get_delete_list(&integration).await;
         list_with_offset_exclusivity(&integration).await;
         get_opts(&integration).await;
@@ -1564,6 +1669,8 @@ mod tests {
         let integration = LocalFileSystem::new_with_prefix(root.path())
             .unwrap()
             .with_fsync(true);
+
+        multipart_create(&integration).await;
 
         put_get_delete_list(&integration).await;
         list_with_offset_exclusivity(&integration).await;
@@ -2279,11 +2386,116 @@ mod tests {
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(test)]
 mod not_wasm_tests {
+    use std::io;
+    use std::sync::{Arc, mpsc};
     use std::time::Duration;
     use tempfile::TempDir;
+    use tokio::sync::oneshot;
 
-    use crate::local::LocalFileSystem;
-    use crate::{ObjectStoreExt, Path, PutPayload};
+    use crate::local::{LocalFileSystem, LocalUpload, LocalUploadMode, new_staged_upload};
+    use crate::{Error, MultipartUpload, ObjectStore, ObjectStoreExt, Path, PutMode, PutPayload};
+
+    #[tokio::test]
+    async fn test_abort_after_failed_create_completion() {
+        let root = TempDir::new().unwrap();
+        let storage = LocalFileSystem::new_with_prefix(root.path()).unwrap();
+        let path = Path::from("object");
+        storage.put(&path, "first".into()).await.unwrap();
+        let mut upload = storage
+            .put_multipart_opts(&path, PutMode::Create.into())
+            .await
+            .unwrap();
+        upload.put_part("second".into()).await.unwrap();
+
+        assert!(matches!(
+            upload.complete().await,
+            Err(Error::AlreadyExists { .. })
+        ));
+        upload.abort().await.unwrap();
+
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);
+        assert_eq!(
+            storage.get(&path).await.unwrap().bytes().await.unwrap(),
+            "first"
+        );
+    }
+
+    #[test]
+    fn test_cleanup_after_directory_sync_failure_preserves_reused_path() {
+        futures_executor::block_on(async {
+            for mode in [LocalUploadMode::Overwrite, LocalUploadMode::Create] {
+                let root = TempDir::new().unwrap();
+                let dest = root.path().join("object");
+                let (file, src) = new_staged_upload(&dest, false).unwrap();
+                let mut upload = LocalUpload::new(src.clone(), dest.clone(), file, true, mode);
+                upload.put_part("first".into()).await.unwrap();
+                assert!(
+                    upload
+                        .publish(|_| Err(io::Error::other("directory sync failed")))
+                        .await
+                        .is_err()
+                );
+                assert_eq!(std::fs::read(&dest).unwrap(), b"first");
+
+                let (file, reused) = new_staged_upload(&dest, false).unwrap();
+                assert_eq!(reused, src);
+                let mut next = LocalUpload::new(
+                    reused,
+                    dest.clone(),
+                    file,
+                    false,
+                    LocalUploadMode::Overwrite,
+                );
+                next.put_part("second".into()).await.unwrap();
+                // Outside Tokio, Drop completes cleanup synchronously.
+                drop(upload);
+                next.complete().await.unwrap();
+                assert_eq!(std::fs::read(&dest).unwrap(), b"second");
+            }
+        });
+    }
+
+    #[tokio::test]
+    async fn test_cancelled_completion_cleanup_preserves_reused_path() {
+        for mode in [LocalUploadMode::Overwrite, LocalUploadMode::Create] {
+            let root = TempDir::new().unwrap();
+            let dest = root.path().join("object");
+            let (file, src) = new_staged_upload(&dest, false).unwrap();
+            let mut upload = LocalUpload::new(src.clone(), dest.clone(), file, true, mode);
+            upload.put_part("first".into()).await.unwrap();
+            let (published, observed) = oneshot::channel();
+            let (release, wait) = mpsc::channel();
+            let mut completion = Box::pin(upload.publish(move |_| {
+                published.send(()).unwrap();
+                wait.recv_timeout(Duration::from_secs(5)).unwrap();
+                Ok(())
+            }));
+            tokio::select! {
+                result = &mut completion => panic!("completion finished before release: {result:?}"),
+                result = observed => result.unwrap(),
+            }
+            drop(completion);
+            release.send(()).unwrap();
+            // Wait for the blocking operation to finish without resuming its cancelled future.
+            let state = Arc::clone(&upload.state);
+            tokio::task::spawn_blocking(move || drop(state.file.lock()))
+                .await
+                .unwrap();
+            let (file, reused) = new_staged_upload(&dest, false).unwrap();
+            assert_eq!(reused, src);
+            let mut next = LocalUpload::new(
+                reused,
+                dest.clone(),
+                file,
+                false,
+                LocalUploadMode::Overwrite,
+            );
+            next.put_part("second".into()).await.unwrap();
+            upload.abort().await.unwrap();
+            next.complete().await.unwrap();
+            assert_eq!(std::fs::read(&dest).unwrap(), b"second", "{mode:?}");
+        }
+    }
 
     #[tokio::test]
     async fn test_cleanup_intermediate_files() {

@@ -21,7 +21,7 @@ use std::ops::Range;
 use std::{convert::TryInto, sync::Arc};
 
 use crate::multipart::{MultipartStore, PartId};
-use crate::{CopyOptions, GetOptions, RenameOptions, UploadPart};
+use crate::{CompleteMultipartOptions, CopyOptions, GetOptions, RenameOptions, UploadPart};
 use crate::{
     GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
     PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, path::Path,
@@ -338,6 +338,18 @@ impl<T: MultipartStore> MultipartStore for ThrottledStore<T> {
         self.inner.complete_multipart(path, id, parts).await
     }
 
+    async fn complete_multipart_opts(
+        &self,
+        path: &Path,
+        id: &MultipartId,
+        parts: Vec<PartId>,
+        opts: CompleteMultipartOptions,
+    ) -> Result<PutResult> {
+        self.inner
+            .complete_multipart_opts(path, id, parts, opts)
+            .await
+    }
+
     async fn abort_multipart(&self, path: &Path, id: &MultipartId) -> Result<()> {
         self.inner.abort_multipart(path, id).await
     }
@@ -400,6 +412,9 @@ mod tests {
     async fn throttle_test() {
         let inner = InMemory::new();
         let store = ThrottledStore::new(inner, ThrottleConfig::default());
+
+        multipart_create(&store).await;
+        multipart_complete_create(&store, &store).await;
 
         put_get_delete_list(&store).await;
         list_uses_directories_correctly(&store).await;
