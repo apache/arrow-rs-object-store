@@ -28,6 +28,7 @@
 //! [`MultipartStore::complete_multipart_opts`] requires the endpoint to enforce
 //! `If-None-Match: *` on `CompleteMultipartUpload`. [`PutMode::Update`] requires an
 //! ETag and sends `If-Match` instead; a mismatched ETag returns [`Error::Precondition`].
+//! Only the ETag is compared; the S3 version ID is not checked.
 //! S3-compatible endpoints may support this condition on `PutObject` but not on multipart
 //! completion; enable conditional writes only when the endpoint supports both operations.
 //!
