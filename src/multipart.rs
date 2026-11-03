@@ -60,6 +60,8 @@ pub trait MultipartStore: Send + Sync + 'static {
     ///
     /// This allows callers using the low-level multipart API to provide object attributes,
     /// tags, or implementation-specific extensions when initiating the upload.
+    /// [`PutMultipartOptions::mode`] must be [`PutMode::Overwrite`]; conditional publication
+    /// is selected separately through [`Self::complete_multipart_opts`].
     ///
     /// See [`AmazonS3::create_multipart`] for a full example of this API.
     ///
@@ -69,7 +71,9 @@ pub trait MultipartStore: Send + Sync + 'static {
         path: &Path,
         opts: PutMultipartOptions,
     ) -> Result<MultipartId> {
+        opts.require_overwrite()?;
         let PutMultipartOptions {
+            mode: _,
             tags,
             attributes,
             extensions: _,

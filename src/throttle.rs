@@ -24,7 +24,7 @@ use crate::multipart::{MultipartStore, PartId};
 use crate::{CompleteMultipartOptions, CopyOptions, GetOptions, RenameOptions, UploadPart};
 use crate::{
     GetResult, GetResultPayload, ListResult, MultipartId, MultipartUpload, ObjectMeta, ObjectStore,
-    PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, path::Path,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, Result, path::Path,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -374,10 +374,6 @@ impl MultipartUpload for ThrottledUpload {
 
     async fn complete(&mut self) -> Result<PutResult> {
         self.upload.complete().await
-    }
-
-    fn set_put_mode(&mut self, mode: PutMode) -> Result<()> {
-        self.upload.set_put_mode(mode)
     }
 
     async fn abort(&mut self) -> Result<()> {

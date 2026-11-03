@@ -24,7 +24,7 @@
 //!
 //! Multipart uploads can be initiated with the [`ObjectStore::put_multipart_opts`] method.
 //!
-//! Selecting [`PutMode::Create`] through [`MultipartUpload::set_put_mode`], or using
+//! Selecting [`PutMode::Create`] through [`PutMultipartOptions`], or using
 //! [`MultipartStore::complete_multipart_opts`], requires the endpoint to enforce
 //! `If-None-Match: *` on `CompleteMultipartUpload`.
 //! S3-compatible endpoints may support this condition on `PutObject` but not on multipart
@@ -317,11 +317,15 @@ impl ObjectStore for AmazonS3 {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
+        let mode = MultipartUploadMode::try_from(opts.mode.clone())?;
+        if matches!(mode, MultipartUploadMode::Create) {
+            self.client.config.ensure_conditional_put_enabled()?;
+        }
         let retry_policy = opts.retry_policy();
         let upload_id = self.client.create_multipart(location, opts).await?;
 
         Ok(Box::new(S3MultiPartUpload {
-            mode: MultipartUploadMode::Overwrite,
+            mode,
             part_idx: 0,
             state: Arc::new(UploadState {
                 client: Arc::clone(&self.client),
@@ -544,15 +548,6 @@ impl MultipartUpload for S3MultiPartUpload {
         })
     }
 
-    fn set_put_mode(&mut self, mode: PutMode) -> Result<()> {
-        let mode = MultipartUploadMode::try_from(mode)?;
-        if matches!(mode, MultipartUploadMode::Create) {
-            self.state.client.config.ensure_conditional_put_enabled()?;
-        }
-        self.mode = mode;
-        Ok(())
-    }
-
     async fn complete(&mut self) -> Result<PutResult> {
         let parts = self.state.parts.finish(self.part_idx)?;
         self.state
@@ -703,6 +698,7 @@ impl MultipartStore for AmazonS3 {
         path: &Path,
         opts: PutMultipartOptions,
     ) -> Result<MultipartId> {
+        opts.require_overwrite()?;
         self.client.create_multipart(path, opts).await
     }
 
@@ -952,9 +948,11 @@ mod tests {
                     _ => "<Error><Code>PreconditionFailed</Code></Error>",
                 }.to_owned()).unwrap()
             });
-            let mut upload = store.put_multipart(&path).await.unwrap();
+            let mut upload = store
+                .put_multipart_opts(&path, PutMode::Create.into())
+                .await
+                .unwrap();
             upload.put_part("payload".into()).await.unwrap();
-            upload.set_put_mode(PutMode::Create).unwrap();
             let result = upload.complete().await;
             if status.is_success() {
                 assert_eq!(result.unwrap().e_tag.as_deref(), Some("object"));
@@ -981,17 +979,20 @@ mod tests {
             )
             .await
             .unwrap();
-        mock.push(Response::new("<InitiateMultipartUploadResult><UploadId>upload</UploadId></InitiateMultipartUploadResult>".to_owned()));
-        let mut upload = store.put_multipart(&path).await.unwrap();
+        let update = PutMode::Update(UpdateVersion {
+            e_tag: Some("etag".into()),
+            version: None,
+        });
         assert!(matches!(
-            upload.set_put_mode(PutMode::Update(UpdateVersion {
-                e_tag: None,
-                version: None,
-            })),
+            store.put_multipart_opts(&path, update.clone().into()).await,
             Err(Error::NotSupported { .. })
         ));
-        mock.push(Response::new(String::new()));
-        upload.abort().await.unwrap();
+        for mode in [PutMode::Create, update] {
+            assert!(matches!(
+                store.create_multipart_opts(&path, mode.into()).await,
+                Err(Error::NotSupported { .. })
+            ));
+        }
         mock.shutdown().await;
     }
 
@@ -1012,11 +1013,11 @@ mod tests {
             })
             .build()
             .unwrap();
-        mock.push(Response::new("<InitiateMultipartUploadResult><UploadId>upload</UploadId></InitiateMultipartUploadResult>".to_owned()));
         let path = Path::from("object");
-        let mut upload = store.put_multipart(&path).await.unwrap();
         assert!(matches!(
-            upload.set_put_mode(PutMode::Create),
+            store
+                .put_multipart_opts(&path, PutMode::Create.into())
+                .await,
             Err(Error::NotSupported { .. })
         ));
         assert!(matches!(
@@ -1025,6 +1026,8 @@ mod tests {
                 .await,
             Err(Error::NotSupported { .. })
         ));
+        mock.push(Response::new("<InitiateMultipartUploadResult><UploadId>upload</UploadId></InitiateMultipartUploadResult>".to_owned()));
+        let mut upload = store.put_multipart(&path).await.unwrap();
         mock.push(
             Response::builder()
                 .header(ETAG, "part")

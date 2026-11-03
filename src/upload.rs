@@ -98,36 +98,7 @@ pub trait MultipartUpload: Send + std::fmt::Debug {
     /// [R2]: https://developers.cloudflare.com/r2/objects/multipart-objects/#limitations
     fn put_part(&mut self, data: PutPayload) -> UploadPart;
 
-    /// Select the mode used by [`Self::complete`].
-    ///
-    /// Uploads default to [`PutMode::Overwrite`]. The mode can be changed before
-    /// completion, including after uploading parts. An error leaves the previous
-    /// mode unchanged; callers must handle it before completing the upload.
-    ///
-    /// [`PutMode::Create`] requires an atomic existence check and publication.
-    /// Unsupported modes return [`Error::NotSupported`] instead of silently
-    /// selecting overwrite. The default implementation accepts only overwrite.
-    ///
-    /// ```
-    /// # use object_store::{memory::InMemory, ObjectStoreExt, PutMode};
-    /// # fn main() -> object_store::Result<()> { futures_executor::block_on(async {
-    /// let store = InMemory::new();
-    /// let mut upload = store.put_multipart(&"new-object".into()).await?;
-    /// upload.put_part("data".into()).await?;
-    /// upload.set_put_mode(PutMode::Create)?;
-    /// upload.complete().await?;
-    /// # Ok(()) }) }
-    /// ```
-    fn set_put_mode(&mut self, mode: PutMode) -> Result<()> {
-        match mode {
-            PutMode::Overwrite => Ok(()),
-            _ => Err(Error::NotSupported {
-                source: "conditional multipart completion is not supported".into(),
-            }),
-        }
-    }
-
-    /// Complete the multipart upload using the selected [`Self::set_put_mode`].
+    /// Complete the multipart upload using the mode selected in [`crate::PutMultipartOptions`].
     ///
     /// With [`PutMode::Create`], returns [`Error::AlreadyExists`] if the destination
     /// exists. A failed upload can still be cleaned up with [`Self::abort`].
@@ -166,10 +137,6 @@ impl<W: MultipartUpload + ?Sized> MultipartUpload for Box<W> {
 
     async fn complete(&mut self) -> Result<PutResult> {
         (**self).complete().await
-    }
-
-    fn set_put_mode(&mut self, mode: PutMode) -> Result<()> {
-        (**self).set_put_mode(mode)
     }
 
     async fn abort(&mut self) -> Result<()> {
@@ -213,13 +180,6 @@ impl WriteMultipart {
             buffer: PutPayloadMut::new(),
             tasks: Default::default(),
         }
-    }
-
-    /// Select the mode used by [`Self::finish`].
-    ///
-    /// See [`MultipartUpload::set_put_mode`] for supported modes and error handling.
-    pub fn set_put_mode(&mut self, mode: PutMode) -> Result<()> {
-        self.upload.set_put_mode(mode)
     }
 
     /// Polls for there to be less than `max_concurrency` [`UploadPart`] in progress
@@ -359,16 +319,6 @@ mod tests {
     #[derive(Debug, Default)]
     struct InstrumentedUpload {
         chunks: Arc<Mutex<Vec<PutPayload>>>,
-    }
-
-    #[test]
-    fn unsupported_create_does_not_overwrite() {
-        let mut upload = InstrumentedUpload::default();
-        upload.set_put_mode(PutMode::Overwrite).unwrap();
-        assert!(matches!(
-            upload.set_put_mode(PutMode::Create),
-            Err(Error::NotSupported { .. })
-        ));
     }
 
     #[async_trait]

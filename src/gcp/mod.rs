@@ -179,6 +179,7 @@ impl ObjectStore for GoogleCloudStorage {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
+        opts.require_overwrite()?;
         let retry_policy = opts.retry_policy();
         let upload_id = self.client.multipart_initiate(location, opts).await?;
 
@@ -307,6 +308,7 @@ impl MultipartStore for GoogleCloudStorage {
         path: &Path,
         opts: PutMultipartOptions,
     ) -> Result<MultipartId> {
+        opts.require_overwrite()?;
         self.client.multipart_initiate(path, opts).await
     }
 
@@ -415,10 +417,39 @@ mod test {
     use crate::ObjectStoreExt;
     use crate::integration::*;
     use crate::tests::*;
+    #[cfg(feature = "reqwest")]
+    use crate::{Error, PutMode, UpdateVersion};
 
     use super::*;
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn multipart_rejects_conditional_modes_before_upload() {
+        let store = GoogleCloudStorageBuilder::new()
+            .with_bucket_name("test")
+            .with_skip_signature(true)
+            .build()
+            .unwrap();
+        let path = Path::from("object");
+        for mode in [
+            PutMode::Create,
+            PutMode::Update(UpdateVersion {
+                e_tag: Some("etag".into()),
+                version: None,
+            }),
+        ] {
+            assert!(matches!(
+                store.put_multipart_opts(&path, mode.clone().into()).await,
+                Err(Error::NotSupported { .. })
+            ));
+            assert!(matches!(
+                store.create_multipart_opts(&path, mode.into()).await,
+                Err(Error::NotSupported { .. })
+            ));
+        }
+    }
 
     #[tokio::test]
     async fn gcs_test() {

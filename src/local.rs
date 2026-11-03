@@ -461,6 +461,7 @@ impl ObjectStore for LocalFileSystem {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
+        let mode = MultipartUploadMode::try_from(opts.mode)?;
         if !opts.attributes.is_empty() {
             return Err(crate::Error::NotImplemented {
                 operation: "`put_multipart_opts` with `opts.attributes` specified".into(),
@@ -470,7 +471,9 @@ impl ObjectStore for LocalFileSystem {
 
         let dest = self.path_to_filesystem(location)?;
         let (file, src) = new_staged_upload(&dest, self.fsync)?;
-        Ok(Box::new(LocalUpload::new(src, dest, file, self.fsync)))
+        Ok(Box::new(LocalUpload::new(
+            src, dest, file, self.fsync, mode,
+        )))
     }
 
     async fn get_opts(&self, location: &Path, options: GetOptions) -> Result<GetResult> {
@@ -1141,9 +1144,15 @@ impl UploadState {
 }
 
 impl LocalUpload {
-    pub(crate) fn new(src: PathBuf, dest: PathBuf, file: File, fsync: bool) -> Self {
+    pub(crate) fn new(
+        src: PathBuf,
+        dest: PathBuf,
+        file: File,
+        fsync: bool,
+        mode: MultipartUploadMode,
+    ) -> Self {
         Self {
-            mode: MultipartUploadMode::Overwrite,
+            mode,
             state: Arc::new(UploadState {
                 dest,
                 file: Mutex::new(Some(StagedUpload {
@@ -1234,11 +1243,6 @@ impl MultipartUpload for LocalUpload {
             Ok(())
         })
         .boxed()
-    }
-
-    fn set_put_mode(&mut self, mode: PutMode) -> Result<()> {
-        self.mode = MultipartUploadMode::try_from(mode)?;
-        Ok(())
     }
 
     async fn complete(&mut self) -> Result<PutResult> {
@@ -2369,7 +2373,8 @@ mod not_wasm_tests {
     use tokio::sync::oneshot;
 
     use crate::local::{LocalFileSystem, LocalUpload, new_staged_upload};
-    use crate::{Error, MultipartUpload, ObjectStoreExt, Path, PutMode, PutPayload};
+    use crate::upload::MultipartUploadMode;
+    use crate::{Error, MultipartUpload, ObjectStore, ObjectStoreExt, Path, PutMode, PutPayload};
 
     #[tokio::test]
     async fn test_abort_after_failed_create_completion() {
@@ -2377,10 +2382,12 @@ mod not_wasm_tests {
         let storage = LocalFileSystem::new_with_prefix(root.path()).unwrap();
         let path = Path::from("object");
         storage.put(&path, "first".into()).await.unwrap();
-        let mut upload = storage.put_multipart(&path).await.unwrap();
+        let mut upload = storage
+            .put_multipart_opts(&path, PutMode::Create.into())
+            .await
+            .unwrap();
         upload.put_part("second".into()).await.unwrap();
 
-        upload.set_put_mode(PutMode::Create).unwrap();
         assert!(matches!(
             upload.complete().await,
             Err(Error::AlreadyExists { .. })
@@ -2397,12 +2404,11 @@ mod not_wasm_tests {
     #[test]
     fn test_cleanup_after_directory_sync_failure_preserves_reused_path() {
         futures_executor::block_on(async {
-            for mode in [PutMode::Overwrite, PutMode::Create] {
+            for mode in [MultipartUploadMode::Overwrite, MultipartUploadMode::Create] {
                 let root = TempDir::new().unwrap();
                 let dest = root.path().join("object");
                 let (file, src) = new_staged_upload(&dest, false).unwrap();
-                let mut upload = LocalUpload::new(src.clone(), dest.clone(), file, true);
-                upload.set_put_mode(mode).unwrap();
+                let mut upload = LocalUpload::new(src.clone(), dest.clone(), file, true, mode);
                 upload.put_part("first".into()).await.unwrap();
                 assert!(
                     upload
@@ -2414,7 +2420,13 @@ mod not_wasm_tests {
 
                 let (file, reused) = new_staged_upload(&dest, false).unwrap();
                 assert_eq!(reused, src);
-                let mut next = LocalUpload::new(reused, dest.clone(), file, false);
+                let mut next = LocalUpload::new(
+                    reused,
+                    dest.clone(),
+                    file,
+                    false,
+                    MultipartUploadMode::Overwrite,
+                );
                 next.put_part("second".into()).await.unwrap();
                 // Outside Tokio, Drop completes cleanup synchronously.
                 drop(upload);
@@ -2426,12 +2438,11 @@ mod not_wasm_tests {
 
     #[tokio::test]
     async fn test_cancelled_completion_cleanup_preserves_reused_path() {
-        for mode in [PutMode::Overwrite, PutMode::Create] {
+        for mode in [MultipartUploadMode::Overwrite, MultipartUploadMode::Create] {
             let root = TempDir::new().unwrap();
             let dest = root.path().join("object");
             let (file, src) = new_staged_upload(&dest, false).unwrap();
-            let mut upload = LocalUpload::new(src.clone(), dest.clone(), file, true);
-            upload.set_put_mode(mode.clone()).unwrap();
+            let mut upload = LocalUpload::new(src.clone(), dest.clone(), file, true, mode);
             upload.put_part("first".into()).await.unwrap();
             let (published, observed) = oneshot::channel();
             let (release, wait) = mpsc::channel();
@@ -2453,7 +2464,13 @@ mod not_wasm_tests {
                 .unwrap();
             let (file, reused) = new_staged_upload(&dest, false).unwrap();
             assert_eq!(reused, src);
-            let mut next = LocalUpload::new(reused, dest.clone(), file, false);
+            let mut next = LocalUpload::new(
+                reused,
+                dest.clone(),
+                file,
+                false,
+                MultipartUploadMode::Overwrite,
+            );
             next.put_part("second".into()).await.unwrap();
             upload.abort().await.unwrap();
             next.complete().await.unwrap();

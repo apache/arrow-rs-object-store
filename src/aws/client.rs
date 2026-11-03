@@ -733,6 +733,7 @@ impl S3Client {
         opts: PutMultipartOptions,
     ) -> Result<MultipartId> {
         let PutMultipartOptions {
+            mode: _,
             tags,
             attributes,
             extensions,
@@ -904,8 +905,6 @@ impl S3Client {
             ),
         };
 
-        // A Create completion isn't idempotent: if it succeeds but the response
-        // is lost, a retry fails its If-None-Match and reports AlreadyExists
         let idempotent = matches!(mode, MultipartUploadMode::Overwrite);
 
         let response = request

@@ -231,7 +231,7 @@ impl ObjectStore for InMemory {
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
         Ok(Box::new(InMemoryUpload {
-            mode: MultipartUploadMode::Overwrite,
+            mode: MultipartUploadMode::try_from(opts.mode)?,
             location: location.clone(),
             attributes: opts.attributes,
             parts: vec![],
@@ -424,6 +424,7 @@ impl MultipartStore for InMemory {
         _path: &Path,
         opts: PutMultipartOptions,
     ) -> Result<MultipartId> {
+        opts.require_overwrite()?;
         let mut storage = self.storage.write();
         let etag = storage.next_etag;
         storage.next_etag += 1;
@@ -559,11 +560,6 @@ impl MultipartUpload for InMemoryUpload {
     fn put_part(&mut self, payload: PutPayload) -> UploadPart {
         self.parts.push(payload);
         Box::pin(futures_util::future::ready(Ok(())))
-    }
-
-    fn set_put_mode(&mut self, mode: PutMode) -> Result<()> {
-        self.mode = MultipartUploadMode::try_from(mode)?;
-        Ok(())
     }
 
     async fn complete(&mut self) -> Result<PutResult> {

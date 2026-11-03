@@ -588,12 +588,16 @@ pub async fn get_opts(storage: &dyn ObjectStore) {
 /// Tests atomic multipart creation and streaming completion.
 pub async fn multipart_create(storage: &dyn ObjectStore) {
     let path = Path::from("multipart-create");
-    let mut first = storage.put_multipart(&path).await.unwrap();
-    let mut second = storage.put_multipart(&path).await.unwrap();
+    let mut first = storage
+        .put_multipart_opts(&path, PutMode::Create.into())
+        .await
+        .unwrap();
+    let mut second = storage
+        .put_multipart_opts(&path, PutMode::Create.into())
+        .await
+        .unwrap();
     first.put_part("first".into()).await.unwrap();
     second.put_part("second".into()).await.unwrap();
-    first.set_put_mode(PutMode::Create).unwrap();
-    second.set_put_mode(PutMode::Create).unwrap();
     first.complete().await.unwrap();
     assert!(matches!(
         second.complete().await,
@@ -606,22 +610,28 @@ pub async fn multipart_create(storage: &dyn ObjectStore) {
     );
     storage.delete(&path).await.unwrap();
 
-    let mut empty = storage.put_multipart(&path).await.unwrap();
-    empty.set_put_mode(PutMode::Create).unwrap();
+    let mut empty = storage
+        .put_multipart_opts(&path, PutMode::Create.into())
+        .await
+        .unwrap();
     empty.complete().await.unwrap();
     assert_eq!(storage.head(&path).await.unwrap().size, 0);
     storage.delete(&path).await.unwrap();
 
-    let upload = storage.put_multipart(&path).await.unwrap();
+    let upload = storage
+        .put_multipart_opts(&path, PutMode::Create.into())
+        .await
+        .unwrap();
     let mut writer = WriteMultipart::new(upload);
     writer.write(b"streamed");
-    writer.set_put_mode(PutMode::Create).unwrap();
     writer.finish().await.unwrap();
 
-    let upload = storage.put_multipart(&path).await.unwrap();
+    let upload = storage
+        .put_multipart_opts(&path, PutMode::Create.into())
+        .await
+        .unwrap();
     let mut writer = WriteMultipart::new(upload);
     writer.write(b"conflict");
-    writer.set_put_mode(PutMode::Create).unwrap();
     assert!(matches!(
         writer.finish().await,
         Err(Error::AlreadyExists { .. })
@@ -1144,6 +1154,19 @@ pub async fn multipart_with_opts(storage: &dyn ObjectStore, multipart: &dyn Mult
         attributes: attributes.clone(),
         ..Default::default()
     };
+
+    for mode in [
+        PutMode::Create,
+        PutMode::Update(UpdateVersion {
+            e_tag: Some("etag".into()),
+            version: None,
+        }),
+    ] {
+        assert!(matches!(
+            multipart.create_multipart_opts(&path, mode.into()).await,
+            Err(Error::NotSupported { .. })
+        ));
+    }
 
     let id = multipart.create_multipart_opts(&path, opts).await.unwrap();
 
