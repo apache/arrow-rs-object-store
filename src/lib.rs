@@ -2032,8 +2032,10 @@ pub struct PutMultipartOptions {
     /// Configure how the completed object is published. Defaults to [`PutMode::Overwrite`].
     ///
     /// With [`PutMode::Create`], completion atomically checks that the destination does not
-    /// exist and returns [`Error::AlreadyExists`] if it does. Implementations reject unsupported
-    /// modes before starting an upload; the existence check happens at completion.
+    /// exist and returns [`Error::AlreadyExists`] if it does. With [`PutMode::Update`],
+    /// completion atomically checks the supplied version, returning [`Error::Precondition`]
+    /// if it does not match. Implementations reject unsupported modes before starting an
+    /// upload; the condition is checked at completion.
     ///
     /// [`MultipartStore::create_multipart_opts`](crate::multipart::MultipartStore::create_multipart_opts)
     /// requires [`PutMode::Overwrite`]. Its callers select the completion mode separately
@@ -2123,7 +2125,8 @@ pub struct CompleteMultipartOptions {
     /// Configure the [`PutMode`] for this completion
     ///
     /// [`PutMode::Create`] fails with [`Error::AlreadyExists`] if an object already
-    /// exists at the path.
+    /// exists at the path. [`PutMode::Update`] fails with [`Error::Precondition`]
+    /// if the current version does not match the supplied version.
     pub mode: PutMode,
     /// Implementation-specific extensions. Intended for use by [`MultipartStore`] implementations
     /// that need to pass context-specific information (like tracing spans) via trait methods.

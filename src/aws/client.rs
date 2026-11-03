@@ -38,9 +38,8 @@ use crate::client::{
 };
 use crate::list::{PaginatedListOptions, PaginatedListResult};
 use crate::multipart::PartId;
-use crate::upload::MultipartUploadMode;
 use crate::{
-    Attribute, Attributes, ClientOptions, GetOptions, ListResult, MultipartId, Path,
+    Attribute, Attributes, ClientOptions, GetOptions, ListResult, MultipartId, Path, PutMode,
     PutMultipartOptions, PutPayload, PutResult, Result, RetryConfig, TagSet,
 };
 use async_trait::async_trait;
@@ -49,7 +48,7 @@ use base64::prelude::BASE64_STANDARD;
 use bytes::{Buf, Bytes};
 use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH,
-    CONTENT_TYPE, IF_NONE_MATCH,
+    CONTENT_TYPE, IF_MATCH, IF_NONE_MATCH,
 };
 use http::{HeaderMap, HeaderName, Method, StatusCode};
 use itertools::Itertools;
@@ -157,21 +156,50 @@ impl Default for PutPartPayload<'_> {
     }
 }
 
-fn complete_multipart_error(
-    mode: MultipartUploadMode,
-    source: RetryError,
-    path: &Path,
-) -> crate::Error {
+fn multipart_condition(mode: &PutMode) -> Result<Option<(HeaderName, &str)>> {
+    match mode {
+        PutMode::Overwrite => Ok(None),
+        PutMode::Create => Ok(Some((IF_NONE_MATCH, "*"))),
+        PutMode::Update(version) => {
+            let etag = version
+                .e_tag
+                .as_deref()
+                .ok_or_else(|| crate::Error::Generic {
+                    store: STORE,
+                    source: "ETag required for conditional multipart update".into(),
+                })?;
+            Ok(Some((IF_MATCH, etag)))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct S3ErrorResponse {
+    code: String,
+}
+
+fn complete_multipart_error(mode: &PutMode, source: RetryError, path: &Path) -> crate::Error {
     let path = path.to_string();
     match (mode, source.status()) {
-        (
-            MultipartUploadMode::Create,
-            Some(StatusCode::PRECONDITION_FAILED | StatusCode::NOT_MODIFIED),
-        ) => crate::Error::AlreadyExists {
-            path,
-            source: Box::new(source),
-        },
-        (MultipartUploadMode::Create, Some(StatusCode::CONFLICT)) => {
+        (PutMode::Create, Some(StatusCode::PRECONDITION_FAILED | StatusCode::NOT_MODIFIED)) => {
+            crate::Error::AlreadyExists {
+                path,
+                source: Box::new(source),
+            }
+        }
+        (PutMode::Update(_), Some(StatusCode::NOT_FOUND))
+            if source
+                .body()
+                .and_then(|body| quick_xml::de::from_str::<S3ErrorResponse>(body).ok())
+                .is_some_and(|error| error.code == "NoSuchKey") =>
+        {
+            crate::Error::Precondition {
+                path,
+                source: Box::new(source),
+            }
+        }
+        (PutMode::Create | PutMode::Update(_), Some(StatusCode::CONFLICT)) => {
             Error::ConditionalMultipartConflict { source, path }.into()
         }
         _ => Error::CompleteMultipartRequest { source, path }.into(),
@@ -239,12 +267,14 @@ pub(crate) struct S3Config {
 }
 
 impl S3Config {
-    pub(crate) fn ensure_conditional_put_enabled(&self) -> Result<()> {
-        if self.conditional_put == S3ConditionalPut::Disabled {
+    pub(crate) fn validate_multipart_mode(&self, mode: &PutMode) -> Result<()> {
+        if !matches!(mode, PutMode::Overwrite) && self.conditional_put == S3ConditionalPut::Disabled
+        {
             return Err(crate::Error::NotSupported {
                 source: "conditional S3 writes are disabled".into(),
             });
         }
+        multipart_condition(mode)?;
         Ok(())
     }
 
@@ -862,8 +892,9 @@ impl S3Client {
         location: &Path,
         upload_id: &str,
         parts: Vec<PartId>,
-        mode: MultipartUploadMode,
+        mode: &PutMode,
     ) -> Result<PutResult> {
+        let condition = multipart_condition(mode)?;
         let parts = if parts.is_empty() {
             // If no parts were uploaded, upload an empty part
             // otherwise the completion request will fail
@@ -893,11 +924,11 @@ impl S3Client {
 
         let request = builder.query(&[("uploadId", upload_id)]).body(body);
 
-        let (request, retry_config) = match mode {
-            MultipartUploadMode::Overwrite => (request, self.config.retry_config.clone()),
+        let (request, retry_config) = match condition {
+            None => (request, self.config.retry_config.clone()),
             // A retry after an ambiguous failure can report our own write as a conflict.
-            MultipartUploadMode::Create => (
-                request.header(IF_NONE_MATCH, "*"),
+            Some((header, value)) => (
+                request.header(header, value),
                 RetryConfig {
                     max_retries: 0,
                     ..self.config.retry_config.clone()
@@ -905,7 +936,7 @@ impl S3Client {
             ),
         };
 
-        let idempotent = matches!(mode, MultipartUploadMode::Overwrite);
+        let idempotent = matches!(mode, PutMode::Overwrite);
 
         let response = request
             .with_aws_sigv4(authorizer, None)?
@@ -1452,7 +1483,7 @@ mod tests {
                 &Path::from("test"),
                 "test-upload-id",
                 parts,
-                MultipartUploadMode::Overwrite,
+                &PutMode::Overwrite,
             )
             .await
             .unwrap();

@@ -38,7 +38,6 @@ use parking_lot::Mutex;
 use url::Url;
 use walkdir::{DirEntry, WalkDir};
 
-use crate::upload::MultipartUploadMode;
 use crate::{
     Attributes, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
     ObjectStore, PutMode, PutMultipartOptions, PutOptions, PutPayload, PutResult, Result,
@@ -461,7 +460,7 @@ impl ObjectStore for LocalFileSystem {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
-        let mode = MultipartUploadMode::try_from(opts.mode)?;
+        let mode = LocalUploadMode::try_from(opts.mode)?;
         if !opts.attributes.is_empty() {
             return Err(crate::Error::NotImplemented {
                 operation: "`put_multipart_opts` with `opts.attributes` specified".into(),
@@ -1090,9 +1089,30 @@ fn staged_upload_path(dest: &std::path::Path, suffix: &str) -> PathBuf {
     staging_path.into()
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+enum LocalUploadMode {
+    #[default]
+    Overwrite,
+    Create,
+}
+
+impl TryFrom<PutMode> for LocalUploadMode {
+    type Error = crate::Error;
+
+    fn try_from(mode: PutMode) -> Result<Self> {
+        match mode {
+            PutMode::Overwrite => Ok(Self::Overwrite),
+            PutMode::Create => Ok(Self::Create),
+            PutMode::Update(_) => Err(crate::Error::NotSupported {
+                source: "conditional multipart updates are not supported by LocalFileSystem".into(),
+            }),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct LocalUpload {
-    mode: MultipartUploadMode,
+    mode: LocalUploadMode,
     /// The upload state
     state: Arc<UploadState>,
     /// The next offset to write into the file
@@ -1149,7 +1169,7 @@ impl LocalUpload {
         dest: PathBuf,
         file: File,
         fsync: bool,
-        mode: MultipartUploadMode,
+        mode: LocalUploadMode,
     ) -> Self {
         Self {
             mode,
@@ -1188,13 +1208,13 @@ impl LocalUpload {
                 })?;
             sync_and_close(staged.file.take().ok_or(Error::Aborted)?, src, fsync)?;
             match mode {
-                MultipartUploadMode::Overwrite => {
+                LocalUploadMode::Overwrite => {
                     std::fs::rename(src, &s.dest)
                         .map_err(|source| Error::UnableToRenameFile { source })?;
                     // The staging name may be reused as soon as rename succeeds.
                     staged.path = None;
                 }
-                MultipartUploadMode::Create => {
+                LocalUploadMode::Create => {
                     std::fs::hard_link(src, &s.dest).map_err(|source| match source.kind() {
                         ErrorKind::AlreadyExists => Error::AlreadyExists {
                             path: s.dest.to_string_lossy().into_owned(),
@@ -2372,8 +2392,7 @@ mod not_wasm_tests {
     use tempfile::TempDir;
     use tokio::sync::oneshot;
 
-    use crate::local::{LocalFileSystem, LocalUpload, new_staged_upload};
-    use crate::upload::MultipartUploadMode;
+    use crate::local::{LocalFileSystem, LocalUpload, LocalUploadMode, new_staged_upload};
     use crate::{Error, MultipartUpload, ObjectStore, ObjectStoreExt, Path, PutMode, PutPayload};
 
     #[tokio::test]
@@ -2404,7 +2423,7 @@ mod not_wasm_tests {
     #[test]
     fn test_cleanup_after_directory_sync_failure_preserves_reused_path() {
         futures_executor::block_on(async {
-            for mode in [MultipartUploadMode::Overwrite, MultipartUploadMode::Create] {
+            for mode in [LocalUploadMode::Overwrite, LocalUploadMode::Create] {
                 let root = TempDir::new().unwrap();
                 let dest = root.path().join("object");
                 let (file, src) = new_staged_upload(&dest, false).unwrap();
@@ -2425,7 +2444,7 @@ mod not_wasm_tests {
                     dest.clone(),
                     file,
                     false,
-                    MultipartUploadMode::Overwrite,
+                    LocalUploadMode::Overwrite,
                 );
                 next.put_part("second".into()).await.unwrap();
                 // Outside Tokio, Drop completes cleanup synchronously.
@@ -2438,7 +2457,7 @@ mod not_wasm_tests {
 
     #[tokio::test]
     async fn test_cancelled_completion_cleanup_preserves_reused_path() {
-        for mode in [MultipartUploadMode::Overwrite, MultipartUploadMode::Create] {
+        for mode in [LocalUploadMode::Overwrite, LocalUploadMode::Create] {
             let root = TempDir::new().unwrap();
             let dest = root.path().join("object");
             let (file, src) = new_staged_upload(&dest, false).unwrap();
@@ -2469,7 +2488,7 @@ mod not_wasm_tests {
                 dest.clone(),
                 file,
                 false,
-                MultipartUploadMode::Overwrite,
+                LocalUploadMode::Overwrite,
             );
             next.put_part("second".into()).await.unwrap();
             upload.abort().await.unwrap();

@@ -27,7 +27,6 @@ use futures_util::{StreamExt, stream::BoxStream};
 use parking_lot::RwLock;
 
 use crate::multipart::{MultipartStore, PartId};
-use crate::upload::MultipartUploadMode;
 use crate::util::InvalidGetRange;
 use crate::{
     Attributes, CompleteMultipartOptions, GetRange, GetResult, GetResultPayload, ListResult,
@@ -231,7 +230,7 @@ impl ObjectStore for InMemory {
         opts: PutMultipartOptions,
     ) -> Result<Box<dyn MultipartUpload>> {
         Ok(Box::new(InMemoryUpload {
-            mode: MultipartUploadMode::try_from(opts.mode)?,
+            mode: opts.mode,
             location: location.clone(),
             attributes: opts.attributes,
             parts: vec![],
@@ -473,8 +472,7 @@ impl MultipartStore for InMemory {
         _parts: Vec<PartId>,
         opts: CompleteMultipartOptions,
     ) -> Result<PutResult> {
-        let mode = MultipartUploadMode::try_from(opts.mode)?;
-        self.complete_upload(path, id, mode.into())
+        self.complete_upload(path, id, opts.mode)
     }
 
     async fn abort_multipart(&self, _path: &Path, id: &MultipartId) -> Result<()> {
@@ -530,7 +528,7 @@ impl InMemory {
 
 #[derive(Debug)]
 struct InMemoryUpload {
-    mode: MultipartUploadMode,
+    mode: PutMode,
     location: Path,
     attributes: Attributes,
     parts: Vec<PutPayload>,
@@ -550,7 +548,7 @@ impl InMemoryUpload {
             &self.location,
             bytes,
             self.attributes.clone(),
-            self.mode.into(),
+            self.mode.clone(),
         )
     }
 }
@@ -576,6 +574,13 @@ mod tests {
     use crate::{ObjectStoreExt, integration::*};
 
     use super::*;
+
+    #[tokio::test]
+    async fn multipart_updates() {
+        let store = InMemory::new();
+        multipart_update(&store).await;
+        multipart_complete_update(&store, &store).await;
+    }
 
     #[tokio::test]
     async fn in_memory_test() {

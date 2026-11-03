@@ -129,8 +129,10 @@ pub trait MultipartStore: Send + Sync + 'static {
     /// The same requirements on `parts` apply as for [`Self::complete_multipart`].
     ///
     /// With [`PutMode::Create`], the completion fails with [`Error::AlreadyExists`] if an
-    /// object already exists at `path`. The check and the write are one atomic operation. If
-    /// the request fails without a response, the object may or may not have been created.
+    /// object already exists at `path`. With [`PutMode::Update`], it fails with
+    /// [`Error::Precondition`] if the current version does not match. The check and the write
+    /// are one atomic operation. If the request fails without a response, the object may or
+    /// may not have been published.
     ///
     /// Implementations that cannot enforce `opts.mode` return an error. The default
     /// implementation supports only [`PutMode::Overwrite`], and returns

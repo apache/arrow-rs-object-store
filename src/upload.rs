@@ -20,7 +20,9 @@ use std::task::{Context, Poll};
 
 #[cfg(feature = "tokio")]
 use crate::PutPayloadMut;
-use crate::{Error, PutMode, PutPayload, PutResult, Result};
+#[cfg(doc)]
+use crate::{Error, PutMode};
+use crate::{PutPayload, PutResult, Result};
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
 #[cfg(feature = "tokio")]
@@ -28,36 +30,6 @@ use tokio::task::JoinSet;
 
 /// An upload part request
 pub type UploadPart = BoxFuture<'static, Result<()>>;
-
-#[derive(Debug, Clone, Copy, Default)]
-pub(crate) enum MultipartUploadMode {
-    #[default]
-    Overwrite,
-    Create,
-}
-
-impl TryFrom<PutMode> for MultipartUploadMode {
-    type Error = Error;
-
-    fn try_from(mode: PutMode) -> Result<Self> {
-        match mode {
-            PutMode::Overwrite => Ok(Self::Overwrite),
-            PutMode::Create => Ok(Self::Create),
-            PutMode::Update(_) => Err(Error::NotSupported {
-                source: "conditional multipart updates are not supported".into(),
-            }),
-        }
-    }
-}
-
-impl From<MultipartUploadMode> for PutMode {
-    fn from(mode: MultipartUploadMode) -> Self {
-        match mode {
-            MultipartUploadMode::Overwrite => Self::Overwrite,
-            MultipartUploadMode::Create => Self::Create,
-        }
-    }
-}
 
 /// A trait allowing writing an object in fixed size chunks
 ///
@@ -101,7 +73,8 @@ pub trait MultipartUpload: Send + std::fmt::Debug {
     /// Complete the multipart upload using the mode selected in [`crate::PutMultipartOptions`].
     ///
     /// With [`PutMode::Create`], returns [`Error::AlreadyExists`] if the destination
-    /// exists. A failed upload can still be cleaned up with [`Self::abort`].
+    /// exists. With [`PutMode::Update`], returns [`Error::Precondition`] if the current
+    /// version does not match. A failed upload can still be cleaned up with [`Self::abort`].
     /// An I/O error may leave the publication outcome uncertain; aborting does not
     /// remove an object that was already published. Verify the destination's contents
     /// before starting another upload, and do not assume completion can be retried.
