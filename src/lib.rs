@@ -673,7 +673,74 @@
 //! tokio Runtime for I/O requests. To replace `reqwest` entirely (rather than
 //! tweak the bundled transport) see [Disabling `reqwest`](#disabling-reqwest).
 //!
+//! For example, to add a header to every request, wrap the [`HttpClient`] created by
+//! [`ReqwestConnector`] in your own [`HttpService`] and register it with
+//! `with_http_connector`:
+//!
+//! ```ignore-wasm32
+//! # #[cfg(feature = "aws")] {
+//! use async_trait::async_trait;
+//! use http::{HeaderName, HeaderValue};
+//! use object_store::aws::AmazonS3Builder;
+//! use object_store::client::{
+//!     HttpClient, HttpConnector, HttpError, HttpRequest, HttpResponse, HttpService,
+//!     ReqwestConnector,
+//! };
+//! use object_store::ClientOptions;
+//!
+//! /// Adds a header to each request before sending it with the wrapped client
+//! #[derive(Debug)]
+//! struct AddHeader {
+//!     inner: HttpClient,
+//!     name: HeaderName,
+//!     value: HeaderValue,
+//! }
+//!
+//! #[async_trait]
+//! impl HttpService for AddHeader {
+//!     async fn call(&self, mut req: HttpRequest) -> Result<HttpResponse, HttpError> {
+//!         req.headers_mut().insert(self.name.clone(), self.value.clone());
+//!         self.inner.execute(req).await
+//!     }
+//! }
+//!
+//! /// Creates [`AddHeader`] clients on top of the default `reqwest` transport
+//! #[derive(Debug)]
+//! struct AddHeaderConnector {
+//!     name: HeaderName,
+//!     value: HeaderValue,
+//! }
+//!
+//! impl HttpConnector for AddHeaderConnector {
+//!     fn connect(&self, options: &ClientOptions) -> object_store::Result<HttpClient> {
+//!         Ok(HttpClient::new(AddHeader {
+//!             inner: ReqwestConnector::default().connect(options)?,
+//!             name: self.name.clone(),
+//!             value: self.value.clone(),
+//!         }))
+//!     }
+//! }
+//!
+//! let store = AmazonS3Builder::new()
+//!     .with_bucket_name("my-bucket")
+//!     .with_region("us-east-1")
+//!     .with_http_connector(AddHeaderConnector {
+//!         name: HeaderName::from_static("x-request-source"),
+//!         value: HeaderValue::from_static("my-app"),
+//!     })
+//!     .build()
+//!     .unwrap();
+//! # }
+//! ```
+//!
+//! Note that the [`HttpService`] sees each request after it has been signed, so headers
+//! added there are not covered by the request signature. Some services reject unsigned
+//! headers, for example S3 requires every `x-amz-*` header to be signed.
+//!
 //! [`HttpConnector`]: client::HttpConnector
+//! [`HttpClient`]: client::HttpClient
+//! [`HttpService`]: client::HttpService
+//! [`ReqwestConnector`]: client::ReqwestConnector
 //!
 //! # Disabling `reqwest`
 //!
