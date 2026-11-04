@@ -659,9 +659,11 @@ impl ObjectStore for LocalFileSystem {
                             // `rename` bundles in the fsync of `to`'s parent directory.
                             Ok(_) => match rename(&staged, &to, fsync) {
                                 Ok(_) => return Ok(()),
-                                Err(source) => {
+                                Err(e) => {
                                     let _ = std::fs::remove_file(&staged); // Attempt to clean up
-                                    return Err(Error::UnableToCopyFile { from, to, source }.into());
+                                    let report =
+                                        |source| Error::UnableToCopyFile { from, to, source };
+                                    return Err(e.reported(report).into());
                                 }
                             },
                             Err(source) => match source.kind() {
@@ -688,7 +690,8 @@ impl ObjectStore for LocalFileSystem {
                         // sync is needed; `hard_link` bundles in the fsync of `to`'s parent dir.
                         match hard_link(&from, &to, fsync) {
                             Ok(_) => return Ok(()),
-                            Err(source) => match source.kind() {
+                            Err(DurableError::Sync(e)) => return Err(Error::from(e).into()),
+                            Err(DurableError::Change(source)) => match source.kind() {
                                 ErrorKind::AlreadyExists => {
                                     return Err(Error::AlreadyExists {
                                         path: to.to_str().unwrap().to_string(),
@@ -734,7 +737,8 @@ impl ObjectStore for LocalFileSystem {
                         // both affected directories (destination, and source if it differs).
                         match rename(&from, &to, fsync) {
                             Ok(_) => return Ok(()),
-                            Err(source) => match source.kind() {
+                            Err(DurableError::Sync(e)) => return Err(Error::from(e).into()),
+                            Err(DurableError::Change(source)) => match source.kind() {
                                 ErrorKind::NotFound => match from.exists() {
                                     true => create_parent_dirs(&to, source, fsync)?,
                                     false => {
@@ -942,13 +946,8 @@ fn create_dir_all_durable(
             path: dir.into(),
         }
     })?;
-    sync_unsynced_ancestors_with(dir, sync).map_err(|source| {
-        Error::UnableToSyncFile {
-            source,
-            path: dir.into(),
-        }
-        .into()
-    })
+    sync_unsynced_ancestors_with(dir, sync).map_err(Error::from)?;
+    Ok(())
 }
 
 /// Creates `dir` and its missing ancestors one at a time, as [`std::fs::create_dir_all`] does,
@@ -957,18 +956,46 @@ fn create_dir_all_recording(
     dir: &std::path::Path,
     create: &mut impl FnMut(&std::path::Path) -> io::Result<()>,
 ) -> io::Result<()> {
-    match changing(dir.parent(), || create(dir)) {
-        Err(e) if e.kind() == ErrorKind::NotFound => {}
-        Err(e) if !dir.is_dir() => return Err(e),
-        _ => return Ok(()),
+    let mut create = |dir: &std::path::Path| changing(dir.parent(), || create(dir));
+    // Deepest first, up to the first one that could be created or exists; a root cannot be made.
+    let mut uncreated = 0;
+    for ancestor in dir.ancestors() {
+        if ancestor.parent().is_none() {
+            break;
+        }
+        match create(ancestor) {
+            Ok(()) => break,
+            Err(e) if e.kind() == ErrorKind::NotFound => uncreated += 1,
+            // `AlreadyExists` may be a file; `is_dir` is not consulted for other errors.
+            Err(e) if e.kind() == ErrorKind::AlreadyExists && ancestor.is_dir() => break,
+            Err(e) => return Err(e),
+        }
     }
-    match dir.parent() {
-        Some(p) => create_dir_all_recording(p, create)?,
-        None => return Err(io::Error::other("failed to create whole tree")),
+    let uncreated: Vec<_> = dir.ancestors().take(uncreated).collect();
+    for ancestor in uncreated.into_iter().rev() {
+        match create(ancestor) {
+            Err(e) if e.kind() != ErrorKind::AlreadyExists || !ancestor.is_dir() => return Err(e),
+            _ => {}
+        }
     }
-    match changing(dir.parent(), || create(dir)) {
-        Err(e) if !dir.is_dir() => Err(e),
-        _ => Ok(()),
+    Ok(())
+}
+
+/// How a durable [`rename`] or [`hard_link`] failed: in the change itself, which then changed
+/// nothing and whose kind callers act on, or in the fsync of a directory after it.
+#[derive(Debug)]
+enum DurableError {
+    Change(io::Error),
+    Sync(SyncError),
+}
+
+impl DurableError {
+    /// The error to report, with `change` wrapping a failed change.
+    fn reported(self, change: impl FnOnce(io::Error) -> Error) -> Error {
+        match self {
+            Self::Change(source) => change(source),
+            Self::Sync(e) => e.into(),
+        }
     }
 }
 
@@ -978,16 +1005,16 @@ fn create_dir_all_recording(
 ///
 /// The directory fsync is bundled in deliberately: every durable rename goes through here, so the
 /// post-rename fsync can never be forgotten at an individual call site.
-fn rename(from: &std::path::Path, to: &std::path::Path, fsync: bool) -> io::Result<()> {
+fn rename(from: &std::path::Path, to: &std::path::Path, fsync: bool) -> Result<(), DurableError> {
     if !fsync {
-        return std::fs::rename(from, to);
+        return std::fs::rename(from, to).map_err(DurableError::Change);
     }
     // A cross-directory move also removes an entry from the source directory.
     let dirs = [to.parent(), from.parent()].into_iter().flatten();
-    changing(dirs, || std::fs::rename(from, to))?;
-    sync_unsynced_ancestors(to)?;
+    changing(dirs, || std::fs::rename(from, to)).map_err(DurableError::Change)?;
+    sync_unsynced_ancestors(to).map_err(DurableError::Sync)?;
     if from.parent() != to.parent() {
-        sync_unsynced_ancestors(from)?;
+        sync_unsynced_ancestors(from).map_err(DurableError::Sync)?;
     }
     Ok(())
 }
@@ -997,12 +1024,16 @@ fn rename(from: &std::path::Path, to: &std::path::Path, fsync: bool) -> io::Resu
 /// [`UNSYNCED`].
 ///
 /// As with [`rename`], the directory fsync is bundled in so it cannot be forgotten at a call site.
-fn hard_link(original: &std::path::Path, link: &std::path::Path, fsync: bool) -> io::Result<()> {
+fn hard_link(
+    original: &std::path::Path,
+    link: &std::path::Path,
+    fsync: bool,
+) -> Result<(), DurableError> {
     if !fsync {
-        return std::fs::hard_link(original, link);
+        return std::fs::hard_link(original, link).map_err(DurableError::Change);
     }
-    changing(link.parent(), || std::fs::hard_link(original, link))?;
-    sync_unsynced_ancestors(link)
+    changing(link.parent(), || std::fs::hard_link(original, link)).map_err(DurableError::Change)?;
+    sync_unsynced_ancestors(link).map_err(DurableError::Sync)
 }
 
 /// Durably publishes the freshly-written staging file `file` (located at `src`) to `dest` via a
@@ -1019,7 +1050,8 @@ fn finish_staged_rename(
     fsync: bool,
 ) -> Result<()> {
     sync_and_close(file, src, fsync)?;
-    rename(src, dest, fsync).map_err(|source| Error::UnableToRenameFile { source })?;
+    rename(src, dest, fsync)
+        .map_err(|e| e.reported(|source| Error::UnableToRenameFile { source }))?;
     Ok(())
 }
 
@@ -1038,14 +1070,16 @@ fn finish_staged_hard_link(
             let _ = std::fs::remove_file(src); // Attempt to cleanup
             Ok(())
         }
-        Err(source) => match source.kind() {
-            ErrorKind::AlreadyExists => Err(Error::AlreadyExists {
+        Err(DurableError::Change(source)) if source.kind() == ErrorKind::AlreadyExists => {
+            Err(Error::AlreadyExists {
                 path: dest.to_str().unwrap().to_string(),
                 source,
             }
+            .into())
+        }
+        Err(e) => Err(e
+            .reported(|source| Error::UnableToRenameFile { source })
             .into()),
-            _ => Err(Error::UnableToRenameFile { source }.into()),
-        },
     }
 }
 
@@ -1100,11 +1134,12 @@ fn changing<'a, T>(
     {
         let mut unsynced = UNSYNCED.lock();
         for dir in &dirs {
-            unsynced
-                .dirs
-                .entry(dir.to_path_buf())
-                .or_default()
-                .in_flight += 1;
+            // Looked up borrowed first: the key is allocated only for a directory not yet recorded.
+            let pending = match unsynced.dirs.get_mut(*dir) {
+                Some(pending) => pending,
+                None => unsynced.dirs.entry(dir.to_path_buf()).or_default(),
+            };
+            pending.in_flight += 1;
         }
     }
     let mut guard = Changing {
@@ -1142,11 +1177,24 @@ impl Drop for Changing<'_> {
     }
 }
 
+/// A failed directory fsync and the directory it failed on.
+#[derive(Debug)]
+struct SyncError {
+    dir: PathBuf,
+    source: io::Error,
+}
+
+impl From<SyncError> for Error {
+    fn from(SyncError { dir, source }: SyncError) -> Self {
+        Self::UnableToSyncFile { source, path: dir }
+    }
+}
+
 /// Fsyncs the directories recorded in [`UNSYNCED`] among `path` and its ancestors, deepest first,
 /// so an operation returns only once every directory entry leading to what it wrote is durable,
 /// whoever changed it. An entry leaves the set only when a sync that started after its last
 /// change succeeds or finds the directory gone; a failed sync leaves it to the next write.
-fn sync_unsynced_ancestors(path: &std::path::Path) -> io::Result<()> {
+fn sync_unsynced_ancestors(path: &std::path::Path) -> Result<(), SyncError> {
     sync_unsynced_ancestors_with(path, fsync_dir)
 }
 
@@ -1154,7 +1202,7 @@ fn sync_unsynced_ancestors(path: &std::path::Path) -> io::Result<()> {
 fn sync_unsynced_ancestors_with(
     path: &std::path::Path,
     mut sync: impl FnMut(&std::path::Path) -> io::Result<()>,
-) -> io::Result<()> {
+) -> Result<(), SyncError> {
     let pending: Vec<_> = {
         let unsynced = UNSYNCED.lock();
         path.ancestors()
@@ -1166,12 +1214,14 @@ fn sync_unsynced_ancestors_with(
     for (dir, _) in &pending {
         match sync(dir) {
             Ok(()) => synced += 1,
-            Err(e) => {
-                // A directory that is gone has no entries left to make durable.
-                if e.kind() == ErrorKind::NotFound {
+            Err(source) => {
+                // A directory that is gone has no entries left to make durable, so its record
+                // goes; the error stays: what this operation changed there is gone with it.
+                if source.kind() == ErrorKind::NotFound {
                     synced += 1;
                 }
-                result = Err(e);
+                let dir = dir.to_path_buf();
+                result = Err(SyncError { dir, source });
                 break;
             }
         }
@@ -1710,6 +1760,17 @@ mod tests {
         under.cloned().collect()
     }
 
+    /// The directory an [`Error::UnableToSyncFile`] names.
+    fn dir_that_failed_to_sync(err: crate::Error) -> PathBuf {
+        match err {
+            crate::Error::Generic { source, .. } => match *source.downcast::<Error>().unwrap() {
+                Error::UnableToSyncFile { path, .. } => path,
+                e => panic!("expected a sync error, got {e}"),
+            },
+            e => panic!("expected a sync error, got {e}"),
+        }
+    }
+
     #[tokio::test]
     #[cfg(target_family = "unix")]
     async fn file_test() {
@@ -1851,13 +1912,14 @@ mod tests {
         let a = root.join("a");
         let b = a.join("b");
 
-        // The creation's first fsync fails.
-        create_dir_all_durable(
+        // The creation's first fsync, of `a`, fails; the error names `a`, not `a/b`.
+        let err = create_dir_all_durable(
             &b,
             |dir| fs::create_dir(dir),
             |_| Err(io::Error::other("fsync failed")),
         )
         .unwrap_err();
+        assert_eq!(dir_that_failed_to_sync(err), a);
         assert!(b.is_dir());
         assert_eq!(unsynced_under(root), [root.to_path_buf(), a.clone()]);
 
@@ -1883,8 +1945,14 @@ mod tests {
         let root = tmp.path();
         let mut synced = Vec::new();
 
-        // `k` is a file, so creating `k/sub` fails without changing anything.
+        // `k` is a file, so creating `k` or `k/sub` fails without changing anything.
         fs::write(root.join("k"), "x").unwrap();
+        create_dir_all_durable(
+            &root.join("k"),
+            |dir| fs::create_dir(dir),
+            record_syncs(&mut synced),
+        )
+        .unwrap_err();
         create_dir_all_durable(
             &root.join("k").join("sub"),
             |dir| fs::create_dir(dir),
@@ -1975,7 +2043,8 @@ mod tests {
         // A write into `a` is in flight while `a` is being synced and finishes afterwards.
         changing([a.as_path()], || {
             let mut synced = Vec::new();
-            sync_unsynced_ancestors_with(&first, record_syncs(&mut synced))?;
+            sync_unsynced_ancestors_with(&first, record_syncs(&mut synced))
+                .map_err(|e| e.source)?;
             assert_eq!(synced, std::slice::from_ref(&a));
             assert_eq!(unsynced_under(root), std::slice::from_ref(&a));
             fs::write(a.join("third"), "x")
@@ -1989,8 +2058,8 @@ mod tests {
         assert!(unsynced_under(root).is_empty());
     }
 
-    /// The publish records the destination's parent, so a put fails when that parent cannot be
-    /// fsynced, and leaves it to the next put into it.
+    /// The publish records the destination's parent, so a put, copy or rename fails, naming that
+    /// parent, when it cannot be fsynced, and leaves it to the next put into it.
     #[tokio::test]
     #[cfg(target_family = "unix")]
     async fn fsync_put_propagates_parent_sync_error() {
@@ -1998,23 +2067,40 @@ mod tests {
         let integration = LocalFileSystem::new_with_prefix(root.path())
             .unwrap()
             .with_fsync(true);
+        let source = Path::from("source");
+        integration.put(&source, "0".into()).await.unwrap();
         let dir = fs::canonicalize(root.path()).unwrap().join("dir");
         fs::create_dir(&dir).unwrap();
         let original_permissions = fs::metadata(&dir).unwrap().permissions();
         // Allow creating entries in the directory, but prevent opening it for fsync.
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o300)).unwrap();
 
-        let overwrite = integration.put(&Path::from("dir/first"), "1".into()).await;
-        let create = integration
-            .put_opts(
-                &Path::from("dir/second"),
-                "2".into(),
-                PutMode::Create.into(),
-            )
-            .await;
+        let create = PutMode::Create.into();
+        let errors = [
+            integration
+                .put(&Path::from("dir/first"), "1".into())
+                .await
+                .err(),
+            integration
+                .put_opts(&Path::from("dir/second"), "2".into(), create)
+                .await
+                .err(),
+            integration
+                .copy(&source, &Path::from("dir/copied"))
+                .await
+                .err(),
+            integration
+                .copy_if_not_exists(&source, &Path::from("dir/linked"))
+                .await
+                .err(),
+            integration
+                .rename(&source, &Path::from("dir/renamed"))
+                .await
+                .err(),
+        ];
         fs::set_permissions(&dir, original_permissions).unwrap();
-        for result in [overwrite, create] {
-            assert!(matches!(result, Err(crate::Error::Generic { .. })));
+        for err in errors {
+            assert_eq!(dir_that_failed_to_sync(err.unwrap()), dir);
         }
         assert_eq!(unsynced_under(&dir), std::slice::from_ref(&dir));
 
