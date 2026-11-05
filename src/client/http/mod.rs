@@ -25,3 +25,6 @@ pub use connection::*;
 
 mod spawn;
 pub use spawn::*;
+
+mod operation;
+pub use operation::{ObjectStoreOperation, OperationKind};
