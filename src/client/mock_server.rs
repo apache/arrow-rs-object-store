@@ -133,3 +133,61 @@ impl MockServer {
         self.handle.await.unwrap()
     }
 }
+
+/// A request answered by [`MockServer::push_recorded`].
+#[cfg(any(feature = "aws-base", feature = "azure-base", feature = "gcp-base"))]
+#[derive(Debug)]
+pub(crate) struct RecordedRequest {
+    pub(crate) method: http::Method,
+    pub(crate) path: String,
+    pub(crate) query: Option<String>,
+    pub(crate) headers: http::HeaderMap,
+    pub(crate) body: bytes::Bytes,
+}
+
+/// The requests answered by [`MockServer::push_recorded`], in arrival order.
+///
+/// `MockServer` swallows panics raised in response handlers, so assert on these in the test body.
+#[cfg(any(feature = "aws-base", feature = "azure-base", feature = "gcp-base"))]
+#[derive(Debug, Default, Clone)]
+pub(crate) struct RequestLog(Arc<Mutex<Vec<RecordedRequest>>>);
+
+#[cfg(any(feature = "aws-base", feature = "azure-base", feature = "gcp-base"))]
+impl RequestLog {
+    /// Remove and return every recorded request.
+    pub(crate) fn take(&self) -> Vec<RecordedRequest> {
+        std::mem::take(&mut *self.0.lock())
+    }
+
+    /// Remove and return the only recorded request.
+    pub(crate) fn single(&self) -> RecordedRequest {
+        let mut requests = self.take();
+        assert_eq!(requests.len(), 1, "expected one request: {requests:?}");
+        requests.pop().unwrap()
+    }
+}
+
+#[cfg(any(feature = "aws-base", feature = "azure-base", feature = "gcp-base"))]
+impl MockServer {
+    /// Answer the next request with an empty `status` response, recording it into `log`.
+    pub(crate) fn push_recorded(&self, log: &RequestLog, status: u16) {
+        use http_body_util::BodyExt;
+
+        let log = log.clone();
+        self.push_async_fn(move |req| async move {
+            let (parts, body) = req.into_parts();
+            let body = body.collect().await.unwrap().to_bytes();
+            log.0.lock().push(RecordedRequest {
+                method: parts.method,
+                path: parts.uri.path().to_string(),
+                query: parts.uri.query().map(str::to_string),
+                headers: parts.headers,
+                body,
+            });
+            Response::builder()
+                .status(status)
+                .body(String::new())
+                .unwrap()
+        });
+    }
+}

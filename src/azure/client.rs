@@ -22,7 +22,7 @@ use crate::client::builder::HttpRequestBuilder;
 use crate::client::get::GetClient;
 use crate::client::header::{HeaderConfig, get_put_result};
 use crate::client::list::ListClient;
-use crate::client::retry::{RetryContext, RetryExt};
+use crate::client::retry::{RetryContext, RetryError, RetryExt, RetryableRequestBuilder};
 use crate::client::token::{TemporaryToken, TokenCache};
 use crate::client::{
     CryptoProvider, DigestAlgorithm, GetOptionsExt, HttpClient, HttpError, HttpRequest,
@@ -41,7 +41,7 @@ use base64::prelude::{BASE64_STANDARD, BASE64_STANDARD_NO_PAD};
 use bytes::{Buf, Bytes};
 use chrono::{DateTime, Utc};
 use http::{
-    HeaderName, Method,
+    HeaderName, Method, StatusCode,
     header::{CONTENT_LENGTH, CONTENT_TYPE, HeaderMap, HeaderValue, IF_MATCH, IF_NONE_MATCH},
 };
 use rand::RngExt;
@@ -162,6 +162,12 @@ pub(crate) enum Error {
 
     #[error("Generating SAS keys while skipping signatures is not supported")]
     SASwithSkipSignature,
+
+    #[error("Error performing bucket request {}: {}", bucket, source)]
+    BucketRequest {
+        source: crate::client::retry::RetryError,
+        bucket: String,
+    },
 }
 
 impl From<Error> for crate::Error {
@@ -170,6 +176,7 @@ impl From<Error> for crate::Error {
             Error::GetRequest { source, path } | Error::PutRequest { source, path } => {
                 source.error(STORE, path)
             }
+            Error::BucketRequest { source, bucket } => source.error(STORE, bucket),
             _ => Self::Generic {
                 store: STORE,
                 source: Box::new(err),
@@ -1137,6 +1144,72 @@ impl AzureClient {
         })
     }
 
+    /// Make an Azure Create Container request <https://learn.microsoft.com/en-us/rest/api/storageservices/create-container>
+    pub(crate) async fn create_container(&self) -> Result<()> {
+        self.container_request(Method::PUT)
+            .await?
+            .send()
+            .await
+            .map_err(|source| self.container_error(source))?;
+        Ok(())
+    }
+
+    /// Make an Azure Delete Container request <https://learn.microsoft.com/en-us/rest/api/storageservices/delete-container>
+    pub(crate) async fn delete_container(&self) -> Result<()> {
+        match self.container_request(Method::DELETE).await?.send().await {
+            Ok(_) => Ok(()),
+            // A conflict means the container is being deleted, not that it already exists
+            Err(source) if source.status() == Some(StatusCode::CONFLICT) => {
+                Err(crate::Error::Generic {
+                    store: STORE,
+                    source: Box::new(self.container_error(source)),
+                })
+            }
+            Err(source) => Err(self.container_error(source).into()),
+        }
+    }
+
+    /// Make an Azure Get Container Properties request <https://learn.microsoft.com/en-us/rest/api/storageservices/get-container-properties>
+    pub(crate) async fn container_exists(&self) -> Result<bool> {
+        let request = self.container_request(Method::HEAD).await?;
+        match request.idempotent(true).send().await {
+            Ok(_) => Ok(true),
+            Err(source) if source.status() == Some(StatusCode::NOT_FOUND) => Ok(false),
+            Err(source) => Err(self.container_error(source).into()),
+        }
+    }
+
+    /// Sign a request addressed to the container itself rather than to a blob in it
+    async fn container_request(&self, method: Method) -> Result<RetryableRequestBuilder> {
+        // `path_segments_mut` drops these segments, so the request would address the account
+        if matches!(self.config.container.as_str(), "" | "." | "..") {
+            return Err(crate::Error::Generic {
+                store: STORE,
+                source: format!("invalid container name {:?}", self.config.container).into(),
+            });
+        }
+        let credential = self.get_credential().await?;
+        let url = self.config.path_url(&Path::default());
+        let sensitive = self.config.is_sensitive(&credential);
+        // Container operations take no customer-provided key headers
+        Ok(self
+            .client
+            .request(method, url.as_str())
+            .query(&[("restype", "container")])
+            .header(CONTENT_LENGTH, HeaderValue::from_static("0"))
+            .body(Bytes::new())
+            .with_azure_authorization(self.crypto(), &credential, &self.config.account)?
+            .retryable(&self.config.retry_config)
+            .sensitive(sensitive))
+    }
+
+    fn container_error(&self, source: RetryError) -> Error {
+        Error::BucketRequest {
+            source,
+            bucket: self.config.container.clone(),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) async fn get_blob_tagging(&self, path: &Path) -> Result<HttpResponse> {
         let credential = self.get_credential().await?;
@@ -1519,6 +1592,8 @@ mod tests {
     use super::*;
     use crate::ObjectStoreExt;
     use crate::StaticCredentialProvider;
+    use crate::bucket::BucketStore;
+    use crate::client::mock_server::{RecordedRequest, RequestLog};
     use bytes::Bytes;
     use regex::bytes::Regex;
     use reqwest::Client;
@@ -2370,5 +2445,150 @@ Time:2018-06-14T16:46:54.6040685Z</Message></Error>\r
         assert_eq!(paths[2].as_ref(), path);
         assert_eq!("404", code);
         assert_eq!("The specified blob does not exist.", reason);
+    }
+
+    fn container_store_builder(
+        server: &crate::client::mock_server::MockServer,
+    ) -> crate::azure::MicrosoftAzureBuilder {
+        crate::azure::MicrosoftAzureBuilder::new()
+            .with_account("testaccount")
+            .with_container_name("testcontainer")
+            .with_access_key("Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==")
+            .with_allow_http(true)
+            .with_endpoint(server.url().to_string())
+    }
+
+    fn container_store(
+        server: &crate::client::mock_server::MockServer,
+    ) -> crate::azure::MicrosoftAzure {
+        container_store_builder(server).build().unwrap()
+    }
+
+    fn assert_container_request(req: &RecordedRequest, method: Method) {
+        assert_eq!(req.method, method);
+        assert_eq!(req.path, "/testcontainer");
+        assert_eq!(req.query.as_deref(), Some("restype=container"));
+        assert_eq!(req.headers.get(CONTENT_LENGTH).unwrap(), "0");
+        assert!(req.headers.contains_key("authorization"), "{req:?}");
+        assert!(req.body.is_empty(), "{req:?}");
+    }
+
+    #[tokio::test]
+    async fn test_create_container() {
+        let server = crate::client::mock_server::MockServer::new().await;
+        let log = RequestLog::default();
+        server.push_recorded(&log, 201);
+        server.push_recorded(&log, 409);
+
+        let store = container_store(&server);
+        store.create_bucket().await.unwrap();
+        let err = store.create_bucket().await.unwrap_err();
+        assert!(
+            matches!(&err, crate::Error::AlreadyExists { path, .. } if path == "testcontainer"),
+            "{err}"
+        );
+
+        let captured = log.take();
+        assert_eq!(captured.len(), 2);
+        for req in &captured {
+            assert_container_request(req, Method::PUT);
+        }
+
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_container_ops_reject_names_that_address_the_account() {
+        let server = crate::client::mock_server::MockServer::new().await;
+        let log = RequestLog::default();
+        server.push_recorded(&log, 200);
+
+        for name in ["", ".", ".."] {
+            let store = container_store_builder(&server)
+                .with_container_name(name)
+                .build()
+                .unwrap();
+            let results = [
+                store.create_bucket().await,
+                store.delete_bucket().await,
+                store.bucket_exists().await.map(|_| ()),
+            ];
+            for result in results {
+                let err = result.unwrap_err();
+                assert!(
+                    matches!(err, crate::Error::Generic { .. }),
+                    "{name:?}: {err}"
+                );
+            }
+        }
+        assert!(log.take().is_empty());
+
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_container_exists() {
+        let server = crate::client::mock_server::MockServer::new().await;
+        let log = RequestLog::default();
+        for status in [200, 404, 403] {
+            server.push_recorded(&log, status);
+        }
+
+        let store = container_store(&server);
+        assert!(store.bucket_exists().await.unwrap());
+        assert!(!store.bucket_exists().await.unwrap());
+        let err = store.bucket_exists().await.unwrap_err();
+        assert!(
+            matches!(&err, crate::Error::PermissionDenied { path, .. } if path == "testcontainer"),
+            "{err}"
+        );
+
+        let captured = log.take();
+        assert_eq!(captured.len(), 3);
+        for req in &captured {
+            assert_container_request(req, Method::HEAD);
+        }
+
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_delete_container() {
+        let server = crate::client::mock_server::MockServer::new().await;
+        let log = RequestLog::default();
+        for status in [202, 409, 404] {
+            server.push_recorded(&log, status);
+        }
+
+        let store = container_store(&server);
+        store.delete_bucket().await.unwrap();
+        // A container being deleted must not be reported as AlreadyExists
+        let err = store.delete_bucket().await.unwrap_err();
+        assert!(matches!(err, crate::Error::Generic { .. }), "{err}");
+        assert!(err.to_string().contains("testcontainer"), "{err}");
+        let err = store.delete_bucket().await.unwrap_err();
+        assert!(
+            matches!(&err, crate::Error::NotFound { path, .. } if path == "testcontainer"),
+            "{err}"
+        );
+
+        let requests = log.take();
+        assert_eq!(requests.len(), 3);
+        for req in &requests {
+            assert_container_request(req, Method::DELETE);
+        }
+
+        // An encryption key marks requests sensitive, which redacts the container from the URL
+        server.push_recorded(&log, 409);
+        let store = container_store_builder(&server)
+            .with_encryption_key(BASE64_STANDARD.encode([7_u8; 32]))
+            .build()
+            .unwrap();
+        let err = store.delete_bucket().await.unwrap_err();
+        assert!(matches!(err, crate::Error::Generic { .. }), "{err}");
+        assert!(err.to_string().contains("testcontainer"), "{err}");
+        assert_container_request(&log.single(), Method::DELETE);
+
+        server.shutdown().await;
     }
 }

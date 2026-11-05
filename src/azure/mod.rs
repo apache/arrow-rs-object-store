@@ -42,6 +42,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use url::Url;
 
+use crate::bucket::BucketStore;
 use crate::client::get::GetClientExt;
 use crate::client::list::{ListClient, ListClientExt};
 use crate::client::{CredentialProvider, crypto_provider};
@@ -262,6 +263,38 @@ impl Signer for MicrosoftAzure {
             urls.push(url);
         }
         Ok(urls)
+    }
+}
+
+/// Manage the configured container with the [Create Container], [Delete Container] and
+/// [Get Container Properties] APIs; the container plays the role of the bucket.
+///
+/// [Create Container]: https://learn.microsoft.com/en-us/rest/api/storageservices/create-container
+/// [Delete Container]: https://learn.microsoft.com/en-us/rest/api/storageservices/delete-container
+/// [Get Container Properties]: https://learn.microsoft.com/en-us/rest/api/storageservices/get-container-properties
+///
+/// Azure deletes containers asynchronously. After [`BucketStore::delete_bucket`] returns, blob
+/// operations on the container may keep succeeding for up to 30 seconds, and
+/// [`BucketStore::create_bucket`] with the same name returns [`Error::AlreadyExists`]
+/// (`409 ContainerBeingDeleted`) for at least 30 seconds. Until the deletion completes,
+/// [`BucketStore::bucket_exists`] may still return `true`, and another
+/// [`BucketStore::delete_bucket`] may fail with [`Error::Generic`].
+///
+/// A container name that is empty, `.` or `..` would address the storage account rather than a
+/// container, so it is rejected with [`Error::Generic`] without sending a request. Other names
+/// are escaped as a single path segment and validated by the service.
+#[async_trait]
+impl BucketStore for MicrosoftAzure {
+    async fn create_bucket(&self) -> Result<()> {
+        self.client.create_container().await
+    }
+
+    async fn delete_bucket(&self) -> Result<()> {
+        self.client.delete_container().await
+    }
+
+    async fn bucket_exists(&self) -> Result<bool> {
+        self.client.container_exists().await
     }
 }
 
@@ -617,6 +650,22 @@ mod tests {
 
         encrypted.delete(&copy_path).await.unwrap();
         encrypted.delete(&path).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn azure_test_bucket_lifecycle() {
+        maybe_skip_integration!();
+        let store = MicrosoftAzureBuilder::from_env()
+            .with_container_name(unique_bucket_name())
+            .build()
+            .unwrap();
+        let opts = BucketLifecycle {
+            non_empty_delete_fails: false,
+            non_empty_delete_may_be_precondition: false,
+            recreate_may_succeed: false,
+            verify_after_delete: store.client.config().is_emulator,
+        };
+        bucket_lifecycle(&store, opts).await;
     }
 
     #[tokio::test]

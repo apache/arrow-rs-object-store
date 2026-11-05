@@ -124,6 +124,8 @@ pub struct GoogleCloudStorageBuilder {
     signing_credentials: Option<GcpSigningCredentialProvider>,
     /// The [`HttpConnector`] to use
     http_connector: Option<Arc<dyn HttpConnector>>,
+    /// Project ID used when creating buckets
+    project_id: Option<String>,
 }
 
 /// Configuration keys for [`GoogleCloudStorageBuilder`]
@@ -201,6 +203,15 @@ pub enum GoogleConfigKey {
     /// - `skip_signature`
     SkipSignature,
 
+    /// Google Cloud project ID, used when creating buckets
+    ///
+    /// See [`GoogleCloudStorageBuilder::with_project_id`] for details.
+    ///
+    /// Supported keys:
+    /// - `google_project_id`
+    /// - `project_id`
+    ProjectId,
+
     /// Client options
     Client(ClientConfigKey),
 }
@@ -215,6 +226,7 @@ impl AsRef<str> for GoogleConfigKey {
             Self::ApplicationCredentials => "google_application_credentials",
             Self::BearerToken => "google_bearer_token",
             Self::SkipSignature => "google_skip_signature",
+            Self::ProjectId => "google_project_id",
             Self::Client(key) => key.as_ref(),
         }
     }
@@ -237,6 +249,7 @@ impl FromStr for GoogleConfigKey {
             }
             "google_bearer_token" | "bearer_token" => Ok(Self::BearerToken),
             "google_skip_signature" | "skip_signature" => Ok(Self::SkipSignature),
+            "google_project_id" | "project_id" => Ok(Self::ProjectId),
             _ => match s.strip_prefix("google_").unwrap_or(s).parse() {
                 Ok(key) => Ok(Self::Client(key)),
                 Err(_) => Err(Error::UnknownConfigurationKey { key: s.into() }.into()),
@@ -262,6 +275,7 @@ impl Default for GoogleCloudStorageBuilder {
             skip_signature: Default::default(),
             signing_credentials: None,
             http_connector: None,
+            project_id: None,
         }
     }
 }
@@ -281,6 +295,8 @@ impl GoogleCloudStorageBuilder {
     /// * GOOGLE_SERVICE_ACCOUNT_KEY: JSON serialized service account key
     /// * GOOGLE_BUCKET: bucket name
     /// * GOOGLE_BUCKET_NAME: (alias) bucket name
+    /// * GOOGLE_PROJECT_ID: project ID used when creating buckets
+    /// * GOOGLE_CLOUD_PROJECT: fallback project ID, used when GOOGLE_PROJECT_ID is not set
     ///
     /// # Example
     /// ```
@@ -305,6 +321,11 @@ impl GoogleCloudStorageBuilder {
                     }
                 }
             }
+        }
+
+        // Only a fallback, so an explicit GOOGLE_PROJECT_ID wins whatever the environment order
+        if builder.project_id.as_deref().is_none_or(str::is_empty) {
+            builder.project_id = std::env::var("GOOGLE_CLOUD_PROJECT").ok();
         }
 
         builder
@@ -343,6 +364,7 @@ impl GoogleCloudStorageBuilder {
             }
             GoogleConfigKey::BearerToken => self = self.with_bearer_token(value),
             GoogleConfigKey::SkipSignature => self.skip_signature.parse(value),
+            GoogleConfigKey::ProjectId => self.project_id = Some(value.into()),
             GoogleConfigKey::Client(key) => {
                 self.client_options = self.client_options.with_config(key, value)
             }
@@ -370,6 +392,7 @@ impl GoogleCloudStorageBuilder {
             GoogleConfigKey::ApplicationCredentials => self.application_credentials_path.clone(),
             GoogleConfigKey::BearerToken => self.bearer_token.clone(),
             GoogleConfigKey::SkipSignature => Some(self.skip_signature.to_string()),
+            GoogleConfigKey::ProjectId => self.project_id.clone(),
             GoogleConfigKey::Client(key) => self.client_options.get_config_value(key),
         }
     }
@@ -401,6 +424,19 @@ impl GoogleCloudStorageBuilder {
     /// Set the bucket name (required)
     pub fn with_bucket_name(mut self, bucket_name: impl Into<String>) -> Self {
         self.bucket_name = Some(bucket_name.into());
+        self
+    }
+
+    /// Set the Google Cloud project that owns buckets created by
+    /// [`BucketStore::create_bucket`](crate::bucket::BucketStore::create_bucket).
+    ///
+    /// This overrides a project ID read by [`Self::from_env`] from `GOOGLE_PROJECT_ID` or
+    /// `GOOGLE_CLOUD_PROJECT`. If none is set, or it is empty, the `project_id` of the service
+    /// account key or service-account application default credentials used to authenticate is
+    /// used; a key supplied alongside [`Self::with_credentials`] does not count. It is not needed
+    /// for any other operation.
+    pub fn with_project_id(mut self, project_id: impl Into<String>) -> Self {
+        self.project_id = Some(project_id.into());
         self
     }
 
@@ -570,6 +606,8 @@ impl GoogleCloudStorageBuilder {
                 (Some(_), Some(_)) => return Err(Error::ServiceAccountPathAndKeyProvided.into()),
             };
 
+        let explicit_credentials = self.credentials.is_some();
+
         // Then try to initialize from the application credentials file, or the environment.
         // Only attempt to read ADC if no explicit credentials were provided
         let application_default_credentials =
@@ -670,6 +708,22 @@ impl GoogleCloudStorageBuilder {
             )) as _
         };
 
+        // A key's project only applies when that key is also what authenticates
+        let project_id = self
+            .project_id
+            .filter(|p| !p.is_empty())
+            .or_else(|| {
+                service_account_credentials
+                    .as_ref()
+                    .filter(|_| !explicit_credentials)
+                    .and_then(|c| c.project_id.clone())
+            })
+            .or(match application_default_credentials {
+                Some(ApplicationDefaultCredentials::ServiceAccount(c)) => c.project_id,
+                _ => None,
+            })
+            .filter(|p| !p.is_empty());
+
         let config = GoogleCloudStorageConfig {
             base_url: gcs_base_url,
             credentials,
@@ -679,6 +733,7 @@ impl GoogleCloudStorageBuilder {
             retry_config: self.retry_config,
             client_options: self.client_options,
             skip_signature: self.skip_signature.get()?,
+            project_id,
         };
 
         let http_client = http.connect(&config.client_options)?;
@@ -714,9 +769,11 @@ mod tests {
     fn gcs_test_config_from_map() {
         let google_service_account = "object_store:fake_service_account".to_string();
         let google_bucket_name = "object_store:fake_bucket".to_string();
+        let google_project_id = "object_store:fake_project".to_string();
         let options = HashMap::from([
             ("google_service_account", google_service_account.clone()),
             ("google_bucket_name", google_bucket_name.clone()),
+            ("google_project_id", google_project_id.clone()),
         ]);
 
         let builder = options
@@ -730,6 +787,7 @@ mod tests {
             google_service_account.as_str()
         );
         assert_eq!(builder.bucket_name.unwrap(), google_bucket_name.as_str());
+        assert_eq!(builder.project_id.unwrap(), google_project_id.as_str());
     }
 
     #[tokio::test]
@@ -763,6 +821,13 @@ mod tests {
             let builder =
                 GoogleCloudStorageBuilder::new().with_config(alias.parse().unwrap(), "fake_bucket");
             assert_eq!("fake_bucket", builder.bucket_name.unwrap());
+        }
+
+        // Project ID
+        for alias in ["google_project_id", "project_id"] {
+            let builder = GoogleCloudStorageBuilder::new()
+                .with_config(alias.parse().unwrap(), "fake_project");
+            assert_eq!("fake_project", builder.project_id.unwrap());
         }
 
         for alias in ["google_bearer_token", "bearer_token"] {
@@ -870,10 +935,12 @@ mod tests {
         let google_service_account = "object_store:fake_service_account".to_string();
         let google_bucket_name = "object_store:fake_bucket".to_string();
         let google_bearer_token = "test-token".to_string();
+        let google_project_id = "object_store:fake_project".to_string();
         let builder = GoogleCloudStorageBuilder::new()
             .with_config(GoogleConfigKey::ServiceAccount, &google_service_account)
             .with_config(GoogleConfigKey::Bucket, &google_bucket_name)
-            .with_config(GoogleConfigKey::BearerToken, &google_bearer_token);
+            .with_config(GoogleConfigKey::BearerToken, &google_bearer_token)
+            .with_config(GoogleConfigKey::ProjectId, &google_project_id);
 
         assert_eq!(
             builder
@@ -891,6 +958,60 @@ mod tests {
                 .unwrap(),
             google_bearer_token
         );
+        assert_eq!(
+            builder
+                .get_config_value(&GoogleConfigKey::ProjectId)
+                .unwrap(),
+            google_project_id
+        );
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[test]
+    fn gcs_test_project_id_from_service_account_key() {
+        let key = r#"{"private_key": "", "private_key_id": "", "client_email": "", "disable_oauth": true, "project_id": "from-key"}"#;
+
+        let from_key = GoogleCloudStorageBuilder::new()
+            .with_bucket_name("foo")
+            .with_service_account_key(key)
+            .build()
+            .unwrap();
+        assert_eq!(
+            from_key.client.config().project_id.as_deref(),
+            Some("from-key")
+        );
+
+        let explicit = GoogleCloudStorageBuilder::new()
+            .with_bucket_name("foo")
+            .with_service_account_key(key)
+            .with_project_id("explicit")
+            .build()
+            .unwrap();
+        assert_eq!(
+            explicit.client.config().project_id.as_deref(),
+            Some("explicit")
+        );
+
+        let empty = GoogleCloudStorageBuilder::new()
+            .with_bucket_name("foo")
+            .with_service_account_key(key)
+            .with_project_id("")
+            .build()
+            .unwrap();
+        assert_eq!(
+            empty.client.config().project_id.as_deref(),
+            Some("from-key")
+        );
+
+        let other_credentials = GoogleCloudStorageBuilder::new()
+            .with_bucket_name("foo")
+            .with_service_account_key(key)
+            .with_credentials(Arc::new(StaticCredentialProvider::new(GcpCredential {
+                bearer: "custom-token".to_string(),
+            })))
+            .build()
+            .unwrap();
+        assert_eq!(other_credentials.client.config().project_id, None);
     }
 
     #[test]
