@@ -922,6 +922,7 @@ impl GetClient for S3Client {
     const HEADER_CONFIG: HeaderConfig = HeaderConfig {
         etag_required: false,
         last_modified_required: false,
+        stored_size_header: None,
         version_header: Some(VERSION_HEADER),
         user_defined_metadata_prefix: Some(USER_DEFINED_METADATA_HEADER_PREFIX),
     };

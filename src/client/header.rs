@@ -36,6 +36,14 @@ pub(crate) struct HeaderConfig {
     /// Defaults to `true`
     pub last_modified_required: bool,
 
+    /// Header to read the object size from when `Content-Length` is absent.
+    ///
+    /// GCS omits `Content-Length` on chunked `Content-Encoding: gzip` responses — large
+    /// bodies, or decompressive transcoding — but always sends `x-goog-stored-content-length`.
+    /// Stores that always send a `Content-Length` (S3, Azure) leave this `None`, so a missing
+    /// `Content-Length` stays an error for them.
+    pub stored_size_header: Option<&'static str>,
+
     /// The version header name if any
     pub version_header: Option<&'static str>,
 
@@ -139,8 +147,12 @@ pub(crate) fn header_meta(
         Err(e) => return Err(e),
     };
 
+    // Prefer `Content-Length`, falling back to a store-provided size header: GCS omits
+    // `Content-Length` on chunked gzip responses (large bodies, or transcoding) but always
+    // sends `x-goog-stored-content-length`. Stores without such a header still require it.
     let content_length = headers
         .get(CONTENT_LENGTH)
+        .or_else(|| cfg.stored_size_header.and_then(|h| headers.get(h)))
         .ok_or(Error::MissingContentLength)?;
 
     let content_length = content_length

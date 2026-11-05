@@ -445,6 +445,7 @@ mod tests {
     const CFG: HeaderConfig = HeaderConfig {
         etag_required: false,
         last_modified_required: false,
+        stored_size_header: None,
         version_header: None,
         user_defined_metadata_prefix: Some("x-test-meta-"),
     };
@@ -505,6 +506,54 @@ mod tests {
         let resp = make_response(6, StatusCode::PARTIAL_CONTENT, Some("bytes 2-3/6"), None);
         let err = get_range_meta(CFG, &path, Some(&GetRange::Suffix(4)), &resp).unwrap_err();
         assert_eq!(err.to_string(), "Requested 2..6, got 2..4");
+    }
+
+    #[test]
+    fn test_get_missing_content_length() {
+        // Mirrors the GCS config: size falls back to x-goog-stored-content-length.
+        const RELAXED: HeaderConfig = HeaderConfig {
+            stored_size_header: Some("x-goog-stored-content-length"),
+            ..CFG
+        };
+        let path = Path::from("test");
+
+        let resp = |headers: &[(&str, &str)]| {
+            let mut builder = http::Response::builder().status(StatusCode::OK);
+            for (k, v) in headers {
+                builder = builder.header(*k, *v);
+            }
+            builder.body(()).unwrap().into_parts().0
+        };
+
+        // No Content-Length, stored-size header present -> best-effort size from fallback.
+        let r = resp(&[("x-goog-stored-content-length", "355")]);
+        let (range, meta) = get_range_meta(RELAXED, &path, None, &r).unwrap();
+        assert_eq!(meta.size, 355);
+        assert_eq!(range, 0..355);
+
+        // No Content-Length and the stored-size header also absent -> still an error.
+        let r = resp(&[]);
+        let err = get_range_meta(RELAXED, &path, None, &r).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Content-Length Header missing from response"
+        );
+
+        // A present Content-Length always wins over the fallback.
+        let r = resp(&[
+            ("content-length", "10"),
+            ("x-goog-stored-content-length", "355"),
+        ]);
+        let (_, meta) = get_range_meta(RELAXED, &path, None, &r).unwrap();
+        assert_eq!(meta.size, 10);
+
+        // With the strict default (S3/Azure), a missing Content-Length is still fatal.
+        let r = resp(&[]);
+        let err = get_range_meta(CFG, &path, None, &r).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Content-Length Header missing from response"
+        );
     }
 
     #[test]
