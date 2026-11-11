@@ -271,41 +271,49 @@ impl ObjectStore for AmazonS3 {
                     r => r,
                 }
             }
-            (PutMode::Update(v), put) => {
+            (PutMode::Create, S3ConditionalPut::Header(k, v)) => {
+                request
+                    .header(k, v)
+                    .do_put_with_already_exists_status(Some(StatusCode::PRECONDITION_FAILED))
+                    .await
+            }
+            (PutMode::Create, S3ConditionalPut::HeaderWithStatus(k, v, status)) => {
+                request
+                    .header(k, v)
+                    .do_put_with_already_exists_status(Some(*status))
+                    .await
+            }
+            (PutMode::Update(v), S3ConditionalPut::ETagMatch) => {
                 let etag = v.e_tag.ok_or_else(|| Error::Generic {
                     store: STORE,
                     source: "ETag required for conditional put".to_string().into(),
                 })?;
-                match put {
-                    S3ConditionalPut::ETagMatch => {
-                        match request
-                            .header(&IF_MATCH, etag.as_str())
-                            // Real S3 will occasionally report 409 Conflict
-                            // if there are concurrent `If-Match` requests
-                            // in flight, so we need to be prepared to retry
-                            // 409 responses.
-                            .retry_on_conflict(true)
-                            .do_put()
-                            .await
-                        {
-                            // Real S3 reports NotFound rather than PreconditionFailed when the
-                            // object doesn't exist. Convert to PreconditionFailed for
-                            // consistency with R2. This also matches what the HTTP spec
-                            // says the behavior should be.
-                            Err(Error::NotFound { path, source }) => {
-                                Err(Error::Precondition { path, source })
-                            }
-                            r => r,
-                        }
+                match request
+                    .header(&IF_MATCH, etag.as_str())
+                    // Real S3 will occasionally report 409 Conflict
+                    // if there are concurrent `If-Match` requests
+                    // in flight, so we need to be prepared to retry
+                    // 409 responses.
+                    .retry_on_conflict(true)
+                    .do_put()
+                    .await
+                {
+                    // Real S3 reports NotFound rather than PreconditionFailed when the
+                    // object doesn't exist. Convert to PreconditionFailed for
+                    // consistency with R2. This also matches what the HTTP spec
+                    // says the behavior should be.
+                    Err(Error::NotFound { path, source }) => {
+                        Err(Error::Precondition { path, source })
                     }
-                    S3ConditionalPut::Disabled => Err(Error::NotImplemented {
-                        operation:
-                            "`put_opts` with mode `PutMode::Update` when conditional put is disabled"
-                                .into(),
-                        implementer: self.to_string(),
-                    }),
+                    r => r,
                 }
             }
+            (PutMode::Update(_), put) => Err(Error::NotImplemented {
+                operation: format!(
+                    "`put_opts` with mode `PutMode::Update` with conditional put configuration `{put}`"
+                ),
+                implementer: self.to_string(),
+            }),
         }
     }
 
@@ -757,6 +765,190 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     const NON_EXISTENT_NAME: &str = "nonexistentname";
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn conditional_put_etag() {
+        let mock = MockServer::new().await;
+        let store = AmazonS3Builder::new()
+            .with_endpoint(mock.url())
+            .with_bucket_name("test-bucket")
+            .with_region("us-east-1")
+            .with_allow_http(true)
+            .with_skip_signature(true)
+            .build()
+            .unwrap();
+        let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+        for status in [
+            StatusCode::OK,
+            StatusCode::NOT_MODIFIED,
+            StatusCode::PRECONDITION_FAILED,
+            StatusCode::OK,
+            StatusCode::NOT_FOUND,
+        ] {
+            let captured = Arc::clone(&captured);
+            mock.push_fn(move |request| {
+                captured.lock().unwrap().push(request.headers().clone());
+                Response::builder()
+                    .status(status)
+                    .header(ETAG, "test-etag")
+                    .body(String::new())
+                    .unwrap()
+            });
+        }
+
+        let path = Path::from("test-object");
+        let result = store
+            .put_opts(&path, "first".into(), PutMode::Create.into())
+            .await
+            .unwrap();
+        for _ in 0..2 {
+            let error = store
+                .put_opts(&path, "second".into(), PutMode::Create.into())
+                .await
+                .unwrap_err();
+            assert!(matches!(error, Error::AlreadyExists { .. }), "{error}");
+        }
+
+        let mode = PutMode::Update(result.into());
+        store
+            .put_opts(&path, "update".into(), mode.clone().into())
+            .await
+            .unwrap();
+        let error = store
+            .put_opts(&path, "missing".into(), mode.into())
+            .await
+            .unwrap_err();
+        assert!(matches!(error, Error::Precondition { .. }), "{error}");
+
+        let requests = captured.lock().unwrap().clone();
+        assert_eq!(requests.len(), 5);
+        for (i, headers) in requests.iter().enumerate() {
+            if i < 3 {
+                assert_eq!(headers[IF_NONE_MATCH], "*");
+                assert!(!headers.contains_key(IF_MATCH));
+            } else {
+                assert_eq!(headers[IF_MATCH], "test-etag");
+                assert!(!headers.contains_key(IF_NONE_MATCH));
+            }
+        }
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn conditional_put_header() {
+        for (config, status) in [
+            (
+                "header: x-oss-forbid-overwrite: true",
+                StatusCode::PRECONDITION_FAILED,
+            ),
+            (
+                "header-with-status: x-oss-forbid-overwrite: true: 409",
+                StatusCode::CONFLICT,
+            ),
+            (
+                "header-with-status: x-oss-forbid-overwrite: true: 403",
+                StatusCode::FORBIDDEN,
+            ),
+        ] {
+            let mock = MockServer::new().await;
+            let store = AmazonS3Builder::new()
+                .with_endpoint(mock.url())
+                .with_bucket_name("test-bucket")
+                .with_region("us-east-1")
+                .with_allow_http(true)
+                .with_skip_signature(true)
+                .with_config(AmazonS3ConfigKey::ConditionalPut, config)
+                .build()
+                .unwrap();
+            let path = Path::from("test-object");
+            let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let other_status = if status == StatusCode::FORBIDDEN {
+                StatusCode::PRECONDITION_FAILED
+            } else {
+                StatusCode::FORBIDDEN
+            };
+
+            for response_status in [StatusCode::OK, status, other_status, StatusCode::OK] {
+                let captured = Arc::clone(&captured);
+                mock.push_fn(move |request| {
+                    captured.lock().unwrap().push((
+                        request.method().clone(),
+                        request.uri().path().to_owned(),
+                        request.headers().clone(),
+                    ));
+                    Response::builder()
+                        .status(response_status)
+                        .header(ETAG, "test-etag")
+                        .header("x-amz-version-id", "test-version")
+                        .body(String::new())
+                        .unwrap()
+                });
+            }
+
+            let result = store
+                .put_opts(&path, "first".into(), PutMode::Create.into())
+                .await
+                .unwrap();
+            assert_eq!(result.e_tag.as_deref(), Some("test-etag"));
+            assert_eq!(result.version.as_deref(), Some("test-version"));
+
+            let error = store
+                .put_opts(&path, "second".into(), PutMode::Create.into())
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error, Error::AlreadyExists { path: ref p, .. } if p == path.as_ref()),
+                "{config}: {error}"
+            );
+
+            let error = store
+                .put_opts(&path, "third".into(), PutMode::Create.into())
+                .await
+                .unwrap_err();
+            match other_status {
+                StatusCode::FORBIDDEN => {
+                    assert!(matches!(error, Error::PermissionDenied { .. }), "{error}");
+                }
+                StatusCode::PRECONDITION_FAILED => {
+                    assert!(matches!(error, Error::Precondition { .. }), "{error}");
+                }
+                _ => unreachable!(),
+            }
+
+            store.put(&path, "overwrite".into()).await.unwrap();
+
+            for version in [
+                result.into(),
+                crate::UpdateVersion {
+                    e_tag: None,
+                    version: None,
+                },
+            ] {
+                let error = store
+                    .put_opts(&path, "update".into(), PutMode::Update(version).into())
+                    .await
+                    .unwrap_err();
+                assert!(matches!(error, Error::NotImplemented { .. }), "{error}");
+            }
+
+            let requests = captured.lock().unwrap().clone();
+            assert_eq!(requests.len(), 4);
+            for (i, (method, path, headers)) in requests.iter().enumerate() {
+                assert_eq!(method, Method::PUT);
+                assert_eq!(path, "/test-bucket/test-object");
+                assert!(!headers.contains_key(IF_MATCH));
+                assert!(!headers.contains_key(IF_NONE_MATCH));
+                if i < 3 {
+                    assert_eq!(headers["x-oss-forbid-overwrite"], "true");
+                } else {
+                    assert!(!headers.contains_key("x-oss-forbid-overwrite"));
+                }
+            }
+            mock.shutdown().await;
+        }
+    }
 
     /// Presigned-URL tests run against a dedicated bucket so their concurrent writes cannot
     /// contaminate the shared `test-bucket`, whose exact contents `s3_test` asserts.
@@ -1582,7 +1774,11 @@ mod tests {
             copy_if_not_exists(&integration).await;
         }
         if test_conditional_put {
-            put_opts(&integration, true).await;
+            put_opts(
+                &integration,
+                config.conditional_put == S3ConditionalPut::ETagMatch,
+            )
+            .await;
         }
 
         // run integration test with unsigned payload enabled

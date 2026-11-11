@@ -50,7 +50,7 @@ use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH,
     CONTENT_TYPE,
 };
-use http::{HeaderMap, HeaderName, Method};
+use http::{HeaderMap, HeaderName, Method, StatusCode};
 use itertools::Itertools;
 use md5::{Digest, Md5};
 use percent_encoding::{PercentEncode, utf8_percent_encode};
@@ -483,7 +483,24 @@ impl Request<'_> {
     }
 
     pub(crate) async fn do_put(self) -> Result<PutResult> {
-        let response = self.send().await?;
+        self.do_put_with_already_exists_status(None).await
+    }
+
+    pub(crate) async fn do_put_with_already_exists_status(
+        self,
+        status: Option<StatusCode>,
+    ) -> Result<PutResult> {
+        let response = match self.send().await {
+            Err(RequestError::Retry { source, path })
+                if status.is_some() && source.status() == status =>
+            {
+                return Err(crate::Error::AlreadyExists {
+                    path,
+                    source: Box::new(source),
+                });
+            }
+            r => r?,
+        };
         Ok(
             get_put_result(response, VERSION_HEADER)
                 .map_err(|source| Error::Metadata { source })?,
