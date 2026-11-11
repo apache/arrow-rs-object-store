@@ -115,7 +115,6 @@ impl Parse for S3CopyIfNotExists {
 ///
 /// [`AmazonS3`]: super::AmazonS3
 #[derive(Debug, Clone, Eq, PartialEq, Default)]
-#[allow(missing_copy_implementations)]
 #[non_exhaustive]
 pub enum S3ConditionalPut {
     /// Some S3-compatible stores, such as Cloudflare R2 and minio support conditional
@@ -127,6 +126,30 @@ pub enum S3ConditionalPut {
     #[default]
     ETagMatch,
 
+    /// Use a custom header for [`PutMode::Create`].
+    ///
+    /// The store must reject the request with `412 Precondition Failed` if the
+    /// object already exists. This is returned as [`Error::AlreadyExists`].
+    /// [`PutMode::Update`] is not supported with this configuration.
+    ///
+    /// Encoded as `header:<HEADER_NAME>:<HEADER_VALUE>` ignoring whitespace.
+    ///
+    /// [`PutMode::Create`]: crate::PutMode::Create
+    /// [`PutMode::Update`]: crate::PutMode::Update
+    /// [`Error::AlreadyExists`]: crate::Error::AlreadyExists
+    Header(String, String),
+
+    /// The same as [`S3ConditionalPut::Header`], with a custom status code for
+    /// requests rejected because the object already exists.
+    ///
+    /// Encoded as `header-with-status:<HEADER_NAME>:<HEADER_VALUE>:<STATUS>`
+    /// ignoring whitespace.
+    ///
+    /// For Alibaba OSS, use `header-with-status: x-oss-forbid-overwrite: true: 409`.
+    /// OSS ignores this header when bucket versioning is enabled or suspended,
+    /// so this configuration requires a bucket that has never enabled versioning.
+    HeaderWithStatus(String, String, http::StatusCode),
+
     /// Disable `conditional put`
     Disabled,
 }
@@ -135,6 +158,10 @@ impl std::fmt::Display for S3ConditionalPut {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ETagMatch => write!(f, "etag"),
+            Self::Header(k, v) => write!(f, "header: {k}: {v}"),
+            Self::HeaderWithStatus(k, v, code) => {
+                write!(f, "header-with-status: {k}: {v}: {}", code.as_u16())
+            }
             Self::Disabled => write!(f, "disabled"),
         }
     }
@@ -143,8 +170,25 @@ impl std::fmt::Display for S3ConditionalPut {
 impl S3ConditionalPut {
     fn from_str(s: &str) -> Option<Self> {
         match s.trim() {
-            "etag" => Some(Self::ETagMatch),
-            "disabled" => Some(Self::Disabled),
+            "etag" => return Some(Self::ETagMatch),
+            "disabled" => return Some(Self::Disabled),
+            _ => {}
+        }
+
+        let (variant, value) = s.split_once(':')?;
+        match variant.trim() {
+            "header" => {
+                let (k, v) = value.split_once(':')?;
+                Some(Self::Header(k.trim().to_string(), v.trim().to_string()))
+            }
+            "header-with-status" => {
+                let (k, v, status) = value.split(':').collect_tuple()?;
+                Some(Self::HeaderWithStatus(
+                    k.trim().to_string(),
+                    v.trim().to_string(),
+                    status.trim().parse().ok()?,
+                ))
+            }
             _ => None,
         }
     }
@@ -154,14 +198,68 @@ impl Parse for S3ConditionalPut {
     fn parse(v: &str) -> crate::Result<Self> {
         Self::from_str(v).ok_or_else(|| crate::Error::Generic {
             store: "Config",
-            source: format!("Failed to parse \"{v}\" as S3PutConditional").into(),
+            source: format!("Failed to parse \"{v}\" as S3ConditionalPut").into(),
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::S3CopyIfNotExists;
+    use super::{S3ConditionalPut, S3CopyIfNotExists};
+    use crate::config::Parse;
+
+    #[test]
+    fn parse_s3_conditional_put() {
+        for (input, expected) in [
+            (" etag ", S3ConditionalPut::ETagMatch),
+            (" disabled ", S3ConditionalPut::Disabled),
+            (
+                "header:x-oss-forbid-overwrite:true",
+                S3ConditionalPut::Header("x-oss-forbid-overwrite".into(), "true".into()),
+            ),
+            (
+                " header : x-oss-forbid-overwrite : true ",
+                S3ConditionalPut::Header("x-oss-forbid-overwrite".into(), "true".into()),
+            ),
+            (
+                "header-with-status:x-oss-forbid-overwrite:true:409",
+                S3ConditionalPut::HeaderWithStatus(
+                    "x-oss-forbid-overwrite".into(),
+                    "true".into(),
+                    http::StatusCode::CONFLICT,
+                ),
+            ),
+            (
+                " header-with-status : x-oss-forbid-overwrite : true : 409 ",
+                S3ConditionalPut::HeaderWithStatus(
+                    "x-oss-forbid-overwrite".into(),
+                    "true".into(),
+                    http::StatusCode::CONFLICT,
+                ),
+            ),
+        ] {
+            let parsed = S3ConditionalPut::parse(input).unwrap();
+            assert_eq!(parsed, expected);
+            assert_eq!(
+                S3ConditionalPut::parse(&parsed.to_string()).unwrap(),
+                expected
+            );
+        }
+
+        for input in [
+            "",
+            "unknown",
+            "header",
+            "header:key",
+            "header-with-status:key:value",
+            "header-with-status:key:value:invalid",
+            "header-with-status:key:value:99",
+            "header-with-status:key:value:1000",
+            "header-with-status:key:value:409:extra",
+        ] {
+            assert!(S3ConditionalPut::parse(input).is_err(), "{input}");
+        }
+    }
 
     #[test]
     fn parse_s3_copy_if_not_exists_header() {
