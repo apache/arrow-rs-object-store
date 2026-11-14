@@ -1,0 +1,3 @@
+[submodule ".kiro/global-steering"]
+	path = .kiro/global-steering
+	url = https://github.com/servicecute/global-steering.git
