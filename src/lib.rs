@@ -814,6 +814,31 @@ pub type MultipartId = String;
 /// If a store implements [`Clone`], that will only clone the handle to the underlying data. It will NOT clone/fork the
 /// actual key-value data. Hence, the cloned instance and the original instance share the same state.
 ///
+/// # Downcasting
+/// [`Any`] is a supertrait of [`ObjectStore`] so that users can recover the concrete
+/// store behind a `dyn ObjectStore`. This requires nothing from implementors: the
+/// trait already requires `'static`, and [`Any`] is blanket implemented for every
+/// `'static` type.
+///
+/// ```
+/// # use std::any::TypeId;
+/// # use std::sync::Arc;
+/// # use object_store::{ObjectStore, memory::InMemory};
+/// let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+/// assert_eq!(store.as_ref().type_id(), TypeId::of::<InMemory>());
+/// ```
+///
+/// Recovering the concrete type additionally requires a trait object upcast, which
+/// is only available on Rust 1.86 and later (this crate's MSRV is 1.85):
+///
+/// ```ignore
+/// let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+/// let any: Arc<dyn Any + Send + Sync> = store; // requires Rust >= 1.86
+/// let store: Arc<InMemory> = any.downcast().unwrap();
+/// ```
+///
+/// [`Any`]: std::any::Any
+///
 /// # Minimal Default Implementations
 /// There are only a few default implementations for methods in this trait by
 /// design. This was different from versions prior to `0.13.0`, which had many
@@ -918,7 +943,7 @@ pub type MultipartId = String;
 /// ```
 ///
 #[async_trait]
-pub trait ObjectStore: std::fmt::Display + Send + Sync + Debug + 'static {
+pub trait ObjectStore: std::any::Any + std::fmt::Display + Send + Sync + Debug + 'static {
     /// Save the provided `payload` to `location` with the given options
     ///
     /// The operation is guaranteed to be atomic, it will either successfully
@@ -2691,5 +2716,23 @@ mod tests {
         takes_generic_object_store(store);
         let store = Box::new(memory::InMemory::new());
         takes_generic_object_store(store);
+    }
+
+    /// `Any` is a supertrait of `ObjectStore` so downstream crates can recover the
+    /// concrete store behind a `dyn ObjectStore`. Guards against the supertrait
+    /// being dropped.
+    ///
+    /// This only asserts `Any::type_id` because the upcast to `dyn Any` needed for
+    /// `downcast` requires Rust 1.86, above this crate's MSRV.
+    #[test]
+    fn test_dyn_impl_is_any() {
+        use std::any::TypeId;
+
+        let store: Arc<dyn ObjectStore> = Arc::new(memory::InMemory::new());
+        assert_eq!(
+            store.as_ref().type_id(),
+            TypeId::of::<memory::InMemory>(),
+            "type_id of dyn ObjectStore must resolve to the concrete store"
+        );
     }
 }
