@@ -141,13 +141,20 @@ pub struct ErrorResponse<'a> {
 
 impl<'a> ErrorResponse<'a> {
     pub(crate) fn new(status: StatusCode, headers: &'a HeaderMap, body: &'a str) -> Self {
+        let body = if body.len() <= 16 * 1024 {
+            body
+        } else {
+            let mut end = 16 * 1024;
+            while !body.is_char_boundary(end) {
+                end -= 1;
+            }
+            &body[..end]
+        };
+
         Self {
             status,
             headers,
-            body: body
-                .char_indices()
-                .nth(16 * 1024)
-                .map_or(body, |(index, _)| &body[..index]),
+            body,
         }
     }
 

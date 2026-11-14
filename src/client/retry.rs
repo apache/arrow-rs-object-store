@@ -166,6 +166,7 @@ impl RetryError {
         self.0.metadata.as_ref()
     }
 
+    /// Convert this request error into the corresponding object-store error.
     pub fn error(self, store: &'static str, path: String) -> crate::Error {
         match self.status() {
             Some(StatusCode::NOT_FOUND) => crate::Error::NotFound {
@@ -578,8 +579,8 @@ mod tests {
     use crate::client::mock_server::MockServer;
     use crate::client::retry::{RequestError, RetryContext, RetryExt, body_contains_error};
     use crate::client::{
-        ErrorMetadataHook, HttpClient, HttpError, HttpErrorKind, HttpRequest, HttpResponse,
-        HttpService,
+        ErrorMetadataHook, ErrorResponse, HttpClient, HttpError, HttpErrorKind, HttpRequest,
+        HttpResponse, HttpService,
     };
     use async_trait::async_trait;
     use http::Method;
@@ -683,6 +684,17 @@ mod tests {
         assert_eq!(metadata.retry_after(), Some(Duration::from_secs(17)));
         assert!(format!("{metadata:?}").len() < 1024);
         assert!(error.body().unwrap().len() > 16 * 1024);
+    }
+
+    #[test]
+    fn error_response_body_is_bounded_in_bytes() {
+        let body = "🙂".repeat(20 * 1024);
+        let headers = http::HeaderMap::new();
+        let response = ErrorResponse::new(StatusCode::BAD_REQUEST, &headers, &body);
+
+        assert_eq!(response.body().len(), 16 * 1024);
+        assert!(response.body().is_char_boundary(response.body().len()));
+        assert_eq!(response.body().chars().count(), 4 * 1024);
     }
 
     #[test]

@@ -18,9 +18,11 @@
 #![cfg(all(feature = "aws", feature = "azure", feature = "gcp", feature = "http"))]
 
 use async_trait::async_trait;
-use object_store::ClientOptions;
 use object_store::client::{
     HttpClient, HttpConnector, HttpError, HttpErrorKind, HttpRequest, HttpResponse, HttpService,
+};
+use object_store::{
+    ClientOptions, ErrorMetadata, ErrorMetadataHook, ErrorResponse, RetryConfig, RetryError,
 };
 use std::error::Error;
 use std::sync::{
@@ -51,6 +53,7 @@ impl HttpService for NoNetwork {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(http::Response::builder()
             .status(400)
+            .header("x-request-id", "request-123")
             .body(String::from("test transport").into())
             .unwrap())
     }
@@ -66,6 +69,56 @@ mod requests {
     use super::*;
     use futures_util::TryStreamExt;
     use object_store::{Attribute, Attributes, ObjectStore, ObjectStoreExt, PutOptions};
+
+    #[derive(Debug, Clone)]
+    struct MetadataHook(Arc<AtomicUsize>);
+
+    impl ErrorMetadataHook for MetadataHook {
+        fn extract(&self, response: &ErrorResponse<'_>) -> Option<ErrorMetadata> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Some(response.metadata())
+        }
+    }
+
+    #[tokio::test]
+    async fn metadata_hook_propagates_through_public_builder() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let extractions = Arc::new(AtomicUsize::new(0));
+        let store = object_store::http::HttpBuilder::new()
+            .with_url("http://bucket.example.invalid")
+            .with_client_options(
+                ClientOptions::new()
+                    .with_allow_http(true)
+                    .with_error_metadata_hook(MetadataHook(Arc::clone(&extractions))),
+            )
+            .with_retry(RetryConfig {
+                max_retries: 0,
+                ..Default::default()
+            })
+            .with_http_connector(NoNetwork(calls))
+            .build()
+            .unwrap();
+
+        let error = store.get(&"key".into()).await.unwrap_err();
+        let retry_error = find_error::<RetryError>(&error).expect("RetryError missing");
+        let metadata = retry_error.metadata().expect("metadata missing");
+        assert_eq!(metadata.status(), http::StatusCode::BAD_REQUEST);
+        assert_eq!(metadata.request_id(), Some("request-123"));
+        assert_eq!(extractions.load(Ordering::SeqCst), 1);
+
+        let default_store = object_store::http::HttpBuilder::new()
+            .with_url("http://bucket.example.invalid")
+            .with_client_options(ClientOptions::new().with_allow_http(true))
+            .with_retry(RetryConfig {
+                max_retries: 0,
+                ..Default::default()
+            })
+            .with_http_connector(NoNetwork(Arc::new(AtomicUsize::new(0))))
+            .build()
+            .unwrap();
+        let _ = default_store.get(&"key".into()).await;
+        assert_eq!(extractions.load(Ordering::SeqCst), 1);
+    }
 
     fn build_store(
         provider: &str,
