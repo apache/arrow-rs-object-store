@@ -234,8 +234,9 @@ fn close_handle(handle: std::os::windows::io::RawHandle) -> std::result::Result<
 ///
 /// # Cross-Filesystem Copy
 ///
-/// [`LocalFileSystem::copy_opts`] is implemented using [`std::fs::hard_link`], and therefore
-/// does not support copying across filesystem boundaries.
+/// On platforms that support hard links, [`LocalFileSystem::copy_opts`] uses
+/// [`std::fs::hard_link`] and cannot copy across filesystem boundaries. Android uses a staged
+/// byte copy because app storage rejects hard links.
 ///
 #[derive(Clone, Debug)]
 pub struct LocalFileSystem {
@@ -244,6 +245,7 @@ pub struct LocalFileSystem {
     automatic_cleanup: bool,
     // if true, fsync written files and their parent directories after writes
     fsync: bool,
+    use_hard_links: bool,
 }
 
 #[derive(Debug)]
@@ -272,6 +274,7 @@ impl LocalFileSystem {
             }),
             automatic_cleanup: false,
             fsync: false,
+            use_hard_links: !cfg!(target_os = "android"),
         }
     }
 
@@ -291,6 +294,7 @@ impl LocalFileSystem {
             }),
             automatic_cleanup: false,
             fsync: false,
+            use_hard_links: !cfg!(target_os = "android"),
         })
     }
 
@@ -321,6 +325,12 @@ impl LocalFileSystem {
     /// it is a no-op, as directories cannot be portably opened and synced.
     pub fn with_fsync(mut self, fsync: bool) -> Self {
         self.fsync = fsync;
+        self
+    }
+
+    #[cfg(all(test, target_os = "linux"))]
+    fn without_hard_links(mut self) -> Self {
+        self.use_hard_links = false;
         self
     }
 }
@@ -412,6 +422,7 @@ impl ObjectStore for LocalFileSystem {
 
         let path = self.path_to_filesystem(location)?;
         let fsync = self.fsync;
+        let use_hard_links = self.use_hard_links;
         maybe_spawn_blocking(move || {
             let (mut file, staging_path) = new_staged_upload(&path, fsync)?;
             let mut e_tag = None;
@@ -432,7 +443,8 @@ impl ObjectStore for LocalFileSystem {
                             finish_staged_rename(file, &staging_path, &path, fsync).err()
                         }
                         PutMode::Create => {
-                            finish_staged_hard_link(file, &staging_path, &path, fsync).err()
+                            finish_staged_create(file, &staging_path, &path, fsync, use_hard_links)
+                                .err()
                         }
                         PutMode::Update(_) => unreachable!(),
                     }
@@ -633,23 +645,37 @@ impl ObjectStore for LocalFileSystem {
         let from = self.path_to_filesystem(from)?;
         let to = self.path_to_filesystem(to)?;
         let fsync = self.fsync;
+        let use_hard_links = self.use_hard_links;
 
         match mode {
             CopyMode::Overwrite => {
                 let mut id = 0;
                 // In order to make this atomic we:
                 //
-                // - hard link to a hidden temporary file
+                // - materialize a hidden temporary file
                 // - atomically rename this temporary file into place
                 //
-                // This is necessary because hard_link returns an error if the destination already exists
+                // The temporary path is created without replacing an in-progress copy
                 maybe_spawn_blocking(move || {
                     loop {
                         let staged = staged_upload_path(&to, &id.to_string());
-                        // Stage via a temporary hard link; the source is already durable so the
-                        // staging link itself needs no fsync (the publish rename below fsyncs the
-                        // shared parent directory).
-                        match std::fs::hard_link(&from, &staged) {
+                        // Stage through a unique temporary path; the source is already durable.
+                        // The publish rename below fsyncs the shared parent directory.
+                        let stage_result = if use_hard_links {
+                            std::fs::hard_link(&from, &staged)
+                        } else {
+                            #[cfg(any(target_os = "android", all(test, target_os = "linux")))]
+                            {
+                                copy_to_new_file(&from, &staged, fsync)
+                            }
+                            #[cfg(not(any(
+                                target_os = "android",
+                                all(test, target_os = "linux")
+                            )))]
+                            unreachable!()
+                        };
+
+                        match stage_result {
                             // `rename` bundles in the fsync of `to`'s parent directory.
                             Ok(_) => match rename(&staged, &to, fsync) {
                                 Ok(_) => return Ok(()),
@@ -678,9 +704,23 @@ impl ObjectStore for LocalFileSystem {
             CopyMode::Create => {
                 maybe_spawn_blocking(move || {
                     loop {
-                        // The source is an existing object that is already durable, so no file
-                        // sync is needed; `hard_link` bundles in the fsync of `to`'s parent dir.
-                        match hard_link(&from, &to, fsync) {
+                        // The source is already durable. The selected create-if-absent helper
+                        // bundles in the fsync of `to`'s parent directory.
+                        let create_result = if use_hard_links {
+                            hard_link(&from, &to, fsync)
+                        } else {
+                            #[cfg(any(target_os = "android", all(test, target_os = "linux")))]
+                            {
+                                copy_noreplace(&from, &to, fsync)
+                            }
+                            #[cfg(not(any(
+                                target_os = "android",
+                                all(test, target_os = "linux")
+                            )))]
+                            unreachable!()
+                        };
+
+                        match create_result {
                             Ok(_) => return Ok(()),
                             Err(source) => match source.kind() {
                                 ErrorKind::AlreadyExists => {
@@ -975,6 +1015,70 @@ fn hard_link(original: &std::path::Path, link: &std::path::Path, fsync: bool) ->
     Ok(())
 }
 
+// Linux unit tests exercise the Android fallback in CI.
+#[cfg(any(target_os = "android", all(test, target_os = "linux")))]
+fn rename_noreplace(from: &std::path::Path, to: &std::path::Path, fsync: bool) -> io::Result<()> {
+    use nix::{NixPath, errno::Errno, libc::AT_FDCWD};
+
+    let result = from.with_nix_path(|from| {
+        to.with_nix_path(|to| unsafe {
+            nix::libc::syscall(
+                nix::libc::SYS_renameat2,
+                AT_FDCWD,
+                from.as_ptr(),
+                AT_FDCWD,
+                to.as_ptr(),
+                1_u32, // RENAME_NOREPLACE
+            )
+        })
+    })??;
+    Errno::result(result)
+        .map(drop)
+        .map_err(|error| io::Error::from_raw_os_error(error as i32))?;
+    if fsync {
+        fsync_parent_dir(to)?;
+        if from.parent() != to.parent() {
+            fsync_parent_dir(from)?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "android", all(test, target_os = "linux")))]
+fn copy_to_new_file(from: &std::path::Path, to: &std::path::Path, fsync: bool) -> io::Result<()> {
+    let mut source = File::open(from)?;
+    let mut target = OpenOptions::new().write(true).create_new(true).open(to)?;
+    let result = io::copy(&mut source, &mut target)
+        .and_then(|_| if fsync { target.sync_all() } else { Ok(()) });
+    if let Err(error) = result {
+        drop(target);
+        let _ = std::fs::remove_file(to);
+        return Err(error);
+    }
+    if let Err(error) = close_file(target) {
+        let _ = std::fs::remove_file(to);
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[cfg(any(target_os = "android", all(test, target_os = "linux")))]
+fn copy_noreplace(from: &std::path::Path, to: &std::path::Path, fsync: bool) -> io::Result<()> {
+    let mut id = 0;
+    loop {
+        let staged = staged_upload_path(to, &id.to_string());
+        match copy_to_new_file(from, &staged, fsync) {
+            Ok(()) => {
+                let result = rename_noreplace(&staged, to, fsync);
+                let _ = std::fs::remove_file(staged);
+                return result;
+            }
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => id += 1,
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 /// Durably publishes the freshly-written staging file `file` (located at `src`) to `dest` via a
 /// rename.
 ///
@@ -993,17 +1097,29 @@ fn finish_staged_rename(
     Ok(())
 }
 
-/// Like [`finish_staged_rename`] but publishes via a hard link (`PutMode::Create` semantics): the
-/// staging file is linked to `dest` and then removed. Returns [`Error::AlreadyExists`] if `dest`
+/// Like [`finish_staged_rename`] but publishes with `PutMode::Create` semantics: `dest` is
+/// created atomically only if absent, and the staging file is then removed. Returns [`Error::AlreadyExists`] if `dest`
 /// already exists.
-fn finish_staged_hard_link(
+fn finish_staged_create(
     file: File,
     src: &std::path::Path,
     dest: &std::path::Path,
     fsync: bool,
+    use_hard_links: bool,
 ) -> Result<()> {
     sync_and_close(file, src, fsync)?;
-    match hard_link(src, dest, fsync) {
+    let publish_result = if use_hard_links {
+        hard_link(src, dest, fsync)
+    } else {
+        #[cfg(any(target_os = "android", all(test, target_os = "linux")))]
+        {
+            rename_noreplace(src, dest, fsync)
+        }
+        #[cfg(not(any(target_os = "android", all(test, target_os = "linux"))))]
+        unreachable!()
+    };
+
+    match publish_result {
         Ok(()) => {
             let _ = std::fs::remove_file(src); // Attempt to cleanup
             Ok(())
@@ -1551,6 +1667,20 @@ mod tests {
         copy_if_not_exists(&integration).await;
         copy_rename_nonexistent_object(&integration).await;
         stream_get(&integration).await;
+        put_opts(&integration, false).await;
+    }
+
+    #[tokio::test]
+    #[cfg(target_os = "linux")]
+    async fn file_test_without_hard_links() {
+        let root = TempDir::new().unwrap();
+        let integration = LocalFileSystem::new_with_prefix(root.path())
+            .unwrap()
+            .without_hard_links();
+
+        rename_and_copy(&integration).await;
+        copy_if_not_exists(&integration).await;
+        copy_rename_nonexistent_object(&integration).await;
         put_opts(&integration, false).await;
     }
 
