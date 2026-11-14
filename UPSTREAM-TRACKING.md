@@ -7,6 +7,8 @@ live status there while retaining this file as an offline snapshot.
 
 Last reviewed: 2026-11-14
 
+Reviewed upstream revision: `c216edef0ac3d0d39da5bcdfeed3dcd034e26597`
+
 Upstream: `apache/arrow-rs-object-store`
 
 Fork: `servicecute/arrow-rs-object-store`

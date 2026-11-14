@@ -32,8 +32,9 @@ easy to rebase.
    tracking snapshot and the relevant code documentation.
 6. Run formatting, warnings-denied Clippy, the applicable feature-matrix
    checks, tests, doctests, and security/dependency audits.
-7. Update the tracking issue, snapshot revision, and consumer pins after the
-   sync is reviewed.
+7. Update the snapshot revision and consumer pins after the sync is reviewed.
+   If an upstream-sync umbrella issue exists, update it as well; while issue
+   tracking is disabled, use `UPSTREAM-TRACKING.md` as the canonical tracker.
 
 ## Review gates
 

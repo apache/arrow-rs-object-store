@@ -424,8 +424,9 @@ impl ClientOptions {
     /// Configure an opt-in hook for extracting bounded provider error metadata.
     ///
     /// The hook runs only for terminal HTTP error responses. The response body
-    /// is bounded before it is passed to the hook, and only the returned
-    /// [`ErrorMetadata`] is retained on the resulting [`crate::client::retry::RetryError`].
+    /// view is bounded before it is passed to the hook, and the returned
+    /// [`ErrorMetadata`] does not retain that body. The resulting
+    /// [`crate::client::RetryError`] retains the existing error body separately.
     /// Implementations must not return credentials, response bodies, signed URLs,
     /// or other sensitive values from the hook.
     pub fn with_error_metadata_hook<H>(mut self, hook: H) -> Self
