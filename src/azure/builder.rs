@@ -21,7 +21,10 @@ use crate::azure::credential::{
     ImdsManagedIdentityProvider, WorkloadIdentityOAuthProvider,
 };
 use crate::azure::{AzureCredential, AzureCredentialProvider, MicrosoftAzure, STORE};
-use crate::client::{CryptoProvider, HttpConnector, TokenCredentialProvider, http_connector};
+use crate::client::{
+    CryptoProvider, HttpConnector, TokenCredentialProvider, configure_http_connector,
+    http_connector,
+};
 use crate::config::ConfigValue;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use percent_encoding::percent_decode_str;
@@ -1240,7 +1243,10 @@ impl MicrosoftAzureBuilder {
             Arc::new(StaticCredentialProvider::new(credential))
         };
 
-        let http = http_connector(self.http_connector.take())?;
+        let http = configure_http_connector(
+            http_connector(self.http_connector.take())?,
+            self.client_options.error_metadata_hook(),
+        );
 
         let (is_emulator, storage_url, auth, account) = if self.use_emulator.get()? {
             let account_name = self

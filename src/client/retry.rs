@@ -20,7 +20,9 @@
 use crate::PutPayload;
 use crate::client::backoff::{Backoff, BackoffConfig};
 use crate::client::builder::{HttpRequestBuilder, RequestBuilderError};
-use crate::client::{HttpClient, HttpError, HttpErrorKind, HttpRequest, HttpResponse};
+use crate::client::{
+    ErrorMetadata, ErrorResponse, HttpClient, HttpError, HttpErrorKind, HttpRequest, HttpResponse,
+};
 use futures_util::future::BoxFuture;
 use http::StatusCode;
 use http::header::LOCATION;
@@ -45,6 +47,7 @@ struct RetryErrorImpl {
     elapsed: Duration,
     retry_timeout: Duration,
     inner: RequestError,
+    metadata: Option<ErrorMetadata>,
 }
 
 impl std::fmt::Display for RetryError {
@@ -158,6 +161,12 @@ impl RetryError {
         }
     }
 
+    /// Returns bounded provider metadata extracted by the configured hook.
+    pub fn metadata(&self) -> Option<&ErrorMetadata> {
+        self.0.metadata.as_ref()
+    }
+
+    /// Convert this request error into the corresponding object-store error.
     pub fn error(self, store: &'static str, path: String) -> crate::Error {
         match self.status() {
             Some(StatusCode::NOT_FOUND) => crate::Error::NotFound {
@@ -336,7 +345,12 @@ impl RetryableRequest {
         Self { sensitive, ..self }
     }
 
-    fn err(&self, error: RequestError, ctx: &RetryContext) -> RetryError {
+    fn err(
+        &self,
+        error: RequestError,
+        ctx: &RetryContext,
+        metadata: Option<ErrorMetadata>,
+    ) -> RetryError {
         let request = self.http.as_ref().ok();
         RetryError(Box::new(RetryErrorImpl {
             uri: request.filter(|_| !self.sensitive).map(|r| r.uri().clone()),
@@ -346,7 +360,18 @@ impl RetryableRequest {
             elapsed: ctx.start.elapsed(),
             retry_timeout: ctx.retry_timeout,
             inner: error,
+            metadata,
         }))
+    }
+
+    fn metadata(
+        &self,
+        status: StatusCode,
+        headers: &http::HeaderMap,
+        body: &str,
+    ) -> Option<ErrorMetadata> {
+        let hook = self.client.error_metadata_hook()?;
+        hook.extract(&ErrorResponse::new(status, headers, body))
     }
 
     pub(crate) async fn send(self, ctx: &mut RetryContext) -> Result<HttpResponse> {
@@ -361,6 +386,7 @@ impl RetryableRequest {
                     elapsed: ctx.start.elapsed(),
                     retry_timeout: ctx.retry_timeout,
                     inner: RequestError::Http(error.into()),
+                    metadata: None,
                 })));
             }
         };
@@ -386,7 +412,7 @@ impl RetryableRequest {
                         let (parts, body) = r.into_parts();
                         let body = match body.text().await {
                             Ok(body) => body,
-                            Err(e) => return Err(self.err(RequestError::Http(e), ctx)),
+                            Err(e) => return Err(self.err(RequestError::Http(e), ctx, None)),
                         };
 
                         if !body_contains_error(&body) {
@@ -395,7 +421,12 @@ impl RetryableRequest {
                         } else {
                             // Retry as if this was a 5xx response
                             if ctx.exhausted() {
-                                return Err(self.err(RequestError::Response { body, status }, ctx));
+                                let metadata = self.metadata(status, &parts.headers, &body);
+                                return Err(self.err(
+                                    RequestError::Response { body, status },
+                                    ctx,
+                                    metadata,
+                                ));
                             }
 
                             let sleep = ctx.backoff();
@@ -409,17 +440,24 @@ impl RetryableRequest {
                             tokio::time::sleep(sleep).await;
                         }
                     } else if status == StatusCode::NOT_MODIFIED {
-                        return Err(self.err(RequestError::Status { status, body: None }, ctx));
+                        let metadata = self.metadata(status, r.headers(), "");
+                        return Err(self.err(
+                            RequestError::Status { status, body: None },
+                            ctx,
+                            metadata,
+                        ));
                     } else if status.is_redirection() {
                         let is_bare_redirect = !r.headers().contains_key(LOCATION);
+                        let metadata = self.metadata(status, r.headers(), "");
                         return match is_bare_redirect {
-                            true => Err(self.err(RequestError::BareRedirect, ctx)),
+                            true => Err(self.err(RequestError::BareRedirect, ctx, metadata)),
                             false => Err(self.err(
                                 RequestError::Status {
                                     body: None,
                                     status: r.status(),
                                 },
                                 ctx,
+                                metadata,
                             )),
                         };
                     } else {
@@ -430,14 +468,24 @@ impl RetryableRequest {
                                 || status == StatusCode::REQUEST_TIMEOUT
                                 || (self.retry_on_conflict && status == StatusCode::CONFLICT))
                         {
-                            let source = match r.into_body().text().await {
-                                Ok(body) => RequestError::Status {
-                                    status,
-                                    body: Some(body),
-                                },
-                                Err(e) => RequestError::Http(e),
+                            let headers = r.headers().clone();
+                            let (source, metadata) = match r.into_body().text().await {
+                                Ok(body) => {
+                                    let metadata = self.metadata(status, &headers, &body);
+                                    (
+                                        RequestError::Status {
+                                            status,
+                                            body: Some(body),
+                                        },
+                                        metadata,
+                                    )
+                                }
+                                Err(e) => {
+                                    let metadata = self.metadata(status, &headers, "");
+                                    (RequestError::Http(e), metadata)
+                                }
                             };
-                            return Err(self.err(source, ctx));
+                            return Err(self.err(source, ctx, metadata));
                         };
 
                         let sleep = ctx.backoff();
@@ -463,7 +511,7 @@ impl RetryableRequest {
                     };
 
                     if ctx.exhausted() || !do_retry {
-                        return Err(self.err(RequestError::Http(e), ctx));
+                        return Err(self.err(RequestError::Http(e), ctx, None));
                     }
                     let sleep = ctx.backoff();
                     info!(
@@ -531,7 +579,8 @@ mod tests {
     use crate::client::mock_server::MockServer;
     use crate::client::retry::{RequestError, RetryContext, RetryExt, body_contains_error};
     use crate::client::{
-        HttpClient, HttpError, HttpErrorKind, HttpRequest, HttpResponse, HttpService,
+        ErrorMetadataHook, ErrorResponse, HttpClient, HttpError, HttpErrorKind, HttpRequest,
+        HttpResponse, HttpService,
     };
     use async_trait::async_trait;
     use http::Method;
@@ -583,6 +632,69 @@ mod tests {
             error.inner(),
             RequestError::Http(error) if error.kind() == HttpErrorKind::InvalidRequest
         ));
+    }
+
+    #[derive(Debug)]
+    struct MetadataHook;
+
+    impl ErrorMetadataHook for MetadataHook {
+        fn extract(
+            &self,
+            response: &crate::client::ErrorResponse<'_>,
+        ) -> Option<crate::client::ErrorMetadata> {
+            assert!(response.body().len() <= 16 * 1024);
+            Some(response.metadata().with_provider_code("SlowDown"))
+        }
+    }
+
+    #[derive(Debug)]
+    struct MetadataService;
+
+    #[async_trait]
+    impl HttpService for MetadataService {
+        async fn call(&self, _: HttpRequest) -> Result<HttpResponse, HttpError> {
+            Ok(http::Response::builder()
+                .status(StatusCode::TOO_MANY_REQUESTS)
+                .header("x-request-id", "request-123")
+                .header("retry-after", "17")
+                .body(format!("<Code>SlowDown</Code>{}", "x".repeat(20 * 1024)).into())
+                .unwrap())
+        }
+    }
+
+    #[tokio::test]
+    async fn extracts_bounded_error_metadata() {
+        let client =
+            HttpClient::new(MetadataService).with_error_metadata_hook(Some(Arc::new(MetadataHook)));
+        let config = RetryConfig {
+            max_retries: 0,
+            ..Default::default()
+        };
+
+        let error = client
+            .request(Method::GET, "https://example.invalid/object")
+            .send_retry(&config)
+            .await
+            .unwrap_err();
+
+        let metadata = error.metadata().expect("metadata should be extracted");
+        assert_eq!(metadata.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(metadata.provider_code(), Some("SlowDown"));
+        assert_eq!(metadata.request_id(), Some("request-123"));
+        assert_eq!(metadata.retry_after(), Some(Duration::from_secs(17)));
+        assert!(format!("{metadata:?}").len() < 1024);
+        assert!(error.body().unwrap().len() > 16 * 1024);
+    }
+
+    #[test]
+    fn error_response_body_is_bounded_in_bytes() {
+        let body = "🙂".repeat(20 * 1024);
+        let headers = http::HeaderMap::new();
+        let response = ErrorResponse::new(StatusCode::BAD_REQUEST, &headers, &body);
+
+        assert_eq!(response.body().len(), 16 * 1024);
+        assert!(response.body().is_char_boundary(response.body().len()));
+        assert_eq!(response.body().chars().count(), 4 * 1024);
     }
 
     #[test]

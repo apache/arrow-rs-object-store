@@ -31,6 +31,7 @@ pub use dns::{DnsError, DnsFuture, DnsResolver};
 pub(crate) mod mock_server;
 
 pub(crate) mod retry;
+pub use retry::RetryError;
 
 #[cfg(any(feature = "aws-base", feature = "gcp-base", feature = "azure-base"))]
 pub(crate) mod pagination;
@@ -365,6 +366,7 @@ pub struct ClientOptions {
     http1_only: ConfigValue<bool>,
     http2_only: ConfigValue<bool>,
     randomize_addresses: ConfigValue<bool>,
+    error_metadata_hook: Option<Arc<dyn ErrorMetadataHook>>,
     #[cfg(not(target_arch = "wasm32"))]
     dns_resolver: Option<Arc<dyn DnsResolver>>,
 }
@@ -406,6 +408,7 @@ impl Default for ClientOptions {
             http1_only: true.into(),
             http2_only: Default::default(),
             randomize_addresses: true.into(),
+            error_metadata_hook: None,
             #[cfg(not(target_arch = "wasm32"))]
             dns_resolver: Default::default(),
         }
@@ -416,6 +419,26 @@ impl ClientOptions {
     /// Create a new [`ClientOptions`] with default values
     pub fn new() -> Self {
         Default::default()
+    }
+
+    /// Configure an opt-in hook for extracting bounded provider error metadata.
+    ///
+    /// The hook runs only for terminal HTTP error responses. The response body
+    /// view is bounded before it is passed to the hook, and the returned
+    /// [`ErrorMetadata`] does not retain that body. The resulting
+    /// [`crate::client::RetryError`] retains the existing error body separately.
+    /// Implementations must not return credentials, response bodies, signed URLs,
+    /// or other sensitive values from the hook.
+    pub fn with_error_metadata_hook<H>(mut self, hook: H) -> Self
+    where
+        H: ErrorMetadataHook,
+    {
+        self.error_metadata_hook = Some(Arc::new(hook));
+        self
+    }
+
+    pub(crate) fn error_metadata_hook(&self) -> Option<Arc<dyn ErrorMetadataHook>> {
+        self.error_metadata_hook.clone()
     }
 
     /// Set an option by key

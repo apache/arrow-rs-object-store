@@ -16,7 +16,8 @@
 // under the License.
 
 use crate::client::{
-    CryptoProvider, HttpConnector, TokenCredentialProvider, crypto_provider, http_connector,
+    CryptoProvider, HttpConnector, TokenCredentialProvider, configure_http_connector,
+    crypto_provider, http_connector,
 };
 use crate::config::ConfigValue;
 use crate::gcp::client::{GoogleCloudStorageClient, GoogleCloudStorageConfig};
@@ -553,7 +554,10 @@ impl GoogleCloudStorageBuilder {
         }
 
         let bucket_name = self.bucket_name.ok_or(Error::MissingBucketName {})?;
-        let http = http_connector(self.http_connector)?;
+        let http = configure_http_connector(
+            http_connector(self.http_connector)?,
+            self.client_options.error_metadata_hook(),
+        );
 
         // First try to initialize from the service account information.
         let service_account_credentials =
