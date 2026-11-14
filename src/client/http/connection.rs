@@ -21,15 +21,175 @@ use crate::client::HttpResponseBody;
 use crate::client::builder::{HttpRequestBuilder, RequestBuilderError};
 use crate::client::{HttpRequest, HttpResponse};
 use async_trait::async_trait;
-use http::{Method, Uri};
+use http::{HeaderMap, Method, StatusCode, Uri};
 #[cfg(feature = "reqwest")]
 use http_body_util::BodyExt;
 use std::error::Error;
 use std::sync::Arc;
+use std::time::Duration;
 #[cfg(all(feature = "reqwest", not(target_arch = "wasm32")))]
 use tokio::runtime::Handle;
 #[cfg(feature = "reqwest")]
 use url::Url;
+
+const MAX_ERROR_METADATA_VALUE_LENGTH: usize = 256;
+
+/// The bounded information available to an [`ErrorMetadataHook`].
+///
+/// This type deliberately does not retain response bodies or arbitrary headers.
+/// Implementations should use [`ErrorResponse::metadata`] as a base and add only
+/// provider-specific, non-sensitive fields.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErrorMetadata {
+    status: StatusCode,
+    provider_code: Option<String>,
+    request_id: Option<String>,
+    retry_after: Option<Duration>,
+}
+
+impl ErrorMetadata {
+    /// Construct metadata for an HTTP error response.
+    pub fn new(status: StatusCode) -> Self {
+        Self {
+            status,
+            provider_code: None,
+            request_id: None,
+            retry_after: None,
+        }
+    }
+
+    /// Construct metadata from common request-ID and retry headers.
+    pub fn from_response(response: &ErrorResponse<'_>) -> Self {
+        let request_id = [
+            "x-request-id",
+            "x-amz-request-id",
+            "x-goog-request-id",
+            "x-ms-request-id",
+        ]
+        .iter()
+        .find_map(|name| response.headers().get(*name))
+        .and_then(|value| value.to_str().ok())
+        .map(bounded_value);
+
+        let retry_after = response
+            .headers()
+            .get("retry-after")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .map(Duration::from_secs);
+
+        Self {
+            status: response.status(),
+            provider_code: None,
+            request_id,
+            retry_after,
+        }
+    }
+
+    /// Set a provider error code, bounded to a small diagnostic value.
+    pub fn with_provider_code(mut self, code: impl AsRef<str>) -> Self {
+        self.provider_code = Some(bounded_value(code.as_ref()));
+        self
+    }
+
+    /// Set a provider request ID, bounded to a small diagnostic value.
+    pub fn with_request_id(mut self, request_id: impl AsRef<str>) -> Self {
+        self.request_id = Some(bounded_value(request_id.as_ref()));
+        self
+    }
+
+    /// Set the provider-advertised retry delay.
+    pub fn with_retry_after(mut self, retry_after: Duration) -> Self {
+        self.retry_after = Some(retry_after);
+        self
+    }
+
+    /// Return the HTTP status code.
+    pub fn status(&self) -> StatusCode {
+        self.status
+    }
+
+    /// Return the provider-specific error code, if one was available.
+    pub fn provider_code(&self) -> Option<&str> {
+        self.provider_code.as_deref()
+    }
+
+    /// Return the provider request ID, if one was available.
+    pub fn request_id(&self) -> Option<&str> {
+        self.request_id.as_deref()
+    }
+
+    /// Return the provider-advertised retry delay, if one was available.
+    pub fn retry_after(&self) -> Option<Duration> {
+        self.retry_after
+    }
+}
+
+fn bounded_value(value: &str) -> String {
+    value
+        .chars()
+        .take(MAX_ERROR_METADATA_VALUE_LENGTH)
+        .collect()
+}
+
+/// A bounded view of a failed HTTP response passed to an [`ErrorMetadataHook`].
+pub struct ErrorResponse<'a> {
+    status: StatusCode,
+    headers: &'a HeaderMap,
+    body: &'a str,
+}
+
+impl<'a> ErrorResponse<'a> {
+    pub(crate) fn new(status: StatusCode, headers: &'a HeaderMap, body: &'a str) -> Self {
+        Self {
+            status,
+            headers,
+            body: body
+                .char_indices()
+                .nth(16 * 1024)
+                .map_or(body, |(index, _)| &body[..index]),
+        }
+    }
+
+    /// Return the HTTP status code.
+    pub fn status(&self) -> StatusCode {
+        self.status
+    }
+
+    /// Return response headers for provider-specific extraction.
+    pub fn headers(&self) -> &HeaderMap {
+        self.headers
+    }
+
+    /// Return a bounded response body for provider-specific code extraction.
+    ///
+    /// The body is provided only to the opt-in hook and is never retained in
+    /// [`ErrorMetadata`].
+    pub fn body(&self) -> &str {
+        self.body
+    }
+
+    /// Create metadata from common response headers.
+    pub fn metadata(&self) -> ErrorMetadata {
+        ErrorMetadata::from_response(self)
+    }
+}
+
+impl std::fmt::Debug for ErrorResponse<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ErrorResponse")
+            .field("status", &self.status)
+            .field("headers", &self.headers)
+            .field("body", &"<redacted>")
+            .finish()
+    }
+}
+
+/// An opt-in extractor for bounded provider error metadata.
+pub trait ErrorMetadataHook: std::fmt::Debug + Send + Sync + 'static {
+    /// Extract bounded, non-sensitive metadata from a failed HTTP response.
+    fn extract(&self, response: &ErrorResponse<'_>) -> Option<ErrorMetadata>;
+}
 
 /// An HTTP protocol error
 ///
@@ -163,17 +323,35 @@ pub trait HttpService: std::fmt::Debug + Send + Sync + 'static {
 
 /// An HTTP client
 #[derive(Debug, Clone)]
-pub struct HttpClient(Arc<dyn HttpService>);
+pub struct HttpClient {
+    service: Arc<dyn HttpService>,
+    error_metadata_hook: Option<Arc<dyn ErrorMetadataHook>>,
+}
 
 impl HttpClient {
     /// Create a new [`HttpClient`] from an [`HttpService`]
     pub fn new(service: impl HttpService + 'static) -> Self {
-        Self(Arc::new(service))
+        Self {
+            service: Arc::new(service),
+            error_metadata_hook: None,
+        }
+    }
+
+    pub(crate) fn with_error_metadata_hook(
+        mut self,
+        hook: Option<Arc<dyn ErrorMetadataHook>>,
+    ) -> Self {
+        self.error_metadata_hook = hook;
+        self
+    }
+
+    pub(crate) fn error_metadata_hook(&self) -> Option<Arc<dyn ErrorMetadataHook>> {
+        self.error_metadata_hook.clone()
     }
 
     /// Performs [`HttpRequest`] using this client
     pub async fn execute(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
-        self.0.call(request).await
+        self.service.call(request).await
     }
 
     #[allow(unused)]
@@ -301,6 +479,33 @@ impl HttpService for reqwest::Client {
 pub trait HttpConnector: std::fmt::Debug + Send + Sync + 'static {
     /// Create a new [`HttpClient`] with the provided [`ClientOptions`]
     fn connect(&self, options: &ClientOptions) -> crate::Result<HttpClient>;
+}
+
+#[derive(Debug)]
+struct ErrorMetadataConnector {
+    inner: Arc<dyn HttpConnector>,
+    hook: Arc<dyn ErrorMetadataHook>,
+}
+
+impl HttpConnector for ErrorMetadataConnector {
+    fn connect(&self, options: &ClientOptions) -> crate::Result<HttpClient> {
+        self.inner
+            .connect(options)
+            .map(|client| client.with_error_metadata_hook(Some(Arc::clone(&self.hook))))
+    }
+}
+
+pub(crate) fn configure_http_connector(
+    connector: Arc<dyn HttpConnector>,
+    hook: Option<Arc<dyn ErrorMetadataHook>>,
+) -> Arc<dyn HttpConnector> {
+    match hook {
+        Some(hook) => Arc::new(ErrorMetadataConnector {
+            inner: connector,
+            hook,
+        }),
+        None => connector,
+    }
 }
 
 /// [`HttpConnector`] using [`reqwest::Client`]

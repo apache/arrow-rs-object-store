@@ -44,7 +44,7 @@ use url::Url;
 
 use crate::client::get::GetClientExt;
 use crate::client::header::get_etag;
-use crate::client::{HttpConnector, http_connector};
+use crate::client::{HttpConnector, configure_http_connector, http_connector};
 use crate::http::client::Client;
 use crate::path::Path;
 use crate::{
@@ -290,7 +290,11 @@ impl HttpBuilder {
             return Err(Error::InvalidEndpoint.into());
         }
 
-        let client = http_connector(self.http_connector)?.connect(&self.client_options)?;
+        let http = configure_http_connector(
+            http_connector(self.http_connector)?,
+            self.client_options.error_metadata_hook(),
+        );
+        let client = http.connect(&self.client_options)?;
 
         Ok(HttpStore {
             client: Arc::new(Client::new(

@@ -24,7 +24,10 @@ use crate::aws::{
     AmazonS3, AwsCredential, AwsCredentialProvider, Checksum, S3ConditionalPut, S3CopyIfNotExists,
     STORE,
 };
-use crate::client::{CryptoProvider, HttpConnector, TokenCredentialProvider, http_connector};
+use crate::client::{
+    CryptoProvider, HttpConnector, TokenCredentialProvider, configure_http_connector,
+    http_connector,
+};
 use crate::config::ConfigValue;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
 use base64::Engine;
@@ -1158,7 +1161,10 @@ impl AmazonS3Builder {
             self.parse_url(&url)?;
         }
 
-        let http = http_connector(self.http_connector)?;
+        let http = configure_http_connector(
+            http_connector(self.http_connector)?,
+            self.client_options.error_metadata_hook(),
+        );
 
         let bucket = self.bucket_name.ok_or(Error::MissingBucketName)?;
         let region = self.region.unwrap_or_else(|| "us-east-1".to_string());
