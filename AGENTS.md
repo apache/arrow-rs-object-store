@@ -11,6 +11,9 @@ context. It is the servicecute downstream fork of
    and downstream fork maintenance policy.
 2. `.kiro/steering/upstream-sync.md` — `inclusion: always` — Upstream review,
    rebase, backport, conflict-resolution, and verification rules.
+3. `.kiro/steering/pr-review.md` — `inclusion: manual` — Pull-request scope,
+   public-API, integration, security, documentation, and verification review
+   gates.
 
 ## Verification
 
@@ -22,3 +25,4 @@ context. It is the servicecute downstream fork of
   consumer dependency and fork revisions.
 - Review `UPSTREAM-TRACKING.md` and the linked GitHub watchlist before rebasing
   or releasing the fork.
+- Read `.kiro/steering/pr-review.md` before opening or merging a pull request.
