@@ -1,0 +1,20 @@
+# AGENTS.md (Kiro Steering)
+
+This repository uses Kiro steering documents as the source of truth for agent
+context. It is the servicecute downstream fork of
+`apache/arrow-rs-object-store`.
+
+## Steering Index (with inclusion)
+
+1. `.kiro/steering/ai-assisted-development.md` — `inclusion: always` — Human
+   accountability, AI-assisted development, upstream contribution, security,
+   and downstream fork maintenance policy.
+
+## Verification
+
+- Rust formatting: `cargo fmt --all -- --check`.
+- Rust linting: run warnings-denied Clippy for the affected targets.
+- Rust tests: run the relevant unit, integration, and documentation tests.
+- Preserve Apache license headers and existing public API conventions.
+- Keep downstream changes focused, document intentional divergence, and pin
+  consumer dependency and fork revisions.
