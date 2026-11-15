@@ -129,6 +129,12 @@ pub async fn put_get_delete_list(storage: &DynObjectStore) {
     // Should be a non-fatal error
     out_of_range_result.unwrap_err();
 
+    // Should also be a non-fatal error when coalesced with an in-bounds range
+    storage
+        .get_ranges(&location, &[0..5, 200..300])
+        .await
+        .unwrap_err();
+
     let opts = GetOptions::new().with_range(Some(GetRange::Bounded(2..100)));
     let result = storage.get_opts(&location, opts).await.unwrap();
     assert_eq!(result.range, 2..14);

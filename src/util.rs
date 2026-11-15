@@ -98,7 +98,7 @@ pub(crate) const OBJECT_STORE_COALESCE_PARALLEL: usize = 10;
 ///
 pub async fn coalesce_ranges<F, E, Fut>(
     ranges: &[Range<u64>],
-    fetch: F,
+    mut fetch: F,
     coalesce: u64,
 ) -> Result<Vec<Bytes>, E>
 where
@@ -109,24 +109,31 @@ where
     let fetch_ranges = merge_ranges(ranges, coalesce);
 
     let fetched: Vec<_> = futures_util::stream::iter(fetch_ranges.iter().cloned())
-        .map(fetch)
+        .map(&mut fetch)
         .buffered(OBJECT_STORE_COALESCE_PARALLEL)
         .try_collect()
         .await?;
 
-    Ok(ranges
-        .iter()
-        .map(|range| {
-            let idx = fetch_ranges.partition_point(|v| v.start <= range.start) - 1;
-            let fetch_range = &fetch_ranges[idx];
-            let fetch_bytes = &fetched[idx];
+    let mut ret = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        let idx = fetch_ranges.partition_point(|v| v.start <= range.start) - 1;
+        let fetch_range = &fetch_ranges[idx];
+        let fetch_bytes = &fetched[idx];
 
-            let start = range.start - fetch_range.start;
-            let end = range.end - fetch_range.start;
-            let range = (start as usize)..(end as usize).min(fetch_bytes.len());
-            fetch_bytes.slice(range)
-        })
-        .collect())
+        let start = (range.start - fetch_range.start) as usize;
+        let end = (range.end - fetch_range.start) as usize;
+
+        // The coalesced response may be shorter than requested, e.g. if it extends
+        // past the end of the object. If it ends before this range starts, fetch
+        // the range on its own so the store can return the appropriate error
+        if start > fetch_bytes.len() || (start == fetch_bytes.len() && end > start) {
+            ret.push(fetch(range.clone()).await?);
+            continue;
+        }
+
+        ret.push(fetch_bytes.slice(start..end.min(fetch_bytes.len())));
+    }
+    Ok(ret)
 }
 
 /// Returns a sorted list of ranges that cover `ranges`
@@ -520,6 +527,34 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn test_coalesce_ranges_past_end() {
+        let src = Bytes::from_static(b"arbitrary data");
+
+        // Mimics a store: a range ending past the end of the object is truncated,
+        // and a range starting at or after the end of the object is an error
+        let fetch = |range: Range<u64>| {
+            let result = GetRange::Bounded(range)
+                .as_range(src.len() as u64)
+                .map(|r| src.slice(r.start as usize..r.end as usize))
+                .map_err(|source| Error::Generic {
+                    store: "test",
+                    source: Box::new(source),
+                });
+            futures_util::future::ready(result)
+        };
+
+        let ranges = [0..5, 10..20];
+        let fetched = coalesce_ranges(&ranges, fetch, 1024).await.unwrap();
+        assert_eq!(fetched, vec![src.slice(0..5), src.slice(10..14)]);
+
+        let ranges = [0..5, 200..300];
+        coalesce_ranges(&ranges, fetch, 1024).await.unwrap_err();
+
+        let ranges = [0..5, 14..20];
+        coalesce_ranges(&ranges, fetch, 1024).await.unwrap_err();
     }
 
     #[test]
