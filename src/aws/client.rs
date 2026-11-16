@@ -1012,9 +1012,12 @@ impl ListClient for Arc<S3Client> {
             query.push(("max-keys", max_keys_str.as_ref()))
         }
 
-        let response = self
-            .client
-            .request(Method::GET, &url)
+        let mut builder = self.client.request(Method::GET, &url);
+        if let Some(headers) = self.config.client_options.get_default_headers() {
+            builder = builder.headers(headers.clone());
+        }
+
+        let response = builder
             .extensions(opts.extensions)
             .query(&query)
             .with_aws_sigv4(authorizer, None)?
@@ -1384,6 +1387,34 @@ mod tests {
         let mut ctx = RetryContext::new(&client.config.retry_config);
         let result = client
             .get_request(&mut ctx, &Path::from("test"), GetOptions::default())
+            .await;
+
+        assert!(result.is_ok());
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_default_headers_signed_list_request() {
+        let mock = MockServer::new().await;
+        mock.push_fn(|req| {
+            assert_default_headers_signed(&req);
+            Response::builder()
+                .status(200)
+                .body(
+                    "<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>"
+                        .to_string(),
+                )
+                .unwrap()
+        });
+
+        let config = default_headers_config(&mock);
+        let client = Arc::new(S3Client::new(
+            config,
+            HttpClient::new(reqwest::Client::new()),
+        ));
+        let result = client
+            .list_request(Some("prefix"), PaginatedListOptions::default())
             .await;
 
         assert!(result.is_ok());
