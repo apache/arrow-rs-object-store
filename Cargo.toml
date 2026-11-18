@@ -37,8 +37,8 @@ chrono = { version = "0.4.34", default-features = false, features = ["clock"] }
 futures-core = "0.3"
 futures-util = { version = "0.3", features = ["sink"] }
 http = "1.2.0"
-humantime = "2.1"
 itertools = "0.15.0"
+jiff = { version = "1.0", default-features = false, features = ["std"], optional = true }
 parking_lot = { version = "0.12" }
 percent-encoding = "2.1"
 thiserror = "2.0.2"
@@ -86,7 +86,7 @@ default = ["fs"]
 
 # Shared cloud/provider implementation dependencies.
 # This intentionally does NOT include reqwest or a bundled crypto provider.
-cloud-base = ["serde", "serde_json", "quick-xml", "hyper", "chrono/serde", "base64", "rand", "http-body-util", "form_urlencoded", "serde_urlencoded", "tokio"]
+cloud-base = ["serde", "serde_json", "quick-xml", "hyper", "chrono/serde", "dep:jiff", "base64", "rand", "http-body-util", "form_urlencoded", "serde_urlencoded", "tokio"]
 
 # Built-in reqwest-based HTTP transport.
 reqwest = ["dep:reqwest", "reqwest/stream"]
