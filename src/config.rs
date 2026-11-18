@@ -19,8 +19,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use http::header::HeaderValue;
-use jiff::fmt::friendly::{SpanParser, SpanPrinter};
-use jiff::{SignedDuration, Span};
+use jiff::fmt::friendly::SpanPrinter;
 
 use crate::{Error, Result};
 
@@ -95,34 +94,52 @@ impl Parse for Duration {
     }
 }
 
-/// Parses a duration in jiff's "friendly" format, e.g. `60s`, `1h 30m` or `2 days`
+/// Parses a duration such as `60s`, `1h 30m`, `1.5d` or `1y 1M`
 ///
-/// Calendar units are converted with the fixed lengths previously used by `humantime`:
-/// a day is 24 hours, a week 7 days, a month 30.44 days and a year 365.25 days.
+/// Accepts the units and lengths of `humantime`, which this replaced. A month
+/// (`M`) is 30.44 days, a year 365.25 days, and every unit takes a fraction.
 fn parse_duration(v: &str) -> Option<Duration> {
-    const PARSER: SpanParser = SpanParser::new();
-    const DAY: u64 = 86_400;
+    const NS: u128 = 1_000_000_000;
+    fn split(s: &str, f: fn(char) -> bool) -> (&str, &str) {
+        s.split_at(s.find(|c| !f(c)).unwrap_or(s.len()))
+    }
 
-    let v = v.trim();
-    if v == "0" {
+    let mut rest = v.trim();
+    if rest == "0" {
         return Some(Duration::ZERO);
     }
-    if let Ok(d) = PARSER.parse_unsigned_duration(v) {
-        return Some(d);
+    let mut total = 0u128;
+    loop {
+        let (int, tail) = split(rest, |c| c.is_ascii_digit());
+        let (frac, tail) = match tail.strip_prefix('.') {
+            Some(tail) => split(tail, |c| c.is_ascii_digit()),
+            None => ("0", tail),
+        };
+        let (unit, tail) = split(tail.trim_start(), char::is_alphabetic);
+        let unit = match unit {
+            "nanos" | "nsec" | "ns" => 1,
+            "usec" | "us" | "µs" => 1_000,
+            "millis" | "msec" | "ms" => 1_000_000,
+            "seconds" | "second" | "secs" | "sec" | "s" => NS,
+            "minutes" | "minute" | "min" | "mins" | "m" => 60 * NS,
+            "hours" | "hour" | "hr" | "hrs" | "h" => 3_600 * NS,
+            "days" | "day" | "d" => 86_400 * NS,
+            "weeks" | "week" | "wk" | "wks" | "w" => 604_800 * NS,
+            "months" | "month" | "M" => 2_630_016 * NS,
+            "years" | "year" | "yr" | "yrs" | "y" => 31_557_600 * NS,
+            _ => return None,
+        };
+        // value = int.frac * unit, exact to the nanosecond or refused
+        let den = 10u128.checked_pow(frac.len() as u32)?;
+        let num = u128::from(int.parse::<u64>().ok()?).checked_mul(den)?;
+        let value = num.checked_add(frac.parse().ok()?)?.checked_mul(unit)?;
+        total = total.checked_add(Some(value).filter(|v| v % den == 0)? / den)?;
+        rest = tail.trim_start();
+        if rest.is_empty() {
+            let secs = u64::try_from(total / NS).ok()?;
+            return Some(Duration::new(secs, (total % NS) as u32));
+        }
     }
-
-    // Spans with calendar units (days and above) cannot be parsed into a duration directly
-    let span: Span = PARSER.parse_span(v).ok()?;
-    if span.is_negative() {
-        return None;
-    }
-    let calendar_secs = (span.get_years() as u64 * 31_557_600)
-        + (span.get_months() as u64 * 2_630_016)
-        + (span.get_weeks() as u64 * 7 * DAY)
-        + (span.get_days() as u64 * DAY);
-    let time = span.years(0).months(0).weeks(0).days(0);
-    let time = Duration::try_from(SignedDuration::try_from(time).ok()?).ok()?;
-    time.checked_add(Duration::from_secs(calendar_secs))
 }
 
 impl Parse for usize {
@@ -201,12 +218,21 @@ mod tests {
                 Duration::new(38_995_999, 8_000_000),
             ),
             ("18446744073709551615s", Duration::from_secs(u64::MAX)),
+            ("1M", Duration::from_secs(2_630_016)),
+            ("1y 1M", Duration::from_secs(34_187_616)),
+            ("0.5d", Duration::from_secs(43_200)),
+            ("1.5months", Duration::from_secs(3_945_024)),
+            ("2 weeks 1.5d", Duration::from_secs(1_339_200)),
+            ("1.5h 30m", Duration::from_secs(7_200)),
+            ("1s 1h", Duration::from_secs(3_601)),
         ];
         for (input, expected) in cases {
             assert_eq!(Duration::parse(input).unwrap(), expected, "{input}");
         }
 
-        for input in ["", "5", "s", "-5s", "-1d", "5 S", "PT5S", "1d -1h"] {
+        for input in [
+            "", "5", "s", "-5s", "-1d", "5 S", "PT5S", "1d -1h", "1.s", "1.5ns",
+        ] {
             assert!(Duration::parse(input).is_err(), "{input}");
         }
     }
