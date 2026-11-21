@@ -1854,4 +1854,165 @@ mod tests {
         shutdown_tx.send(()).ok();
         thread_handle.join().expect("runtime thread panicked");
     }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn put_create_does_not_retry_on_incomplete_message() {
+        use crate::client::{HttpError, HttpErrorKind};
+        use std::sync::atomic::AtomicBool;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        async fn spawn_s3_eof_server(
+            honor_if_none_match: bool,
+        ) -> (
+            String,
+            Arc<AtomicUsize>,
+            Arc<AtomicBool>,
+            tokio::task::JoinHandle<()>,
+        ) {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let attempts = Arc::new(AtomicUsize::new(0));
+            let committed = Arc::new(AtomicBool::new(false));
+            let attempts_bg = Arc::clone(&attempts);
+            let committed_bg = Arc::clone(&committed);
+
+            let handle = tokio::spawn(async move {
+                while let Ok((mut stream, _)) = listener.accept().await {
+                    let attempts = Arc::clone(&attempts_bg);
+                    let committed = Arc::clone(&committed_bg);
+                    tokio::spawn(async move {
+                        let mut buf = Vec::new();
+                        let mut tmp = [0u8; 4096];
+                        let header_end = loop {
+                            let n = match stream.read(&mut tmp).await {
+                                Ok(0) | Err(_) => return,
+                                Ok(n) => n,
+                            };
+                            buf.extend_from_slice(&tmp[..n]);
+                            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                                break pos + 4;
+                            }
+                        };
+                        let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
+                        let content_len: usize = headers
+                            .lines()
+                            .find_map(|line| {
+                                let (k, v) = line.split_once(':')?;
+                                k.eq_ignore_ascii_case("content-length")
+                                    .then(|| v.trim().parse::<usize>().ok())
+                                    .flatten()
+                            })
+                            .unwrap_or(0);
+                        while buf.len() < header_end + content_len {
+                            let n = match stream.read(&mut tmp).await {
+                                Ok(0) | Err(_) => return,
+                                Ok(n) => n,
+                            };
+                            buf.extend_from_slice(&tmp[..n]);
+                        }
+
+                        attempts.fetch_add(1, Ordering::SeqCst);
+                        let already_exists = committed.swap(true, Ordering::SeqCst);
+                        if already_exists {
+                            let resp = if honor_if_none_match {
+                                "HTTP/1.1 412 Precondition Failed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                            } else {
+                                "HTTP/1.1 200 OK\r\nETag: \"abc\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                            };
+                            let _ = stream.write_all(resp.as_bytes()).await;
+                            let _ = stream.shutdown().await;
+                        } else {
+                            drop(stream);
+                        }
+                    });
+                }
+            });
+
+            (format!("http://{addr}"), attempts, committed, handle)
+        }
+
+        let build_s3 = |endpoint: &str| {
+            let retry = crate::RetryConfig {
+                backoff: crate::BackoffConfig {
+                    init_backoff: Duration::from_millis(10),
+                    max_backoff: Duration::from_millis(50),
+                    base: 2.0,
+                },
+                max_retries: 2,
+                retry_timeout: Duration::from_secs(5),
+            };
+            AmazonS3Builder::new()
+                .with_endpoint(endpoint)
+                .with_bucket_name("test-bucket")
+                .with_region("us-east-1")
+                .with_skip_signature(true)
+                .with_allow_http(true)
+                .with_conditional_put(S3ConditionalPut::ETagMatch)
+                .with_retry(retry)
+                .build()
+                .unwrap()
+        };
+
+        // Non-idempotent PutMode::Create must not retry on IncompleteMessage EOF
+        let (endpoint, attempts, committed, handle) = spawn_s3_eof_server(true).await;
+        let store = build_s3(&endpoint);
+        let err = tokio::time::timeout(
+            Duration::from_secs(5),
+            store.put_opts(
+                &Path::from("commit.json"),
+                PutPayload::from_static(b"hello"),
+                PutOptions::from(PutMode::Create),
+            ),
+        )
+        .await
+        .expect("PutMode::Create put_opts timed out")
+        .unwrap_err();
+        handle.abort();
+
+        assert!(committed.load(Ordering::SeqCst));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert!(
+            matches!(err, crate::Error::Generic { .. }),
+            "expected Error::Generic, got {err:?}"
+        );
+        let mut source: &dyn std::error::Error = &err;
+        let (mut interrupted, mut incomplete_message) = (false, false);
+        while let Some(next) = source.source() {
+            source = next;
+            if let Some(http_err) = source.downcast_ref::<HttpError>() {
+                assert_eq!(http_err.kind(), HttpErrorKind::Interrupted);
+                interrupted = true;
+            }
+            if let Some(hyper_err) = source.downcast_ref::<hyper::Error>() {
+                incomplete_message |= hyper_err.is_incomplete_message();
+            }
+        }
+        assert!(interrupted, "HttpError not found in source chain: {err}");
+        assert!(
+            incomplete_message,
+            "hyper IncompleteMessage not found in source chain: {err}"
+        );
+
+        // Idempotent PutMode::Overwrite retries on IncompleteMessage EOF and succeeds
+        let (endpoint, attempts, committed, handle) = spawn_s3_eof_server(false).await;
+        let store = build_s3(&endpoint);
+        let res = tokio::time::timeout(
+            Duration::from_secs(5),
+            store.put_opts(
+                &Path::from("overwrite.json"),
+                PutPayload::from_static(b"hello"),
+                PutOptions::from(PutMode::Overwrite),
+            ),
+        )
+        .await
+        .expect("PutMode::Overwrite put_opts timed out")
+        .unwrap();
+        handle.abort();
+
+        assert!(committed.load(Ordering::SeqCst));
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(res.e_tag.as_deref(), Some("\"abc\""));
+    }
 }

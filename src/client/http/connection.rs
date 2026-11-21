@@ -120,8 +120,10 @@ impl HttpError {
         while kind == HttpErrorKind::Unknown {
             if let Some(e) = source {
                 if let Some(e) = e.downcast_ref::<hyper::Error>() {
-                    if e.is_closed() || e.is_incomplete_message() || e.is_body_write_aborted() {
+                    if e.is_closed() || e.is_body_write_aborted() {
                         kind = HttpErrorKind::Request;
+                    } else if e.is_incomplete_message() {
+                        kind = HttpErrorKind::Interrupted;
                     } else if e.is_timeout() {
                         kind = HttpErrorKind::Timeout;
                     }
