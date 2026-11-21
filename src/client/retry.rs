@@ -800,7 +800,7 @@ mod tests {
         while let Some(source) = err.source() {
             err = source;
             if let Some(http_err) = err.downcast_ref::<HttpError>() {
-                assert_eq!(http_err.kind(), HttpErrorKind::Request);
+                assert_eq!(http_err.kind(), HttpErrorKind::Interrupted);
                 found = true;
                 break;
             }
@@ -996,5 +996,132 @@ mod tests {
         let _ = timeout(Duration::from_secs(1), handle)
             .await
             .expect("shutdown shouldn't hang");
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_incomplete_message_retry_respects_idempotency() {
+        use crate::BackoffConfig;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        async fn spawn_eof_first_server() -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle<()>)
+        {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            let attempts = Arc::new(AtomicUsize::new(0));
+            let attempts_bg = Arc::clone(&attempts);
+
+            let handle = tokio::spawn(async move {
+                while let Ok((mut stream, _)) = listener.accept().await {
+                    let attempts = Arc::clone(&attempts_bg);
+                    tokio::spawn(async move {
+                        let mut buf = Vec::new();
+                        let mut tmp = [0u8; 4096];
+                        let header_end = loop {
+                            let n = match stream.read(&mut tmp).await {
+                                Ok(0) | Err(_) => return,
+                                Ok(n) => n,
+                            };
+                            buf.extend_from_slice(&tmp[..n]);
+                            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                                break pos + 4;
+                            }
+                        };
+                        let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
+                        let content_len: usize = headers
+                            .lines()
+                            .find_map(|line| {
+                                let (k, v) = line.split_once(':')?;
+                                k.eq_ignore_ascii_case("content-length")
+                                    .then(|| v.trim().parse::<usize>().ok())
+                                    .flatten()
+                            })
+                            .unwrap_or(0);
+                        while buf.len() < header_end + content_len {
+                            let n = match stream.read(&mut tmp).await {
+                                Ok(0) | Err(_) => return,
+                                Ok(n) => n,
+                            };
+                            buf.extend_from_slice(&tmp[..n]);
+                        }
+
+                        let attempt = attempts.fetch_add(1, Ordering::SeqCst) + 1;
+                        if attempt == 1 {
+                            drop(stream);
+                        } else {
+                            let resp =
+                                "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                            let _ = stream.write_all(resp.as_bytes()).await;
+                            let _ = stream.shutdown().await;
+                        }
+                    });
+                }
+            });
+
+            (format!("http://{addr}"), attempts, handle)
+        }
+
+        let retry = RetryConfig {
+            backoff: BackoffConfig {
+                init_backoff: Duration::from_millis(10),
+                max_backoff: Duration::from_millis(50),
+                base: 2.0,
+            },
+            max_retries: 2,
+            retry_timeout: Duration::from_secs(5),
+        };
+        let client = HttpClient::new(reqwest::Client::new());
+
+        // Non-idempotent PUT must not retry on IncompleteMessage EOF
+        let (url, attempts, handle) = spawn_eof_first_server().await;
+        let err = timeout(
+            Duration::from_secs(5),
+            client.request(Method::PUT, &url).retryable(&retry).send(),
+        )
+        .await
+        .expect("non-idempotent PUT timed out")
+        .unwrap_err();
+        handle.abort();
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert!(
+            !err.to_string().contains("retries"),
+            "unexpected retry: {err}"
+        );
+        let mut source: &dyn Error = &err;
+        let (mut interrupted, mut incomplete_message) = (false, false);
+        while let Some(next) = source.source() {
+            source = next;
+            if let Some(http_err) = source.downcast_ref::<HttpError>() {
+                assert_eq!(http_err.kind(), HttpErrorKind::Interrupted);
+                interrupted = true;
+            }
+            if let Some(hyper_err) = source.downcast_ref::<hyper::Error>() {
+                incomplete_message |= hyper_err.is_incomplete_message();
+            }
+        }
+        assert!(interrupted, "HttpError not found in source chain: {err}");
+        assert!(
+            incomplete_message,
+            "hyper IncompleteMessage not found in source chain: {err}"
+        );
+
+        // Idempotent PUT retries on IncompleteMessage EOF and succeeds on attempt 2
+        let (url, attempts, handle) = spawn_eof_first_server().await;
+        let res = timeout(
+            Duration::from_secs(5),
+            client
+                .request(Method::PUT, &url)
+                .retryable(&retry)
+                .idempotent(true)
+                .send(),
+        )
+        .await
+        .expect("idempotent PUT timed out")
+        .unwrap();
+        handle.abort();
+
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
 }
