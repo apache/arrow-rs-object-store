@@ -32,33 +32,33 @@ pub(crate) mod mock_server;
 
 pub(crate) mod retry;
 
-#[cfg(any(feature = "aws-base", feature = "gcp-base", feature = "azure-base"))]
+#[cfg(any(feature = "aws-core", feature = "gcp-base", feature = "azure-base"))]
 pub(crate) mod pagination;
 
 pub(crate) mod get;
 
-#[cfg(any(feature = "aws-base", feature = "gcp-base", feature = "azure-base"))]
+#[cfg(any(feature = "aws-core", feature = "gcp-base", feature = "azure-base"))]
 pub(crate) mod list;
 
-#[cfg(any(feature = "aws-base", feature = "gcp-base", feature = "azure-base"))]
+#[cfg(any(feature = "aws-core", feature = "gcp-base", feature = "azure-base"))]
 pub(crate) mod token;
 
 pub(crate) mod header;
 
-#[cfg(any(feature = "aws-base", feature = "gcp-base"))]
+#[cfg(any(feature = "aws-core", feature = "gcp-base"))]
 pub(crate) mod s3;
 
 pub(crate) mod builder;
 mod http;
 
-#[cfg(any(feature = "aws-base", feature = "gcp-base", feature = "azure-base"))]
+#[cfg(any(feature = "aws-core", feature = "gcp-base", feature = "azure-base"))]
 pub(crate) mod parts;
 pub use http::*;
 
-#[cfg(any(feature = "aws-base", feature = "gcp-base", feature = "azure-base"))]
+#[cfg(any(feature = "aws-core", feature = "gcp-base", feature = "azure-base"))]
 mod crypto;
 
-#[cfg(any(feature = "aws-base", feature = "gcp-base", feature = "azure-base"))]
+#[cfg(any(feature = "aws-core", feature = "gcp-base", feature = "azure-base"))]
 pub use crypto::*;
 
 use ::http::header::{HeaderMap, HeaderValue};
@@ -856,7 +856,7 @@ impl ClientOptions {
     /// In particular:
     /// * Allows HTTP as metadata endpoints do not use TLS
     /// * Configures a low connection timeout to provide quick feedback if not present
-    #[cfg(any(feature = "aws-base", feature = "gcp-base", feature = "azure-base"))]
+    #[cfg(any(feature = "aws-core", feature = "gcp-base", feature = "azure-base"))]
     pub(crate) fn metadata_options(&self) -> Self {
         self.clone()
             .with_allow_http(true)
@@ -1075,7 +1075,7 @@ where
     }
 }
 
-#[cfg(any(feature = "aws-base", feature = "azure-base", feature = "gcp-base"))]
+#[cfg(any(feature = "aws-core", feature = "azure-base", feature = "gcp-base"))]
 mod cloud {
     use super::*;
     use crate::RetryConfig;
@@ -1101,7 +1101,7 @@ mod cloud {
         }
 
         /// Override the minimum remaining TTL for a cached token to be used
-        #[cfg(any(feature = "aws-base", feature = "gcp-base"))]
+        #[cfg(any(feature = "aws-core", feature = "gcp-base"))]
         pub(crate) fn with_min_ttl(mut self, min_ttl: Duration) -> Self {
             self.cache = self.cache.with_min_ttl(min_ttl);
             self
@@ -1132,7 +1132,7 @@ mod cloud {
 }
 
 use crate::client::builder::HttpRequestBuilder;
-#[cfg(any(feature = "aws-base", feature = "azure-base", feature = "gcp-base"))]
+#[cfg(any(feature = "aws-core", feature = "azure-base", feature = "gcp-base"))]
 pub(crate) use cloud::*;
 
 #[cfg(test)]

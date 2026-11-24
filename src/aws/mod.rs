@@ -17,8 +17,8 @@
 
 //! An object store implementation for S3
 //!
-//! See the [Feature Flags](crate#feature-flags) section for the difference
-//! between the `aws` and `aws-base` features.
+//! See [Feature Flags](crate#feature-flags) for the `aws`, `aws-base`, and
+//! `aws-core` features.
 //!
 //! ## Multipart uploads
 //!
@@ -339,40 +339,43 @@ impl ObjectStore for AmazonS3 {
     ) -> BoxStream<'static, Result<Path>> {
         let client = Arc::clone(&self.client);
 
-        // Some S3-compatible providers do not implement
-        // the bulk `DeleteObjects` API (`POST /?delete`). When bulk delete is
-        // disabled, fall back to parallel single-object `DELETE /key` requests,
-        // which are part of the core S3 API supported by every provider.
-        if client.config.disable_bulk_delete {
+        #[cfg(feature = "md-5")]
+        if !client.config.disable_bulk_delete {
             return locations
-                .map(move |location| {
+                .try_chunks(1_000)
+                .map(move |locations| {
                     let client = Arc::clone(&client);
                     async move {
-                        let location = location?;
-                        client.delete_request(&location).await?;
-                        Ok(location)
+                        // Early return the error. We ignore the paths that have already been
+                        // collected into the chunk.
+                        let locations = locations.map_err(|e| e.1)?;
+                        client
+                            .bulk_delete_request(locations)
+                            .await
+                            .map(futures_util::stream::iter)
                     }
                 })
                 .buffered(20)
+                .try_flatten()
                 .boxed();
         }
 
+        #[cfg(not(feature = "md-5"))]
+        let _ = client.config.disable_bulk_delete;
+
+        // Some S3-compatible providers do not implement `DeleteObjects`.
+        // Without MD5, S3's bulk delete protocol cannot be used either.
+        // Fall back to parallel single-object DELETE requests in both cases.
         locations
-            .try_chunks(1_000)
-            .map(move |locations| {
+            .map(move |location| {
                 let client = Arc::clone(&client);
                 async move {
-                    // Early return the error. We ignore the paths that have already been
-                    // collected into the chunk.
-                    let locations = locations.map_err(|e| e.1)?;
-                    client
-                        .bulk_delete_request(locations)
-                        .await
-                        .map(futures_util::stream::iter)
+                    let location = location?;
+                    client.delete_request(&location).await?;
+                    Ok(location)
                 }
             })
             .buffered(20)
-            .try_flatten()
             .boxed()
     }
 
@@ -735,6 +738,7 @@ impl PaginatedListStore for AmazonS3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "md-5")]
     use crate::ClientOptions;
     use crate::ObjectStoreExt;
     #[cfg(feature = "reqwest")]
@@ -745,7 +749,9 @@ mod tests {
     use crate::client::retry::RetryContext;
     use crate::integration::*;
     use crate::tests::*;
+    #[cfg(feature = "md-5")]
     use base64::Engine;
+    #[cfg(feature = "md-5")]
     use base64::prelude::BASE64_STANDARD;
     use http::HeaderMap;
     use http::HeaderValue;
@@ -1736,6 +1742,7 @@ mod tests {
     }
 
     /// See CONTRIBUTING.md for the MinIO setup for this test.
+    #[cfg(all(feature = "md-5", feature = "reqwest"))]
     #[tokio::test]
     async fn test_s3_ssec_encryption_with_minio() {
         if std::env::var("TEST_S3_SSEC_ENCRYPTION").is_err() {

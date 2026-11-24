@@ -201,7 +201,7 @@ where
         #[cfg(all(feature = "fs", not(target_arch = "wasm32")))]
         ObjectStoreScheme::Local => Box::new(LocalFileSystem::new()) as _,
         ObjectStoreScheme::Memory => Box::new(InMemory::new()) as _,
-        #[cfg(feature = "aws-base")]
+        #[cfg(feature = "aws-core")]
         ObjectStoreScheme::AmazonS3 => {
             builder_opts!(crate::aws::AmazonS3Builder, url, _options)
         }
@@ -220,7 +220,7 @@ where
         }
         #[cfg(not(all(
             feature = "fs",
-            feature = "aws-base",
+            feature = "aws-core",
             feature = "azure-base",
             feature = "gcp-base",
             feature = "http-base",

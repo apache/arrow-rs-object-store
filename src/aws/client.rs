@@ -45,17 +45,24 @@ use crate::{
 use async_trait::async_trait;
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
-use bytes::{Buf, Bytes};
+use bytes::Buf;
+#[cfg(feature = "md-5")]
+use bytes::Bytes;
 use http::header::{
     CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE, CONTENT_LENGTH,
     CONTENT_TYPE,
 };
 use http::{HeaderMap, HeaderName, Method};
+#[cfg(feature = "md-5")]
 use itertools::Itertools;
+#[cfg(feature = "md-5")]
 use md5::{Digest, Md5};
 use percent_encoding::{PercentEncode, utf8_percent_encode};
+#[cfg(feature = "md-5")]
 use quick_xml::events::{self as xml_events};
-use serde::{Deserialize, Serialize};
+#[cfg(feature = "md-5")]
+use serde::Deserialize;
+use serde::Serialize;
 use std::sync::Arc;
 
 const VERSION_HEADER: &str = "x-amz-version-id";
@@ -68,12 +75,14 @@ const STORAGE_CLASS: &str = "x-amz-storage-class";
 /// A specialized `Error` for object store-related errors
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
+    #[cfg(feature = "md-5")]
     #[error("Error performing DeleteObjects request: {}", source)]
     DeleteObjectsRequest {
         source: crate::client::retry::RetryError,
         paths: Vec<String>,
     },
 
+    #[cfg(feature = "md-5")]
     #[error(
         "DeleteObjects request failed for key {}: {} (code: {})",
         path,
@@ -86,9 +95,11 @@ pub(crate) enum Error {
         message: String,
     },
 
+    #[cfg(feature = "md-5")]
     #[error("Error getting DeleteObjects response body: {}", source)]
     DeleteObjectsResponse { source: HttpError },
 
+    #[cfg(feature = "md-5")]
     #[error("Got invalid DeleteObjects response: {}", source)]
     InvalidDeleteObjectsResponse {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
@@ -130,6 +141,7 @@ impl From<Error> for crate::Error {
     fn from(err: Error) -> Self {
         match err {
             Error::CompleteMultipartRequest { source, path } => source.error(STORE, path),
+            #[cfg(feature = "md-5")]
             Error::DeleteObjectsRequest { source, paths } => source.error(STORE, paths.join(",")),
             _ => Self::Generic {
                 store: STORE,
@@ -155,6 +167,7 @@ pub(crate) enum CompleteMultipartMode {
     Create,
 }
 
+#[cfg(feature = "md-5")]
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase", rename = "DeleteResult")]
 struct BatchDeleteResponse {
@@ -162,6 +175,7 @@ struct BatchDeleteResponse {
     content: Vec<DeleteObjectResult>,
 }
 
+#[cfg(feature = "md-5")]
 #[derive(Deserialize)]
 enum DeleteObjectResult {
     #[allow(unused)]
@@ -169,6 +183,7 @@ enum DeleteObjectResult {
     Error(DeleteError),
 }
 
+#[cfg(feature = "md-5")]
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase", rename = "Deleted")]
 struct DeletedObject {
@@ -176,6 +191,7 @@ struct DeletedObject {
     key: String,
 }
 
+#[cfg(feature = "md-5")]
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase", rename = "Error")]
 struct DeleteError {
@@ -184,6 +200,7 @@ struct DeleteError {
     message: String,
 }
 
+#[cfg(feature = "md-5")]
 impl From<DeleteError> for Error {
     fn from(err: DeleteError) -> Self {
         Self::DeleteFailed {
@@ -528,6 +545,7 @@ impl S3Client {
     /// there was an error for a certain path, the error will be returned in the
     /// vector. If there was an issue with making the overall request, an error
     /// will be returned at the top level.
+    #[cfg(feature = "md-5")]
     pub(crate) async fn bulk_delete_request(&self, paths: Vec<Path>) -> Result<Vec<Result<Path>>> {
         if paths.is_empty() {
             return Ok(Vec::new());
@@ -639,9 +657,12 @@ impl S3Client {
 
     /// Make a single-object S3 Delete request <https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObject.html>
     ///
-    /// Unlike [`bulk_delete_request`](Self::bulk_delete_request), this issues a
-    /// plain `DELETE /key` request, which is part of the core S3 API and is
-    /// supported by every S3-compatible provider.
+    /// This issues a plain `DELETE /key` request, which is part of the core S3
+    /// API and is supported by every S3-compatible provider.
+    #[cfg_attr(
+        feature = "md-5",
+        doc = "See [`bulk_delete_request`](Self::bulk_delete_request) for multi-object deletes."
+    )]
     pub(crate) async fn delete_request(&self, path: &Path) -> Result<()> {
         self.request(Method::DELETE, path).send().await?;
         Ok(())
@@ -1190,7 +1211,7 @@ mod tests {
         mock.shutdown().await;
     }
 
-    #[cfg(feature = "reqwest")]
+    #[cfg(all(feature = "reqwest", feature = "md-5"))]
     #[tokio::test]
     async fn test_default_headers_signed_bulk_delete() {
         let mock = MockServer::new().await;
@@ -1216,8 +1237,10 @@ mod tests {
     /// connection just resets and the S3 retry logic can still surface an `Ok`
     /// result), so assertions placed inside the closure are silently ignored.
     /// We capture into shared state and assert in the test body instead.
+    #[cfg(feature = "reqwest")]
     type CapturedRequest = (Method, String, Option<String>);
 
+    #[cfg(feature = "reqwest")]
     fn capture(captured: &Arc<std::sync::Mutex<Vec<CapturedRequest>>>, req: &Request<Incoming>) {
         captured.lock().unwrap().push((
             req.method().clone(),
@@ -1229,6 +1252,7 @@ mod tests {
     /// Build an `AmazonS3` via the public builder so that `bucket_endpoint`
     /// is computed by the library from the addressing-style option — i.e.
     /// the option under test actually drives the URL the client emits.
+    #[cfg(feature = "reqwest")]
     fn make_store(mock: &MockServer, virtual_hosted: bool, disable_bulk_delete: bool) -> AmazonS3 {
         AmazonS3Builder::new()
             .with_endpoint(mock.url())
@@ -1242,6 +1266,7 @@ mod tests {
             .unwrap()
     }
 
+    #[cfg(all(feature = "reqwest", feature = "md-5"))]
     #[tokio::test]
     async fn test_delete_default() {
         // Default: path-style + bulk delete enabled.
@@ -1271,6 +1296,31 @@ mod tests {
         mock.shutdown().await;
     }
 
+    #[cfg(all(feature = "reqwest", not(feature = "md-5")))]
+    #[tokio::test]
+    async fn test_delete_default_without_md5() {
+        let mock = MockServer::new().await;
+        let captured: Arc<std::sync::Mutex<Vec<CapturedRequest>>> = Default::default();
+        let c = Arc::clone(&captured);
+        mock.push_fn(move |req| {
+            capture(&c, &req);
+            Response::builder().status(204).body(String::new()).unwrap()
+        });
+
+        let store = make_store(&mock, false, false);
+        let locations = futures_util::stream::iter(vec![Ok(Path::from("foo"))]).boxed();
+        let deleted: Vec<_> = store.delete_stream(locations).try_collect().await.unwrap();
+        assert_eq!(deleted, vec![Path::from("foo")]);
+
+        let captured = captured.lock().unwrap().clone();
+        assert_eq!(
+            captured,
+            vec![(Method::DELETE, "/test-bucket/foo".into(), None)]
+        );
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
     #[tokio::test]
     async fn test_delete_default_with_disable_bulk() {
         // Path-style + bulk delete disabled.
@@ -1307,6 +1357,7 @@ mod tests {
         mock.shutdown().await;
     }
 
+    #[cfg(all(feature = "reqwest", feature = "md-5"))]
     #[tokio::test]
     async fn test_delete_virtual_hosted() {
         // Virtual-hosted style + bulk delete enabled.
@@ -1337,6 +1388,7 @@ mod tests {
         mock.shutdown().await;
     }
 
+    #[cfg(feature = "reqwest")]
     #[tokio::test]
     async fn test_delete_virtual_hosted_with_disable_bulk() {
         // Virtual-hosted style + bulk delete disabled.

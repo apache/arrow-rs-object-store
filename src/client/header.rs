@@ -73,7 +73,7 @@ pub(crate) enum Error {
 /// Extracts a PutResult from the provided response
 ///
 /// Propagates the extensions of the response into the [`crate::PutResult`]
-#[cfg(any(feature = "aws-base", feature = "gcp-base", feature = "azure-base"))]
+#[cfg(any(feature = "aws-core", feature = "gcp-base", feature = "azure-base"))]
 pub(crate) fn get_put_result(
     response: crate::client::HttpResponse,
     version: &str,
@@ -89,7 +89,7 @@ pub(crate) fn get_put_result(
 }
 
 /// Extracts a optional version from the provided [`HeaderMap`]
-#[cfg(any(feature = "aws-base", feature = "gcp-base", feature = "azure-base"))]
+#[cfg(any(feature = "aws-core", feature = "gcp-base", feature = "azure-base"))]
 pub(crate) fn get_version(headers: &HeaderMap, version: &str) -> Result<Option<String>, Error> {
     Ok(match headers.get(version) {
         Some(x) => Some(
