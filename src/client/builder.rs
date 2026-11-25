@@ -66,7 +66,7 @@ impl HttpRequestBuilder {
         }
     }
 
-    #[cfg(any(feature = "aws-base", feature = "azure-base"))]
+    #[cfg(any(feature = "aws-core", feature = "azure-base"))]
     pub(crate) fn from_parts(client: HttpClient, request: HttpRequest) -> Self {
         Self {
             client,
@@ -119,7 +119,7 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(feature = "aws-base")]
+    #[cfg(feature = "aws-core")]
     pub(crate) fn headers(mut self, headers: http::HeaderMap) -> Self {
         use http::header::{Entry, OccupiedEntry};
 
@@ -201,7 +201,7 @@ impl HttpRequestBuilder {
 
     #[cfg(any(
         test,
-        feature = "aws-base",
+        feature = "aws-core",
         feature = "gcp-base",
         feature = "azure-base"
     ))]
@@ -242,7 +242,7 @@ impl HttpRequestBuilder {
         self
     }
 
-    #[cfg(any(feature = "aws-base", feature = "gcp-base", feature = "azure-base"))]
+    #[cfg(any(feature = "aws-core", feature = "gcp-base", feature = "azure-base"))]
     pub(crate) fn body(mut self, b: impl Into<HttpRequestBody>) -> Self {
         if let Ok(r) = &mut self.request {
             *r.body_mut() = b.into();

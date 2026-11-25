@@ -60,6 +60,11 @@ cargo build -p object_store --no-default-features --features aws-base --target w
 
 See [Disabling `reqwest`] in the crate docs for full details.
 
+Use `aws-core` for S3 without the `md-5` dependency. Without MD5 support, S3
+deletes use single-object requests and SSE-C is unavailable. Cargo combines
+features across dependencies that use `object_store`, so if another dependency
+enables `aws-base` or `aws`, it also enables MD5 support.
+
 [`reqwest`]: https://crates.io/crates/reqwest
 [`wasm32-wasip1`]: https://doc.rust-lang.org/rustc/platform-support/wasm32-wasip1.html
 [Disabling `reqwest`]: https://docs.rs/object_store/latest/object_store/#disabling-reqwest

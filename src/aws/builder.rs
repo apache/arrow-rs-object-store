@@ -27,10 +27,13 @@ use crate::aws::{
 use crate::client::{CryptoProvider, HttpConnector, TokenCredentialProvider, http_connector};
 use crate::config::ConfigValue;
 use crate::{ClientConfigKey, ClientOptions, Result, RetryConfig, StaticCredentialProvider};
+#[cfg(feature = "md-5")]
 use base64::Engine;
+#[cfg(feature = "md-5")]
 use base64::prelude::BASE64_STANDARD;
 use http::header::{HeaderMap, HeaderValue};
 use itertools::Itertools;
+#[cfg(feature = "md-5")]
 use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
@@ -440,6 +443,7 @@ pub enum AmazonS3ConfigKey {
     /// single-object `DELETE /key` requests instead of the bulk `DeleteObjects`
     /// API (`POST /?delete`). Use this for S3-compatible providers that do not
     /// implement `DeleteObjects` (e.g. Alibaba Cloud OSS).
+    /// Without MD5 support, single-object delete is always used.
     ///
     /// Supported keys:
     /// - `aws_disable_bulk_delete`
@@ -1093,6 +1097,7 @@ impl AmazonS3Builder {
     /// `true` restores the single-object delete behaviour that works against
     /// every S3-compatible provider, at the cost of throughput when deleting
     /// many objects via [`delete_stream`](crate::ObjectStore::delete_stream).
+    /// Single-object delete is always used without MD5 support.
     pub fn with_disable_bulk_delete(mut self, disable: bool) -> Self {
         self.disable_bulk_delete = disable.into();
         self
@@ -1118,6 +1123,8 @@ impl AmazonS3Builder {
 
     /// Use SSE-C for server side encryption.
     /// Must pass the *base64-encoded* 256-bit customer encryption key.
+    /// [`Self::build`] returns an error without MD5 support. The `aws-base` and
+    /// `aws` features enable MD5 support.
     pub fn with_ssec_encryption(mut self, customer_key_base64: impl Into<String>) -> Self {
         self.encryption_type = Some(ConfigValue::Parsed(S3EncryptionType::SseC));
         self.encryption_customer_key_base64 = customer_key_base64.into().into();
@@ -1522,6 +1529,14 @@ impl S3EncryptionHeaders {
                     );
                 }
             }
+            #[cfg(not(feature = "md-5"))]
+            S3EncryptionType::SseC => {
+                let _ = encryption_customer_key_base64;
+                return Err(crate::Error::NotSupported {
+                    source: "SSE-C requires MD5 support, which the aws-base feature enables".into(),
+                });
+            }
+            #[cfg(feature = "md-5")]
             S3EncryptionType::SseC => {
                 headers.insert(
                     "x-amz-server-side-encryption-customer-algorithm",
@@ -1584,6 +1599,21 @@ impl From<S3EncryptionHeaders> for HeaderMap {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[cfg(all(feature = "reqwest", not(feature = "md-5")))]
+    #[test]
+    fn s3_ssec_requires_md5() {
+        let err = AmazonS3Builder::new()
+            .with_bucket_name("bucket")
+            .with_ssec_encryption("customer-key")
+            .build()
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            crate::Error::NotSupported { source }
+                if source.to_string() == "SSE-C requires MD5 support, which the aws-base feature enables"
+        ));
+    }
 
     #[test]
     fn s3_test_config_from_map() {

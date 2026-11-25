@@ -84,7 +84,7 @@
     doc = "* [`gcp`]: [Google Cloud Storage](https://cloud.google.com/storage/) support. See [`GoogleCloudStorageBuilder`](gcp::GoogleCloudStorageBuilder)"
 )]
 #![cfg_attr(
-    feature = "aws-base",
+    feature = "aws-core",
     doc = "* [`aws`]: [Amazon S3](https://aws.amazon.com/s3/). See [`AmazonS3Builder`](aws::AmazonS3Builder)"
 )]
 #![cfg_attr(
@@ -556,10 +556,14 @@
 //! | `azure` | `azure-base` + `reqwest` + `aws-lc-rs` | Azure Blob Storage with the built-in HTTP transport. |
 //! | `gcp` | `gcp-base` + `reqwest` + `aws-lc-rs` | Google Cloud Storage with the built-in HTTP transport. |
 //! | `http` | `http-base` + `reqwest` + `aws-lc-rs` | HTTP/WebDAV with the built-in HTTP transport. |
-//! | `aws-base` |  | S3 without `reqwest` or crypto; supply your own [`HttpConnector`] and [`client::CryptoProvider`]. |
+//! | `aws-base` | `aws-core` + `md-5` | S3 with bulk delete and SSE-C. Supply your own [`HttpConnector`] and [`client::CryptoProvider`]. |
+//! | `aws-core` | `cloud-base` + `crc-fast` | S3 without `md-5`, `reqwest`, or a bundled signing provider. Without MD5 support, deletes use single-object requests and SSE-C is unavailable. |
 //! | `azure-base` |  | Azure without `reqwest` or crypto; supply your own [`HttpConnector`] and [`client::CryptoProvider`]. |
 //! | `gcp-base` |  | GCS without `reqwest` or crypto; supply your own [`HttpConnector`] and [`client::CryptoProvider`]. |
 //! | `http-base` |  | HTTP/WebDAV without `reqwest`; supply your own [`HttpConnector`]. |
+//!
+//! Cargo combines features requested by dependencies that use `object_store`.
+//! If another dependency enables `aws-base` or `aws`, it also enables `md-5`.
 //!
 //! ## Transport and crypto features
 //!
@@ -706,7 +710,7 @@
 //!
 //! [`reqwest`]: https://crates.io/crates/reqwest
 
-#[cfg(feature = "aws-base")]
+#[cfg(feature = "aws-core")]
 pub mod aws;
 #[cfg(feature = "azure-base")]
 pub mod azure;
@@ -727,7 +731,7 @@ pub mod memory;
 pub mod path;
 pub mod prefix;
 pub mod registry;
-#[cfg(any(feature = "aws-base", feature = "azure-base", feature = "gcp-base"))]
+#[cfg(any(feature = "aws-core", feature = "azure-base", feature = "gcp-base"))]
 pub mod retry;
 #[cfg(feature = "cloud-base")]
 pub mod signer;
@@ -2424,7 +2428,7 @@ mod tests {
         store.list(Some(&path))
     }
 
-    #[cfg(any(feature = "azure-base", feature = "aws-base"))]
+    #[cfg(any(feature = "azure-base", feature = "aws-core"))]
     pub(crate) async fn signing<T>(integration: &T)
     where
         T: ObjectStore + signer::Signer,
@@ -2447,7 +2451,7 @@ mod tests {
         assert_eq!(data, loaded);
     }
 
-    #[cfg(any(feature = "aws-base", feature = "azure-base"))]
+    #[cfg(any(feature = "aws-core", feature = "azure-base"))]
     pub(crate) async fn tagging<F, Fut>(storage: Arc<dyn ObjectStore>, validate: bool, get_tags: F)
     where
         F: Fn(Path) -> Fut + Send + Sync,

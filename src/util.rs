@@ -294,7 +294,7 @@ impl<T: RangeBounds<u64>> From<T> for GetRange {
 //
 // Do not URI-encode any of the unreserved characters that RFC 3986 defines:
 // A-Z, a-z, 0-9, hyphen ( - ), underscore ( _ ), period ( . ), and tilde ( ~ ).
-#[cfg(any(feature = "aws-base", feature = "gcp-base"))]
+#[cfg(any(feature = "aws-core", feature = "gcp-base"))]
 pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet = percent_encoding::NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'.')
@@ -309,7 +309,7 @@ pub(crate) const STRICT_ENCODE_SET: percent_encoding::AsciiSet = percent_encodin
 /// spaces as `%20` and sign the canonicalized query string, so the bytes in the URL must match what
 /// is signed. Encoding the pairs ourselves keeps the URL and the signature consistent regardless of
 /// the characters a caller supplies.
-#[cfg(any(feature = "aws-base", feature = "gcp-base"))]
+#[cfg(any(feature = "aws-core", feature = "gcp-base"))]
 pub(crate) fn append_strict_query_pairs(url: &mut url::Url, pairs: &[(String, String)]) {
     use percent_encoding::utf8_percent_encode;
     use std::fmt::Write;
@@ -336,7 +336,7 @@ pub(crate) fn append_strict_query_pairs(url: &mut url::Url, pairs: &[(String, St
 /// Headers that are controlled by the signer (`host`) or silently dropped during canonicalization
 /// (`authorization`, `content-length`, `user-agent`). Allowing a caller to "sign" these would
 /// either corrupt the signature or be a silent no-op, so they are rejected.
-#[cfg(any(feature = "aws-base", feature = "gcp-base"))]
+#[cfg(any(feature = "aws-core", feature = "gcp-base"))]
 const RESERVED_SIGNED_HEADERS: [&str; 4] =
     ["host", "authorization", "content-length", "user-agent"];
 
@@ -352,7 +352,7 @@ const RESERVED_SIGNED_HEADERS: [&str; 4] =
 /// as a string, so such values cannot be signed.
 ///
 /// [`SignedUrlOptions`]: crate::signer::SignedUrlOptions
-#[cfg(any(feature = "aws-base", feature = "gcp-base"))]
+#[cfg(any(feature = "aws-core", feature = "gcp-base"))]
 pub(crate) fn validate_signed_url_extras(
     store: &'static str,
     extra_query: &[(String, String)],
@@ -392,7 +392,7 @@ pub(crate) fn validate_signed_url_extras(
 }
 
 /// Computes the SHA256 digest of `body` returned as a hex encoded string
-#[cfg(any(feature = "aws-base", feature = "gcp-base"))]
+#[cfg(any(feature = "aws-core", feature = "gcp-base"))]
 pub(crate) fn hex_digest(
     crypto: &dyn crate::client::CryptoProvider,
     bytes: &[u8],
@@ -403,7 +403,7 @@ pub(crate) fn hex_digest(
 }
 
 /// Returns `bytes` as a lower-case hex encoded string
-#[cfg(any(feature = "aws-base", feature = "gcp-base"))]
+#[cfg(any(feature = "aws-core", feature = "gcp-base"))]
 pub(crate) fn hex_encode(bytes: &[u8]) -> String {
     use std::fmt::Write;
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -577,7 +577,7 @@ mod tests {
         assert_eq!(range.as_range(2).unwrap(), 1..2);
     }
 
-    #[cfg(any(feature = "aws-base", feature = "gcp-base"))]
+    #[cfg(any(feature = "aws-core", feature = "gcp-base"))]
     fn owned_pairs(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
         pairs
             .iter()
@@ -585,7 +585,7 @@ mod tests {
             .collect()
     }
 
-    #[cfg(any(feature = "aws-base", feature = "gcp-base"))]
+    #[cfg(any(feature = "aws-core", feature = "gcp-base"))]
     #[test]
     fn append_strict_query_pairs_uses_percent_encoding() {
         let mut url = url::Url::parse("https://example.com/object").unwrap();
@@ -604,7 +604,7 @@ mod tests {
         assert_eq!(url.query().unwrap(), before);
     }
 
-    #[cfg(any(feature = "aws-base", feature = "gcp-base"))]
+    #[cfg(any(feature = "aws-core", feature = "gcp-base"))]
     #[test]
     fn validate_signed_url_extras_accepts_and_rejects() {
         use http::{HeaderMap, HeaderName, HeaderValue};

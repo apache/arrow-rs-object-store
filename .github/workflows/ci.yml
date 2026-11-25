@@ -63,6 +63,18 @@ jobs:
             exit 1
           fi
           echo "✅ *-base features do not enable reqwest"
+      - name: Verify S3 feature dependencies on MD5
+        run: |
+          core=$(cargo tree --no-default-features --features aws-core --edges normal --prefix none -f '{p}')
+          if printf '%s\n' "$core" | grep -E '^(md-5|md5|md5-asm) v'; then
+            echo "❌ aws-core pulled in an MD5 crate"
+            exit 1
+          fi
+          base=$(cargo tree --no-default-features --features aws-base --edges normal --prefix none -f '{p}')
+          if ! printf '%s\n' "$base" | grep -q '^md-5 v'; then
+            echo "❌ aws-base must enable md-5"
+            exit 1
+          fi
       - name: Check ring build does not pull aws-lc-rs
         # A `ring` build (with a non-aws-lc-rs reqwest TLS backend) must be free
         # of aws-lc-rs entirely, so users can opt out of it on every target.
@@ -108,6 +120,8 @@ jobs:
         run: cargo clippy --features http -- -D warnings
       - name: Run clippy with aws-base feature
         run: cargo clippy --no-default-features --features aws-base -- -D warnings
+      - name: Run clippy with aws-core feature
+        run: cargo clippy --no-default-features --features aws-core -- -D warnings
       - name: Run clippy with azure-base feature
         run: cargo clippy --no-default-features --features azure-base -- -D warnings
       - name: Run clippy with gcp-base feature
@@ -276,6 +290,9 @@ jobs:
       #   as the integration tests already ran above.
       - name: Run object_store tests with ring crypto provider
         run: env -u TEST_INTEGRATION cargo test --lib --tests --no-default-features --features fs,aws-base,azure-base,gcp-base,http-base,reqwest,reqwest/native-tls,ring
+
+      - name: Run S3 unit tests without MD5
+        run: env -u TEST_INTEGRATION cargo test --lib --no-default-features --features fs,aws-core,reqwest,reqwest/native-tls,ring aws::
 
       - name: GCS Output
         if: ${{ !cancelled() }}

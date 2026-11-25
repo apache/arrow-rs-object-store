@@ -101,8 +101,11 @@ ring = ["dep:ring", "rustls-pki-types"]
 # These compile provider logic without forcing reqwest or a crypto provider.
 azure-base = ["cloud-base", "httparse"]
 gcp-base = ["cloud-base"]
-aws-base = ["cloud-base", "crc-fast", "md-5"]
+aws-base = ["aws-core", "md-5"]
 http-base = ["cloud-base"]
+
+# S3 implementation without the MD5 dependency used for bulk delete and SSE-C.
+aws-core = ["cloud-base", "crc-fast"]
 
 # "Batteries-included" implementation features.
 # Each enables the default `reqwest` transport (with rustls) and `aws-lc-rs`.
