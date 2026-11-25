@@ -736,7 +736,7 @@ mod tests {
         let calls = Arc::new(AtomicUsize::new(0));
         let credentials = TokenCredentialProvider::new(
             InstanceCredentialProvider::default(),
-            HttpClient::new(Metadata(calls.clone())),
+            HttpClient::new(Metadata(Arc::clone(&calls))),
             RetryConfig::default(),
         )
         .with_min_ttl(TOKEN_MIN_TTL);
