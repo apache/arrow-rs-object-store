@@ -1,0 +1,28 @@
+# Tasks
+
+## 1. Core Option, Return, and Trait Definitions
+
+- [ ] 1.1 Add `RangeBoundsMode` (`ClampEmpty` default, `Strict`), extend `ReadOptions` with `bounds_mode` and `pattern` builder helpers, and add `ByteStream` / `StreamRead` in `gcs-rust-fs` (`src/options.rs`, `src/fs.rs`, `src/lib.rs`), verifying `cargo test --lib` passes unit tests for default option construction and strict vs clamped range resolution
+- [ ] 1.2 Add `WriteMode::IfGenerationMatch(i64)` (`src/options.rs`), `trait MultipartWriter` (`src/fs.rs`), and `ListPageOptions` / `ListPage` (`src/options.rs`, `src/fs.rs`, `src/lib.rs`), verifying public re-exports compile cleanly with `cargo check --all-targets`
+- [ ] 1.3 Extend `trait FileSystem` (`src/fs.rs`) with `open_stream`, `read_ranges`, `put_bytes`, `open_multipart`, and `list_page` (providing default `ErrorKind::Unsupported` or fallback implementations so mock/remote `FileSystem` implementors remain source-compatible) and document all five methods and option types in rustdoc, verifying `cargo doc --no-deps` builds with zero warnings
+
+## 2. Paginated Object Listing (`list_page`)
+
+- [ ] 2.1 Implement single-page `Backend::list_objects_page` in `src/gcs/control.rs` and `GcsFs::list_page` in `src/gcs/fs.rs` using one step of `StorageControl::list_objects().by_page().next()`, `/` delimiter prefix extraction (including HNS/Zonal folders), `\0`-suffixed `lexicographic_start` for exclusive `start_after`, and empty-prefix vs missing-bucket handling, verifying unit/mock tests cover `page_size` pagination, delimiter grouping, exact `start_after` exclusion, empty prefixes, and `ErrorKind::NotFound` on missing buckets
+- [ ] 2.2 Implement `CachedFs::list_page` pass-through in `src/cached.rs` (documenting `CacheConfig::negative = false` multi-writer guidance on `CachedFs` / `CacheConfig`), verifying `CachedFs` listing tests and `cargo doc --no-deps` pass
+
+## 3. Stat-Returning CAS Writes (`put_bytes`) and Concurrent Multipart Uploads (`open_multipart`)
+
+- [ ] 3.1 Implement `GcsFs::put_bytes` and `WriteMode::IfGenerationMatch(i64)` precondition mapping in `src/gcs/write.rs` and `src/gcs/fs.rs` (refactoring `pipe_file` to delegate to `put_bytes` and mapping HTTP 412 / gRPC `FAILED_PRECONDITION` to `ErrorKind::PreconditionFailed` and `Create` collisions to `ErrorKind::AlreadyExists`), plus `CachedFs::put_bytes` directory-cache invalidation in `src/cached.rs`, verifying unit/mock tests cover returned `ObjectStat` (`etag`, `generation`, `size`), matching CAS, mismatched CAS, `WriteMode::Create` conflict, and `CachedFs` cache invalidation
+- [ ] 3.2 Implement `CompositeMultipartWriter` in `src/gcs/write.rs` for `BucketKind::Flat` and `BucketKind::Hierarchical` using lock-free concurrent `write_part(part_idx, data)` uploads, `CompositeUploadGuard` cleanup on `abort()` / `Drop`, direct `compose_objects` for `1..=32` parts, 2-level 32-ary tree composition for `33..=1,024` parts, and `CachedFs::open_multipart` invalidation on `complete()`, verifying unit/mock tests cover out-of-order concurrent parts, `0`-part and `40`-part tree composition, destination `WriteMode` preconditions, and abort/drop cleanup
+- [ ] 3.3 Implement `ZonalMultipartWriter` in `src/gcs/write.rs` for `BucketKind::Zonal` using a bounded `BTreeMap<usize, Bytes>` reorder buffer draining contiguous parts into `AppendableObjectWriter` and document `.gstmp.` lifecycle rule guidance in `MultipartWriter` / `open_multipart` rustdoc, verifying unit tests cover out-of-order part arrival (`write_part(1)` before `write_part(0)`), gap backpressure/limits, and `cargo doc --no-deps` passes
+
+## 4. Pooled gRPC Descriptors, `open_stream`, and `PageCache`-Backed `read_ranges`
+
+- [ ] 4.1 Implement bounded LRU `DescriptorPool` (`C_desc_max = 64`, `T_desc_idle = 30s`) and pool hit/miss metrics in `src/gcs/backend.rs` and `src/metrics.rs`, with single-retry recovery on broken/reset streams before bytes are yielded, verifying unit tests cover descriptor reuse on matching `(bucket, name, generation)`, LRU capacity eviction, idle TTL expiration, and stream-reset retry
+- [ ] 4.2 Implement `GcsFs::open_stream` (`src/gcs/fs.rs`) using 1-RTT gRPC `open_object().send_and_read(...)` (seeding `DescriptorPool`) and `RangeBoundsMode::Strict` validation across `open_stream`, `cat_file`, and `read_ranges`, plus `CachedFs::open_stream` (`src/cached.rs`) engaging `ReadaheadFile` for sequential reads `>= io_size`, verifying unit/mock tests cover 1-RTT `StreamRead` metadata + chunks, `ErrorKind::OutOfRange` on `start >= size`, `ErrorKind::InvalidRange` on `start >= end`, upper-bound EOF clamping, and `CachedFs` readahead engagement
+- [ ] 4.3 Implement `GcsFs::read_ranges` (`src/gcs/fs.rs`) multiplexing over `DescriptorPool` on gRPC (or the striped client pool on HTTP) and `CachedFs::read_ranges` (`src/cached.rs`) performing `256 KiB` `PageCache` lookup, `<= 256 KiB` gap coalescing (up to `max_folio_size`), concurrent miss fetching, and `PageCache` population, verifying unit/mock tests confirm repeated overlapping `read_ranges` calls hit `PageCache` with zero backend re-fetches, adjacent misses coalesce, and rustdoc examples compile via `cargo test --doc`
+
+## 5. Cross-Flow Integration Verification
+
+- [ ] 5.1 Add end-to-end integration tests exercising the combined `put_bytes` (with `IfGenerationMatch`), `open_multipart` (out-of-order concurrent parts), `list_page` (pagination, `/` delimiter, and `start_after`), `open_stream` (strict bounds + readahead), and `read_ranges` (`CachedFs` `PageCache` + gRPC `DescriptorPool`) flows across `GcsFs` and `CachedFs`, verifying `cargo test` passes across default and live/emulator test suites

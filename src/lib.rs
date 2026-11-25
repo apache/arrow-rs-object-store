@@ -717,6 +717,8 @@ pub mod chunked;
 pub mod delimited;
 #[cfg(feature = "gcp-base")]
 pub mod gcp;
+#[cfg(all(feature = "gcs-rust-fs", not(target_arch = "wasm32")))]
+pub mod gcs_rust_fs;
 #[cfg(feature = "http-base")]
 pub mod http;
 #[cfg(feature = "tokio")]
