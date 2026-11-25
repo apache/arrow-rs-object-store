@@ -17,6 +17,15 @@
 
 //! Generic utilities for network based [`ObjectStore`] implementations
 //!
+//! Enable TRACE on `object_store::client::token` to observe temporary credential cache lookups.
+//! Each `token_cache_lookup` span carries a process-local `cache_id` and inherits the calling
+//! operation's tracing context. A `lock_wait` event identifies a pending read or write acquisition
+//! by `mode`. A `write_acquired` event identifies the exclusive owner, including a caller that
+//! finds a fresh token upon rechecking. The owner can emit `refresh_started` and
+//! `refresh_returned`. The `lookup_returned` event follows lock release and records success.
+//! Cancellation closes the lookup span without a return event. Tokens and provider errors
+//! are excluded from these events.
+//!
 //! [`ObjectStore`]: crate::ObjectStore
 
 pub(crate) mod backoff;

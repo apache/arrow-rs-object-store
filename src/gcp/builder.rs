@@ -698,6 +698,93 @@ mod tests {
     const FAKE_KEY: &str = r#"{"private_key": "private_key", "private_key_id": "private_key_id", "client_email":"client_email", "disable_oauth":true}"#;
     const FAKE_KEY_WITH_BASE_URL: &str = r#"{"private_key": "private_key", "private_key_id": "private_key_id", "client_email":"client_email", "disable_oauth":true, "gcs_base_url": "https://base-url-from-credentials:4443"}"#;
 
+    #[tokio::test]
+    async fn metadata_cache_traces_refresh_owner_and_waiter() {
+        use crate::CredentialProvider;
+        use crate::client::{HttpClient, HttpError, HttpRequest, HttpResponse, HttpService};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tracing::Instrument;
+
+        #[derive(Debug)]
+        struct Metadata(Arc<AtomicUsize>);
+
+        #[async_trait::async_trait]
+        impl HttpService for Metadata {
+            async fn call(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+                assert_eq!(
+                    request.uri().path(),
+                    "/computeMetadata/v1/instance/service-accounts/default/token"
+                );
+                self.0.fetch_add(1, Ordering::Relaxed);
+                tokio::task::yield_now().await;
+                Ok(http::Response::new(
+                    r#"{"access_token":"test-access-token","expires_in":3600}"#
+                        .to_owned()
+                        .into(),
+                ))
+            }
+        }
+
+        let output = NamedTempFile::new().unwrap();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(Arc::new(output.as_file().try_clone().unwrap()))
+            .finish();
+        let _subscriber = tracing::subscriber::set_default(subscriber);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let credentials = TokenCredentialProvider::new(
+            InstanceCredentialProvider::default(),
+            HttpClient::new(Metadata(calls.clone())),
+            RetryConfig::default(),
+        )
+        .with_min_ttl(TOKEN_MIN_TTL);
+        let first = credentials
+            .get_credential()
+            .instrument(tracing::info_span!("first_file"));
+        let second = credentials
+            .get_credential()
+            .instrument(tracing::info_span!("second_file"));
+        tokio::pin!(first, second);
+        assert!(futures_util::poll!(&mut first).is_pending());
+        assert!(futures_util::poll!(&mut second).is_pending());
+
+        let trace = std::fs::read_to_string(output.path()).unwrap();
+        let cache_id = regex::Regex::new(r"cache_id=\d+")
+            .unwrap()
+            .find(&trace)
+            .unwrap()
+            .as_str();
+        let stage = |file: &str, stage: &str| {
+            trace
+                .lines()
+                .any(|line| line.contains(file) && line.contains(cache_id) && line.contains(stage))
+        };
+        assert!(stage("first_file", r#"stage="write_acquired""#));
+        assert!(stage("first_file", r#"stage="refresh_started""#));
+        assert!(stage("second_file", r#"stage="lock_wait" mode="read""#));
+        assert!(!trace.contains("refresh_returned"));
+
+        let (first, second) = tokio::join!(first, second);
+        assert!(Arc::ptr_eq(&first.unwrap(), &second.unwrap()));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        let trace = std::fs::read_to_string(output.path()).unwrap();
+        assert_eq!(
+            trace
+                .matches(r#"stage="refresh_returned" success=true"#)
+                .count(),
+            1
+        );
+        assert_eq!(
+            trace
+                .matches(r#"stage="lookup_returned" success=true"#)
+                .count(),
+            2
+        );
+        assert!(!trace.contains("test-access-token"));
+    }
+
     #[test]
     fn gcs_test_service_account_key_and_path() {
         let mut tfile = NamedTempFile::new().unwrap();

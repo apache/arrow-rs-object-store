@@ -124,6 +124,7 @@ hyper = { version = "1.2", features = ["server"] }
 hyper-util = "0.1"
 rand = "0.10"
 tempfile = "3.1.0"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 regex = "1.11.1"
 webpki-root-certs = "1"
 # The "gzip" feature for reqwest is enabled for an integration test.
