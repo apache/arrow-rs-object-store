@@ -410,12 +410,13 @@ impl ObjectStore for AmazonS3 {
 
         match mode {
             CopyMode::Overwrite => {
-                self.client
+                let response = self
+                    .client
                     .copy_request(from, to)
                     .idempotent(true)
                     .send()
                     .await?;
-                Ok(())
+                client::validate_copy_response(response).await
             }
             CopyMode::Create => {
                 let (k, v, status) = match &self.client.config.copy_if_not_exists {
@@ -482,7 +483,7 @@ impl ObjectStore for AmazonS3 {
                         })
                     }
                     Err(e) => Err(e.into()),
-                    Ok(_) => Ok(()),
+                    Ok(response) => client::validate_copy_response(response).await,
                 }
             }
         }

@@ -114,6 +114,14 @@ pub(crate) enum Error {
     #[error("Error getting complete multipart response body: {}", source)]
     CompleteMultipartResponseBody { source: HttpError },
 
+    #[error("Error getting copy response body: {}", source)]
+    CopyResponseBody { source: HttpError },
+
+    #[error("Got invalid copy response: {}", source)]
+    InvalidCopyResponse {
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
     #[error("Got invalid list response: {}", source)]
     InvalidListResponse { source: quick_xml::de::DeError },
 
@@ -491,6 +499,84 @@ impl Request<'_> {
     }
 }
 
+pub(crate) async fn validate_copy_response(response: HttpResponse) -> Result<()> {
+    let data = response
+        .into_body()
+        .bytes()
+        .await
+        .map_err(|source| Error::CopyResponseBody { source })?;
+
+    let body = std::str::from_utf8(&data).map_err(|source| Error::InvalidCopyResponse {
+        source: Box::new(source),
+    })?;
+
+    let mut reader = quick_xml::Reader::from_str(body);
+    let mut depth: usize = 0;
+    let mut saw_root = false;
+
+    loop {
+        match reader.read_event() {
+            Ok(xml_events::Event::Start(e)) => {
+                if depth == 0 {
+                    if saw_root || e.local_name().as_ref() != b"CopyObjectResult" {
+                        return Err(Error::InvalidCopyResponse {
+                            source: "expected CopyObjectResult XML root element".into(),
+                        }
+                        .into());
+                    }
+                    saw_root = true;
+                }
+                depth += 1;
+            }
+            Ok(xml_events::Event::Empty(e)) => {
+                if depth == 0 {
+                    if saw_root || e.local_name().as_ref() != b"CopyObjectResult" {
+                        return Err(Error::InvalidCopyResponse {
+                            source: "expected CopyObjectResult XML root element".into(),
+                        }
+                        .into());
+                    }
+                    saw_root = true;
+                }
+            }
+            Ok(xml_events::Event::End(_)) => {
+                depth = depth.saturating_sub(1);
+            }
+            Ok(xml_events::Event::Text(e)) if depth == 0 => {
+                let is_non_empty = e.decode().map(|t| !t.trim().is_empty()).unwrap_or(true);
+                if is_non_empty {
+                    return Err(Error::InvalidCopyResponse {
+                        source: "unexpected content outside CopyObjectResult root element".into(),
+                    }
+                    .into());
+                }
+            }
+            Ok(xml_events::Event::CData(_) | xml_events::Event::GeneralRef(_)) if depth == 0 => {
+                return Err(Error::InvalidCopyResponse {
+                    source: "unexpected content outside CopyObjectResult root element".into(),
+                }
+                .into());
+            }
+            Ok(xml_events::Event::Eof) => {
+                if !saw_root || depth != 0 {
+                    return Err(Error::InvalidCopyResponse {
+                        source: "incomplete or missing CopyObjectResult XML document".into(),
+                    }
+                    .into());
+                }
+                return Ok(());
+            }
+            Err(source) => {
+                return Err(Error::InvalidCopyResponse {
+                    source: Box::new(source),
+                }
+                .into());
+            }
+            _ => {}
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct S3Client {
     pub config: S3Config,
@@ -755,7 +841,7 @@ impl S3Client {
 
         request = match data {
             PutPartPayload::Part(payload) => request.with_payload(payload)?,
-            PutPartPayload::Copy(path) => request.header(
+            PutPartPayload::Copy(path) => request.retry_error_body(true).header(
                 "x-amz-copy-source",
                 &format!("{}/{}", self.config.bucket, encode_path(path)),
             ),
@@ -1053,6 +1139,8 @@ mod tests {
     use super::*;
     use crate::GetOptions;
     use crate::ObjectStore;
+    #[cfg(feature = "reqwest")]
+    use crate::ObjectStoreExt;
     use crate::aws::{AmazonS3, AmazonS3Builder};
     use crate::client::HttpClient;
     use crate::client::get::GetClient;
@@ -1063,6 +1151,8 @@ mod tests {
     use http::header::{AUTHORIZATION, CONTENT_LENGTH};
     use hyper::Request;
     use hyper::body::Incoming;
+    #[cfg(feature = "reqwest")]
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[cfg(feature = "reqwest")]
     #[tokio::test]
@@ -1419,6 +1509,465 @@ mod tests {
             )
             .await
             .unwrap();
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    fn test_s3_store(
+        mock: &MockServer,
+        max_retries: usize,
+        copy_if_not_exists: Option<crate::aws::S3CopyIfNotExists>,
+    ) -> AmazonS3 {
+        let mut builder = AmazonS3Builder::new()
+            .with_endpoint(mock.url())
+            .with_bucket_name("test-bucket")
+            .with_region("us-east-1")
+            .with_allow_http(true)
+            .with_skip_signature(true)
+            .with_retry(crate::RetryConfig {
+                backoff: crate::BackoffConfig {
+                    init_backoff: std::time::Duration::from_millis(1),
+                    max_backoff: std::time::Duration::from_millis(5),
+                    base: 2.0,
+                },
+                max_retries,
+                retry_timeout: std::time::Duration::from_secs(5),
+            });
+        if let Some(copy_if_not_exists) = copy_if_not_exists {
+            builder = builder.with_copy_if_not_exists(copy_if_not_exists);
+        }
+        builder.build().unwrap()
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_s3_200_xml_error_complete_multipart_key_no_spurious_retry() {
+        let mock = MockServer::new().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_clone = Arc::clone(&calls);
+
+        mock.push_fn(move |_| {
+            let n = calls_clone.fetch_add(1, Ordering::SeqCst);
+            if n == 0 {
+                Response::builder()
+                    .status(200)
+                    .body(
+                        r#"<?xml version="1.0" encoding="UTF-8"?>
+<CompleteMultipartUploadResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Location>http://test-bucket.s3.amazonaws.com/logs/InternalError.parquet</Location>
+  <Bucket>test-bucket</Bucket>
+  <Key>logs/InternalError.parquet</Key>
+  <ETag>"etag-1"</ETag>
+</CompleteMultipartUploadResult>"#
+                            .to_string(),
+                    )
+                    .unwrap()
+            } else {
+                Response::builder()
+                    .status(404)
+                    .body("<Error><Code>NoSuchUpload</Code></Error>".to_string())
+                    .unwrap()
+            }
+        });
+
+        let store = test_s3_store(&mock, 2, None);
+        let parts = vec![PartId {
+            content_id: "\"part-etag\"".to_string(),
+        }];
+        let res = store
+            .client
+            .complete_multipart(
+                &Path::from("logs/InternalError.parquet"),
+                "upload-1",
+                parts,
+                CompleteMultipartMode::Overwrite,
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.e_tag.as_deref(), Some("\"etag-1\""));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_s3_200_xml_error_bulk_delete_key_no_spurious_retry() {
+        let mock = MockServer::new().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_clone = Arc::clone(&calls);
+
+        mock.push_fn(move |_| {
+            calls_clone.fetch_add(1, Ordering::SeqCst);
+            Response::builder()
+                .status(200)
+                .body(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
+<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Deleted><Key>metrics/SlowDown.csv</Key></Deleted>
+</DeleteResult>"#
+                        .to_string(),
+                )
+                .unwrap()
+        });
+
+        let store = test_s3_store(&mock, 2, None);
+        let results = store
+            .client
+            .bulk_delete_request(vec![Path::from("metrics/SlowDown.csv")])
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].as_ref().unwrap(),
+            &Path::from("metrics/SlowDown.csv")
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_s3_200_xml_error_bulk_delete_per_object_error_no_batch_retry() {
+        let mock = MockServer::new().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_clone = Arc::clone(&calls);
+
+        mock.push_fn(move |_| {
+            calls_clone.fetch_add(1, Ordering::SeqCst);
+            Response::builder()
+                .status(200)
+                .body(
+                    r#"<?xml version="1.0" encoding="UTF-8"?>
+<DeleteResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+  <Error><Key>a</Key><Code>InternalError</Code><Message>We encountered an internal error.</Message></Error>
+</DeleteResult>"#
+                        .to_string(),
+                )
+                .unwrap()
+        });
+
+        let store = test_s3_store(&mock, 2, None);
+        let results = store
+            .client
+            .bulk_delete_request(vec![Path::from("a")])
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        let err = results[0].as_ref().unwrap_err();
+        assert!(err.to_string().contains("InternalError"), "{err}");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_s3_200_xml_error_bulk_delete_top_level_slow_down_retries() {
+        let mock = MockServer::new().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_clone = Arc::clone(&calls);
+
+        for _ in 0..2 {
+            let calls_clone = Arc::clone(&calls_clone);
+            mock.push_fn(move |_| {
+                let n = calls_clone.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    Response::builder()
+                        .status(200)
+                        .body(
+                            r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message></Error>"#
+                                .to_string(),
+                        )
+                        .unwrap()
+                } else {
+                    Response::builder()
+                        .status(200)
+                        .body(
+                            r#"<?xml version="1.0" encoding="UTF-8"?><DeleteResult><Deleted><Key>a</Key></Deleted></DeleteResult>"#
+                                .to_string(),
+                        )
+                        .unwrap()
+                }
+            });
+        }
+
+        let store = test_s3_store(&mock, 2, None);
+        let results = store
+            .client
+            .bulk_delete_request(vec![Path::from("a")])
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].as_ref().unwrap(), &Path::from("a"));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_s3_200_xml_error_copy_service_unavailable_retries_and_errors() {
+        let mock = MockServer::new().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        for _ in 0..3 {
+            let calls_clone = Arc::clone(&calls);
+            mock.push_fn(move |_| {
+                calls_clone.fetch_add(1, Ordering::SeqCst);
+                Response::builder()
+                    .status(200)
+                    .body(
+                        r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>ServiceUnavailable</Code><Message>Please reduce your request rate.</Message></Error>"#
+                            .to_string(),
+                    )
+                    .unwrap()
+            });
+        }
+
+        let store = test_s3_store(
+            &mock,
+            2,
+            Some(crate::aws::S3CopyIfNotExists::Header(
+                "If-None-Match".to_string(),
+                "*".to_string(),
+            )),
+        );
+        let err = store
+            .copy(&Path::from("src"), &Path::from("dst"))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("ServiceUnavailable"), "{err}");
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+
+        // Also verify CopyMode::Create
+        calls.store(0, Ordering::SeqCst);
+        for _ in 0..3 {
+            let calls_clone = Arc::clone(&calls);
+            mock.push_fn(move |_| {
+                calls_clone.fetch_add(1, Ordering::SeqCst);
+                Response::builder()
+                    .status(200)
+                    .body(
+                        r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>ServiceUnavailable</Code><Message>Please reduce your request rate.</Message></Error>"#
+                            .to_string(),
+                    )
+                    .unwrap()
+            });
+        }
+
+        let err = store
+            .copy_opts(
+                &Path::from("src"),
+                &Path::from("dst"),
+                crate::CopyOptions::new().with_mode(crate::CopyMode::Create),
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("ServiceUnavailable"), "{err}");
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_s3_200_xml_error_copy_access_denied_fails_without_retry() {
+        let mock = MockServer::new().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_clone = Arc::clone(&calls);
+
+        mock.push_fn(move |_| {
+            calls_clone.fetch_add(1, Ordering::SeqCst);
+            Response::builder()
+                .status(200)
+                .body(
+                    r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>"#
+                        .to_string(),
+                )
+                .unwrap()
+        });
+
+        let store = test_s3_store(&mock, 2, None);
+        let err = store
+            .copy(&Path::from("src"), &Path::from("dst"))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("AccessDenied"), "{err}");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_s3_200_xml_error_copy_whitespace_prefixed_internal_error_retries() {
+        let mock = MockServer::new().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        for _ in 0..2 {
+            let calls_clone = Arc::clone(&calls);
+            mock.push_fn(move |_| {
+                let n = calls_clone.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    Response::builder()
+                        .status(200)
+                        .body(
+                            "   \n\n  <?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>InternalError</Code><Message>We encountered an internal error.</Message></Error>"
+                                .to_string(),
+                        )
+                        .unwrap()
+                } else {
+                    Response::builder()
+                        .status(200)
+                        .body(
+                            r#"<?xml version="1.0" encoding="UTF-8"?><CopyObjectResult><LastModified>2026-01-01T00:00:00.000Z</LastModified><ETag>"etag-ok"</ETag></CopyObjectResult>"#
+                                .to_string(),
+                        )
+                        .unwrap()
+                }
+            });
+        }
+
+        let store = test_s3_store(&mock, 2, None);
+        store
+            .copy(&Path::from("src"), &Path::from("dst"))
+            .await
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_s3_200_xml_error_copy_response_validation() {
+        let mock = MockServer::new().await;
+        let store = test_s3_store(&mock, 2, None);
+
+        // Valid <CopyObjectResult> without <ETag> and self-closing <CopyObjectResult/>
+        for body in [
+            r#"<?xml version="1.0" encoding="UTF-8"?><CopyObjectResult><LastModified>2026-01-01T00:00:00.000Z</LastModified></CopyObjectResult>"#,
+            "<CopyObjectResult/>",
+        ] {
+            mock.push(
+                Response::builder()
+                    .status(200)
+                    .body(body.to_string())
+                    .unwrap(),
+            );
+            store
+                .copy(&Path::from("src"), &Path::from("dst"))
+                .await
+                .unwrap();
+        }
+
+        // Invalid bodies must fail in 1 attempt (not retried) with invalid copy response
+        for body in [
+            "",
+            "   \n\t  ",
+            r#"<UnexpectedResult><ETag>"x"</ETag></UnexpectedResult>"#,
+            r#"<CopyObjectResult><ETag>"x""#,
+            "<CopyObjectResult/><Extra/>",
+            "<CopyObjectResult/><![CDATA[garbage]]>",
+            "<CopyObjectResult/>&#65;",
+        ] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let calls_clone = Arc::clone(&calls);
+            let body = body.to_string();
+            mock.push_fn(move |_| {
+                calls_clone.fetch_add(1, Ordering::SeqCst);
+                Response::builder().status(200).body(body.clone()).unwrap()
+            });
+            let err = store
+                .copy(&Path::from("src"), &Path::from("dst"))
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains("invalid copy response"), "{err}");
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+        }
+
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_s3_200_xml_error_copy_create_mode_semantics() {
+        let mock = MockServer::new().await;
+        let store = test_s3_store(
+            &mock,
+            0,
+            Some(crate::aws::S3CopyIfNotExists::Header(
+                "If-None-Match".to_string(),
+                "*".to_string(),
+            )),
+        );
+
+        // Success with valid <CopyObjectResult>
+        mock.push(
+            Response::builder()
+                .status(200)
+                .body(r#"<CopyObjectResult><ETag>"ok"</ETag></CopyObjectResult>"#.to_string())
+                .unwrap(),
+        );
+        store
+            .copy_opts(
+                &Path::from("src"),
+                &Path::from("dst"),
+                crate::CopyOptions::new().with_mode(crate::CopyMode::Create),
+            )
+            .await
+            .unwrap();
+
+        // 412 Precondition Failed maps to Error::AlreadyExists
+        mock.push(Response::builder().status(412).body(String::new()).unwrap());
+        let err = store
+            .copy_opts(
+                &Path::from("src"),
+                &Path::from("dst"),
+                crate::CopyOptions::new().with_mode(crate::CopyMode::Create),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, crate::Error::AlreadyExists { .. }), "{err}");
+
+        mock.shutdown().await;
+    }
+
+    #[cfg(feature = "reqwest")]
+    #[tokio::test]
+    async fn test_s3_200_xml_error_upload_part_copy_retries() {
+        let mock = MockServer::new().await;
+        let calls = Arc::new(AtomicUsize::new(0));
+        for _ in 0..2 {
+            let calls_clone = Arc::clone(&calls);
+            mock.push_fn(move |_| {
+                let n = calls_clone.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    Response::builder()
+                        .status(200)
+                        .body(
+                            r#"<?xml version="1.0" encoding="UTF-8"?><Error><Code>InternalError</Code><Message>We encountered an internal error.</Message></Error>"#
+                                .to_string(),
+                        )
+                        .unwrap()
+                } else {
+                    Response::builder()
+                        .status(200)
+                        .body(
+                            r#"<?xml version="1.0" encoding="UTF-8"?><CopyPartResult><ETag>"part-etag"</ETag></CopyPartResult>"#
+                                .to_string(),
+                        )
+                        .unwrap()
+                }
+            });
+        }
+
+        let store = test_s3_store(&mock, 2, None);
+        let part_id = store
+            .client
+            .put_part(
+                &Path::from("dst"),
+                &"upload-1".to_string(),
+                0,
+                PutPartPayload::Copy(&Path::from("src")),
+            )
+            .await
+            .unwrap();
+        assert!(part_id.content_id.contains("part-etag"));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
         mock.shutdown().await;
     }
 }
