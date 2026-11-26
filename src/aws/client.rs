@@ -499,6 +499,23 @@ impl Request<'_> {
     }
 }
 
+fn validate_xml_attributes(e: &xml_events::BytesStart<'_>) -> Result<()> {
+    for attr in e.attributes() {
+        let attr = attr.map_err(|source| Error::InvalidCopyResponse {
+            source: Box::new(source),
+        })?;
+        attr.normalized_value_with(
+            quick_xml::XmlVersion::Implicit1_0,
+            1,
+            quick_xml::escape::resolve_xml_entity,
+        )
+        .map_err(|source| Error::InvalidCopyResponse {
+            source: Box::new(source),
+        })?;
+    }
+    Ok(())
+}
+
 pub(crate) async fn validate_copy_response(response: HttpResponse) -> Result<()> {
     let data = response
         .into_body()
@@ -511,12 +528,14 @@ pub(crate) async fn validate_copy_response(response: HttpResponse) -> Result<()>
     })?;
 
     let mut reader = quick_xml::Reader::from_str(body);
+    reader.config_mut().expand_empty_elements = true;
     let mut depth: usize = 0;
     let mut saw_root = false;
 
     loop {
         match reader.read_event() {
             Ok(xml_events::Event::Start(e)) => {
+                validate_xml_attributes(&e)?;
                 if depth == 0 {
                     if saw_root || e.local_name().as_ref() != b"CopyObjectResult" {
                         return Err(Error::InvalidCopyResponse {
@@ -527,17 +546,6 @@ pub(crate) async fn validate_copy_response(response: HttpResponse) -> Result<()>
                     saw_root = true;
                 }
                 depth += 1;
-            }
-            Ok(xml_events::Event::Empty(e)) => {
-                if depth == 0 {
-                    if saw_root || e.local_name().as_ref() != b"CopyObjectResult" {
-                        return Err(Error::InvalidCopyResponse {
-                            source: "expected CopyObjectResult XML root element".into(),
-                        }
-                        .into());
-                    }
-                    saw_root = true;
-                }
             }
             Ok(xml_events::Event::End(_)) => {
                 depth = depth.saturating_sub(1);
@@ -551,11 +559,39 @@ pub(crate) async fn validate_copy_response(response: HttpResponse) -> Result<()>
                     .into());
                 }
             }
-            Ok(xml_events::Event::CData(_) | xml_events::Event::GeneralRef(_)) if depth == 0 => {
+            Ok(xml_events::Event::CData(_)) if depth == 0 => {
                 return Err(Error::InvalidCopyResponse {
                     source: "unexpected content outside CopyObjectResult root element".into(),
                 }
                 .into());
+            }
+            Ok(xml_events::Event::GeneralRef(e)) => {
+                if depth == 0 {
+                    return Err(Error::InvalidCopyResponse {
+                        source: "unexpected content outside CopyObjectResult root element".into(),
+                    }
+                    .into());
+                }
+                match e.resolve_char_ref() {
+                    Ok(Some(_)) => {}
+                    Ok(None) => {
+                        let name = e.decode().map_err(|source| Error::InvalidCopyResponse {
+                            source: Box::new(source),
+                        })?;
+                        if quick_xml::escape::resolve_xml_entity(&name).is_none() {
+                            return Err(Error::InvalidCopyResponse {
+                                source: format!("unrecognized XML entity `&{name};`").into(),
+                            }
+                            .into());
+                        }
+                    }
+                    Err(source) => {
+                        return Err(Error::InvalidCopyResponse {
+                            source: Box::new(source),
+                        }
+                        .into());
+                    }
+                }
             }
             Ok(xml_events::Event::Eof) => {
                 if !saw_root || depth != 0 {
@@ -1841,6 +1877,8 @@ mod tests {
         for body in [
             r#"<?xml version="1.0" encoding="UTF-8"?><CopyObjectResult><LastModified>2026-01-01T00:00:00.000Z</LastModified></CopyObjectResult>"#,
             "<CopyObjectResult/>",
+            r#"<CopyObjectResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><ETag>&quot;abc&quot;</ETag></CopyObjectResult>"#,
+            r#"<CopyObjectResult><ETag>&#34;abc&#x22;</ETag></CopyObjectResult>"#,
         ] {
             mock.push(
                 Response::builder()
@@ -1863,6 +1901,12 @@ mod tests {
             "<CopyObjectResult/><Extra/>",
             "<CopyObjectResult/><![CDATA[garbage]]>",
             "<CopyObjectResult/>&#65;",
+            "<CopyObjectResult broken/>",
+            r#"<CopyObjectResult a="1" a="2"/>"#,
+            r#"<CopyObjectResult a="&undefined;"/>"#,
+            "<CopyObjectResult><ETag broken/></CopyObjectResult>",
+            "<CopyObjectResult><ETag>&undefined;</ETag></CopyObjectResult>",
+            "<CopyObjectResult><ETag>&#999999999;</ETag></CopyObjectResult>",
         ] {
             let calls = Arc::new(AtomicUsize::new(0));
             let calls_clone = Arc::clone(&calls);
