@@ -51,11 +51,11 @@ use http::header::{
     CONTENT_TYPE,
 };
 use http::{HeaderMap, HeaderName, Method};
-use itertools::Itertools;
 use md5::{Digest, Md5};
 use percent_encoding::{PercentEncode, utf8_percent_encode};
 use quick_xml::events::{self as xml_events};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 const VERSION_HEADER: &str = "x-amz-version-id";
@@ -176,7 +176,7 @@ struct DeletedObject {
     key: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "PascalCase", rename = "Error")]
 struct DeleteError {
     key: String,
@@ -623,14 +623,34 @@ impl S3Client {
         // Assume all were ok, then fill in errors. This guarantees output order
         // matches input order.
         let mut results: Vec<Result<Path>> = paths.iter().cloned().map(Ok).collect();
+        // Built on the first error so the all-success path allocates no map.
+        let mut path_indices: Option<HashMap<&Path, Vec<usize>>> = None;
         for content in response.content.into_iter() {
             if let DeleteObjectResult::Error(error) = content {
                 let path =
                     Path::parse(&error.key).map_err(|err| Error::InvalidDeleteObjectsResponse {
                         source: Box::new(err),
                     })?;
-                let i = paths.iter().find_position(|&p| p == &path).unwrap().0;
-                results[i] = Err(Error::from(error).into());
+                let indices = path_indices
+                    .get_or_insert_with(|| {
+                        let mut indices: HashMap<&Path, Vec<usize>> = HashMap::new();
+                        for (i, path) in paths.iter().enumerate() {
+                            indices.entry(path).or_default().push(i);
+                        }
+                        indices
+                    })
+                    .get(&path);
+                let Some(indices) = indices else {
+                    return Err(Error::InvalidDeleteObjectsResponse {
+                        source: format!("error for unknown key: {}", error.key).into(),
+                    }
+                    .into());
+                };
+                // Every duplicate of the failing key gets the error, whether
+                // the response repeats the entry or deduplicates it.
+                for i in indices {
+                    results[*i] = Err(Error::from(error.clone()).into());
+                }
             }
         }
 
@@ -1208,6 +1228,99 @@ mod tests {
 
         assert!(result.is_ok());
         mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_bulk_delete_unmatched_error_key_returns_error() {
+        let mock = MockServer::new().await;
+        mock.push_fn(|_| {
+            Response::builder()
+                .status(200)
+                .body(
+                    "<DeleteResult><Error><Key>unexpected/other.txt</Key><Code>AccessDenied</Code><Message>Denied</Message></Error></DeleteResult>"
+                        .to_string(),
+                )
+                .unwrap()
+        });
+
+        let store = make_store(&mock, false, false);
+        let err = store
+            .client
+            .bulk_delete_request(vec![Path::from("requested.txt")])
+            .await
+            .unwrap_err();
+
+        let crate::Error::Generic { source, .. } = &err else {
+            unreachable!("must be generic error: {err:?}")
+        };
+        let Some(Error::InvalidDeleteObjectsResponse { source }) = source.downcast_ref::<Error>()
+        else {
+            unreachable!("must be invalid DeleteObjects response")
+        };
+        let message = source.to_string();
+        assert!(
+            message.contains("unknown key"),
+            "unexpected error message: {message}"
+        );
+        assert!(
+            message.contains("unexpected/other.txt"),
+            "unexpected error message: {message}"
+        );
+
+        mock.shutdown().await;
+    }
+
+    /// Response contains one `<Deleted>` for `ok.txt` and `error_entries`.
+    async fn assert_duplicate_delete_errors(error_entries: &str) {
+        let mock = MockServer::new().await;
+        let body = format!(
+            "<DeleteResult><Deleted><Key>ok.txt</Key></Deleted>{error_entries}</DeleteResult>"
+        );
+        mock.push_fn(move |_| Response::builder().status(200).body(body.clone()).unwrap());
+
+        let store = make_store(&mock, false, false);
+        let results = store
+            .client
+            .bulk_delete_request(vec![
+                Path::from("protected.txt"),
+                Path::from("ok.txt"),
+                Path::from("protected.txt"),
+            ])
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[1].as_ref().unwrap(), &Path::from("ok.txt"));
+        for result in [&results[0], &results[2]] {
+            let err = result.as_ref().unwrap_err();
+            let crate::Error::Generic { source, .. } = err else {
+                unreachable!("must be generic error: {err:?}")
+            };
+            let Some(Error::DeleteFailed {
+                path,
+                code,
+                message,
+            }) = source.downcast_ref::<Error>()
+            else {
+                unreachable!("must be delete failure: {err:?}")
+            };
+            assert_eq!(path, "protected.txt");
+            assert_eq!(code, "AccessDenied");
+            assert_eq!(message, "Denied");
+        }
+
+        mock.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn test_bulk_delete_duplicate_keys_error() {
+        let entry = "<Error><Key>protected.txt</Key><Code>AccessDenied</Code><Message>Denied</Message></Error>";
+
+        // One `<Error>` per unique key.
+        assert_duplicate_delete_errors(entry).await;
+
+        // One `<Error>` per requested object.
+        assert_duplicate_delete_errors(&format!("{entry}{entry}")).await;
     }
 
     /// `(method, path, query)` captured for assertion outside the mock closure.
