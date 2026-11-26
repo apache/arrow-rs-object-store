@@ -264,8 +264,105 @@ impl Default for RetryConfig {
     }
 }
 
-fn body_contains_error(response_body: &str) -> bool {
-    response_body.contains("InternalError") || response_body.contains("SlowDown")
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResponseBodyError {
+    None,
+    Retryable,
+    Fatal,
+}
+
+fn parse_xml_error_body(response_body: &str) -> ResponseBodyError {
+    use quick_xml::Reader;
+    use quick_xml::events::Event;
+
+    let mut reader = Reader::from_str(response_body);
+    let mut depth: usize = 0;
+    let mut in_error = false;
+    let mut in_code = false;
+    let mut code = String::new();
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                if in_code {
+                    return ResponseBodyError::Fatal;
+                }
+                if depth == 0 {
+                    if e.local_name().as_ref() != b"Error" {
+                        return ResponseBodyError::None;
+                    }
+                    in_error = true;
+                } else if depth == 1 && in_error && e.local_name().as_ref() == b"Code" {
+                    in_code = true;
+                }
+                depth += 1;
+            }
+            Ok(Event::Empty(e)) => {
+                if in_code {
+                    return ResponseBodyError::Fatal;
+                }
+                if depth == 0 {
+                    return if e.local_name().as_ref() == b"Error" {
+                        ResponseBodyError::Fatal
+                    } else {
+                        ResponseBodyError::None
+                    };
+                }
+            }
+            Ok(Event::End(_)) => {
+                if in_code && depth == 2 {
+                    break;
+                }
+                depth = depth.saturating_sub(1);
+                if depth == 0 && in_error {
+                    break;
+                }
+            }
+            Ok(Event::Text(e)) if depth == 0 && !in_error => {
+                let is_non_empty = e.decode().map(|t| !t.trim().is_empty()).unwrap_or(true);
+                if is_non_empty {
+                    return ResponseBodyError::None;
+                }
+            }
+            Ok(Event::CData(_) | Event::GeneralRef(_)) if depth == 0 && !in_error => {
+                return ResponseBodyError::None;
+            }
+            Ok(Event::Text(e)) if in_code && depth == 2 => {
+                if let Ok(t) = e.decode() {
+                    code.push_str(&t);
+                }
+            }
+            Ok(Event::CData(e)) if in_code && depth == 2 => {
+                if let Ok(t) = e.decode() {
+                    code.push_str(&t);
+                }
+            }
+            Ok(Event::GeneralRef(e)) if in_code && depth == 2 => {
+                if let Ok(Some(resolved)) = e.resolve_char_ref() {
+                    code.push(resolved);
+                } else if let Ok(name) = e.decode() {
+                    if let Some(resolved) = quick_xml::escape::resolve_xml_entity(&name) {
+                        code.push_str(resolved);
+                    }
+                }
+            }
+            Ok(Event::Eof) | Err(_) => {
+                return if in_error {
+                    ResponseBodyError::Retryable
+                } else {
+                    ResponseBodyError::None
+                };
+            }
+            _ => {}
+        }
+    }
+
+    match code.trim() {
+        "InternalError" | "SlowDown" | "ServiceUnavailable" | "RequestTimeout" => {
+            ResponseBodyError::Retryable
+        }
+        _ => ResponseBodyError::Fatal,
+    }
 }
 
 /// Combines a [`RetryableRequest`] with a [`RetryContext`]
@@ -375,9 +472,10 @@ impl RetryableRequest {
                 Ok(r) => {
                     let status = r.status();
                     if status.is_success() {
-                        // For certain S3 requests, 200 response may contain `InternalError` or
-                        // `SlowDown` in the message. These responses should be handled similarly
-                        // to r5xx errors.
+                        // For certain S3 requests (CopyObject, UploadPartCopy,
+                        // CompleteMultipartUpload, DeleteObjects), an HTTP 200 response may
+                        // contain an XML `<Error>` body. Retry transient error codes as if they
+                        // were 5xx responses, and fail immediately on non-retryable error codes.
                         // More info here: https://repost.aws/knowledge-center/s3-resolve-200-internalerror
                         if !self.retry_error_body {
                             return Ok(r);
@@ -389,24 +487,31 @@ impl RetryableRequest {
                             Err(e) => return Err(self.err(RequestError::Http(e), ctx)),
                         };
 
-                        if !body_contains_error(&body) {
-                            // Success response and no error, clone and return response
-                            return Ok(HttpResponse::from_parts(parts, body.into()));
-                        } else {
-                            // Retry as if this was a 5xx response
-                            if ctx.exhausted() {
+                        match parse_xml_error_body(&body) {
+                            ResponseBodyError::None => {
+                                return Ok(HttpResponse::from_parts(parts, body.into()));
+                            }
+                            ResponseBodyError::Fatal => {
                                 return Err(self.err(RequestError::Response { body, status }, ctx));
                             }
+                            ResponseBodyError::Retryable => {
+                                // Retry as if this was a 5xx response
+                                if ctx.exhausted() {
+                                    return Err(
+                                        self.err(RequestError::Response { body, status }, ctx)
+                                    );
+                                }
 
-                            let sleep = ctx.backoff();
-                            info!(
-                                "Encountered a response status of {} but body contains Error, backing off for {} seconds, retry {} of {}",
-                                status,
-                                sleep.as_secs_f32(),
-                                ctx.retries,
-                                ctx.max_retries,
-                            );
-                            tokio::time::sleep(sleep).await;
+                                let sleep = ctx.backoff();
+                                info!(
+                                    "Encountered a response status of {} but body contains Error, backing off for {} seconds, retry {} of {}",
+                                    status,
+                                    sleep.as_secs_f32(),
+                                    ctx.retries,
+                                    ctx.max_retries,
+                                );
+                                tokio::time::sleep(sleep).await;
+                            }
                         }
                     } else if status == StatusCode::NOT_MODIFIED {
                         return Err(self.err(RequestError::Status { status, body: None }, ctx));
@@ -529,7 +634,9 @@ impl RetryExt for HttpRequestBuilder {
 mod tests {
     use crate::RetryConfig;
     use crate::client::mock_server::MockServer;
-    use crate::client::retry::{RequestError, RetryContext, RetryExt, body_contains_error};
+    use crate::client::retry::{
+        RequestError, ResponseBodyError, RetryContext, RetryExt, parse_xml_error_body,
+    };
     use crate::client::{
         HttpClient, HttpError, HttpErrorKind, HttpRequest, HttpResponse, HttpService,
     };
@@ -586,17 +693,71 @@ mod tests {
     }
 
     #[test]
-    fn test_body_contains_error() {
-        // Example error message provided by https://repost.aws/knowledge-center/s3-resolve-200-internalerror
-        let error_response = "AmazonS3Exception: We encountered an internal error. Please try again. (Service: Amazon S3; Status Code: 200; Error Code: InternalError; Request ID: 0EXAMPLE9AAEB265)";
-        assert!(body_contains_error(error_response));
+    fn test_parse_xml_error_body() {
+        // Retryable XML <Error> codes
+        for code in [
+            "InternalError",
+            "SlowDown",
+            "ServiceUnavailable",
+            "RequestTimeout",
+        ] {
+            let body = format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>{code}</Code><Message>retry me</Message></Error>"
+            );
+            assert_eq!(parse_xml_error_body(&body), ResponseBodyError::Retryable);
+        }
 
-        let error_response_2 = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message><RequestId>123</RequestId><HostId>456</HostId></Error>";
-        assert!(body_contains_error(error_response_2));
+        // Leading keep-alive whitespace, xmlns attribute, CDATA, char ref,
+        // <Message> before <Code>, namespace prefix, and truncated <Error>
+        for body in [
+            "  \n\t  <?xml version=\"1.0\" encoding=\"UTF-8\"?><Error xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"><Code>InternalError</Code><Message>We encountered an internal error.</Message></Error>",
+            "<Error><Code><![CDATA[SlowDown]]></Code></Error>",
+            "<Error><Code>Slow&#68;own</Code></Error>",
+            "<Error><Message>retry</Message><Code>InternalError</Code></Error>",
+            "<s3:Error><s3:Code>InternalError</s3:Code></s3:Error>",
+            "<Error><Code>InternalError",
+            "<Error><Code>Slow",
+        ] {
+            assert_eq!(
+                parse_xml_error_body(body),
+                ResponseBodyError::Retryable,
+                "{body}"
+            );
+        }
 
-        // Example success response from https://docs.aws.amazon.com/AmazonS3/latest/API/API_CopyObject.html
-        let success_response = "<CopyObjectResult><LastModified>2009-10-12T17:50:30.000Z</LastModified><ETag>\"9b2cf535f27731c974343645a3985328\"</ETag></CopyObjectResult>";
-        assert!(!body_contains_error(success_response));
+        // Non-retryable XML <Error> codes, nested elements inside <Code>, missing <Code>, and empty <Error/>
+        for body in [
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>",
+            "<Error><Code>OperationAborted</Code><Message>conflicting operation</Message></Error>",
+            "<Error><Code>Internal<x>Error</x></Code></Error>",
+            "<Error><Code>Internal<x/>Error</Code></Error>",
+            "<Error><Code>InternalError<x>ignored</x></Code></Error>",
+            "<Error><Message>missing code</Message></Error>",
+            "<Error/>",
+        ] {
+            assert_eq!(
+                parse_xml_error_body(body),
+                ResponseBodyError::Fatal,
+                "{body}"
+            );
+        }
+
+        // Valid S3 responses, non-XML text, and non-whitespace text before <Error>
+        for body in [
+            "<CopyObjectResult><LastModified>2009-10-12T17:50:30.000Z</LastModified><ETag>\"9b2cf535f27731c974343645a3985328\"</ETag></CopyObjectResult>",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><CompleteMultipartUploadResult><Key>logs/InternalError.parquet</Key><ETag>\"abc\"</ETag></CompleteMultipartUploadResult>",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><DeleteResult><Deleted><Key>metrics/SlowDown.csv</Key></Deleted></DeleteResult>",
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><DeleteResult><Error><Key>a</Key><Code>InternalError</Code><Message>err</Message></Error></DeleteResult>",
+            "garbage<Error><Code>InternalError</Code></Error>",
+            "success",
+            "",
+        ] {
+            assert_eq!(
+                parse_xml_error_body(body),
+                ResponseBodyError::None,
+                "{body}"
+            );
+        }
     }
 
     #[cfg(feature = "reqwest")]
@@ -868,11 +1029,14 @@ mod tests {
         let err = req.send().await.unwrap_err().to_string();
         assert!(!err.contains("SENSITIVE"), "{err}");
 
-        // Success response with error in body is retried
+        // Success response with retryable XML <Error> in body is retried
         mock.push(
             Response::builder()
                 .status(StatusCode::OK)
-                .body("InternalError".to_string())
+                .body(
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>InternalError</Code><Message>We encountered an internal error.</Message></Error>"
+                        .to_string(),
+                )
                 .unwrap(),
         );
         let req = client
@@ -883,6 +1047,42 @@ mod tests {
         let r = req.send().await.unwrap();
         assert_eq!(r.status(), StatusCode::OK);
         // Response with InternalError should have been retried
+        let b = r.into_body().text().await.unwrap();
+        assert!(!b.contains("InternalError"));
+
+        // Success response with non-retryable XML <Error> fails immediately without retrying
+        mock.push(
+            Response::builder()
+                .status(StatusCode::OK)
+                .body(
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>"
+                        .to_string(),
+                )
+                .unwrap(),
+        );
+        let req = client
+            .request(Method::PUT, &url)
+            .retryable(&retry)
+            .idempotent(true)
+            .retry_error_body(true);
+        let err = req.send().await.unwrap_err();
+        assert_eq!(err.0.retries, 0);
+        assert!(err.to_string().contains("AccessDenied"), "{err}");
+
+        // Truncated XML <Error> stream is retried and recovers on retry
+        mock.push(
+            Response::builder()
+                .status(StatusCode::OK)
+                .body("<Error><Code>InternalError".to_string())
+                .unwrap(),
+        );
+        let req = client
+            .request(Method::PUT, &url)
+            .retryable(&retry)
+            .idempotent(true)
+            .retry_error_body(true);
+        let r = req.send().await.unwrap();
+        assert_eq!(r.status(), StatusCode::OK);
         let b = r.into_body().text().await.unwrap();
         assert!(!b.contains("InternalError"));
 
